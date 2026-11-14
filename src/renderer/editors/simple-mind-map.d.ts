@@ -4,14 +4,44 @@ declare module 'simple-mind-map' {
     children?: NodeData[]
   }
 
-  interface MapNode {
+  export interface MapNode {
     isRoot: boolean
     uid: string
     left: number
     top: number
     width: number
+    height: number
+    layerIndex: number
+    dir?: string
+    parent: MapNode | null
+    children: MapNode[]
+    nodeData: NodeData
+    expandBtnSize: number
+    _generalizationNodeWidth: number
+    _generalizationNodeHeight: number
+    checkHasGeneralization(): boolean
+    hasCustomPosition(): boolean
     getData(): NodeData['data']
     getData(property: string): unknown
+  }
+
+  export interface MapLayout {
+    doLayout(callback: (root: MapNode) => void): void
+    renderLine(node: MapNode, ...args: unknown[]): void
+    renderExpandBtn(node: MapNode, ...args: unknown[]): void
+    renderExpandBtnRect(rect: unknown, size: number, width: number, height: number, node: MapNode): void
+    renderGeneralization(items: { node: MapNode; range?: number[] }[]): void
+    nodeIsRemoveAllLines?(node: MapNode): boolean
+    computedBaseValue(): void
+    computedTopValue(): void
+    adjustTopValue(): void
+    computedLeftValue(): void
+    adjustLeftValue(): void
+    computedLeftTopValue(): void
+    adjustLeftTopValue(): void
+    createNode(...args: unknown[]): unknown
+    setNodeCenter(...args: unknown[]): void
+    root: unknown
   }
 
   type MapEvents = {
@@ -25,6 +55,7 @@ declare module 'simple-mind-map' {
     scale: [scale: number]
     search_info_change: [info: { total: number; currentIndex: number }]
     node_tree_render_end: []
+    node_tree_render_start: []
     view_data_change: []
     node_attachmentClick: [node: MapNode]
   }
@@ -34,11 +65,12 @@ declare module 'simple-mind-map' {
     static usePlugin(plugin: unknown): typeof MindMap
     renderer: {
       root: MapNode | null
+      layout: MapLayout
       activeNodeList: MapNode[]
       textEdit: { hideEditTextBox(): void }
       setNodeDataRender(node: MapNode, data: Record<string, unknown>): void
     }
-    view: { scale: number; enlarge(): void; narrow(): void; fit(): void; reset(): void }
+    view: { scale: number; enlarge(): void; narrow(): void; fit(): void; reset(): void; translateXY(x: number, y: number): void }
     miniMap: {
       calculationMiniMap(width: number, height: number): { svgHTML: string; viewBoxStyle: Record<string, string> }
       onViewBoxMousedown(event: { clientX: number; clientY: number }): void
@@ -69,7 +101,9 @@ declare module 'simple-mind-map' {
     off<K extends keyof MapEvents>(event: K, callback: (...args: MapEvents[K]) => void): void
     getData(): NodeData
     resize(): void
+    render(callback?: () => void): void
     setTheme(theme: string): void
+    getLayout(): string
     setLayout(layout: string): void
     setThemeConfig(config: Record<string, unknown>): void
     updateConfig(options: Record<string, unknown>): void
@@ -91,4 +125,11 @@ declare module 'simple-mind-map/src/plugins/AssociativeLine.js' {
 declare module 'simple-mind-map/src/plugins/*.js' {
   const plugin: unknown
   export default plugin
+}
+
+declare module 'simple-mind-map/src/layouts/*.js' {
+  import type MindMap from 'simple-mind-map'
+  import type { MapLayout } from 'simple-mind-map'
+  const layout: new (renderer: { mindMap: MindMap; renderTree: unknown }, name: string) => MapLayout
+  export default layout
 }

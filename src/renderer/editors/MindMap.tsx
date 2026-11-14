@@ -17,7 +17,8 @@ import { projectList, writeList, type Block } from './listProjection'
 import { MindMapFormat } from './MindMapFormat'
 import { MindMapTask, readTask, taskBadge, taskTopics } from './MindMapTask'
 import { MarkdownMenu, type MenuItem } from './MarkdownMenu'
-import { defaultMapSettings, loadMapAppearance, mapTheme, palettes, restoreFloating, restoreMapStyles, saveMapAppearance, saveMapSheets, type MapAppearance, type MapData, type MapSettings, type MapSheet } from './mapAppearance'
+import { branchStructure, defaultMapSettings, loadMapAppearance, mapTheme, palettes, restoreFloating, restoreMapStyles, saveMapAppearance, saveMapSheets, type MapAppearance, type MapData, type MapSettings, type MapSheet } from './mapAppearance'
+import { installBranchLayouts } from './mixedMapLayout'
 
 class MapAssociativeLine extends AssociativeLine {
   protected checkOverlapNode(x: number, y: number) {
@@ -31,7 +32,7 @@ class MapAssociativeLine extends AssociativeLine {
 }
 
 for (const plugin of [MapAssociativeLine, Drag, Export, ExportPDF, KeyboardNavigation, MiniMap, OuterFrame, RainbowLines, SearchPlugin, Select]) MindMap.usePlugin(plugin)
-MindMap.extendNodeDataNoStylePropList(['ymdMarker', 'ymdFloating', 'ymdTask'])
+MindMap.extendNodeDataNoStylePropList(['ymdMarker', 'ymdFloating', 'ymdTask', 'ymdStructure'])
 
 type MapNode = NonNullable<MindMap['renderer']['root']>
 type TopicField = '备注' | '标签' | '链接'
@@ -309,6 +310,7 @@ function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, upd
       return
     }
     engine.current = map
+    const removeBranchLayouts = installBranchLayouts(map)
     const onData = (node: MapData) => {
       if (!initialSheet && projection) {
         const next = writeList(projection, fromMap(node.children ?? []))
@@ -328,8 +330,7 @@ function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, upd
     }
     const context = (event: MouseEvent, node: MapNode) => {
       event.preventDefault()
-      map.execCommand('CLEAR_ACTIVE_NODE')
-      map.execCommand('SET_NODE_ACTIVE', node, true)
+      select(node, map.renderer.activeNodeList)
       setMenu({ x: event.clientX, y: event.clientY })
     }
     const scale = (value: number) => setZoom(Math.round(value * 100))
@@ -358,6 +359,7 @@ function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, upd
     resize.observe(host.current)
     return () => {
       resize.disconnect()
+      removeBranchLayouts()
       registerFlush()
       map.off('afterExecCommand', sync)
       map.off('data_change', onData)
@@ -478,8 +480,9 @@ function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, upd
     map.renderer.textEdit.hideEditTextBox()
     const topic = findTopic(map.getData(), node.uid)
     if (!topic) return
-    const { ymdFloating: _float, customLeft: _left, customTop: _top, ...data } = topic.data
-    createSheet(data.text?.trim() || '新画布', currentSettings.current, { ...topic, data: { ...data, expand: true } })
+    const { ymdFloating: _float, customLeft: _left, customTop: _top, ymdStructure, ...data } = topic.data
+    const settings = { ...currentSettings.current, layout: branchStructure(ymdStructure) ?? currentSettings.current.layout }
+    createSheet(data.text?.trim() || '新画布', settings, { ...topic, data: { ...data, expand: true } })
   }
 
   function fieldFor(key: TopicField) {
@@ -649,6 +652,19 @@ function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, upd
         </div>
       </div>
       {!zen && formatOpen && <MindMapFormat {...{ tab, settings, node, version }} change={changeSettings} onTab={setTab}
+        structure={value => {
+          if (node?.isRoot && value) changeSettings({ layout: value })
+          else if (node && branchStructure(node.getData('ymdStructure')) !== value) {
+            const map = engine.current
+            const { left, top } = node
+            command('SET_NODE_DATA', node, { ymdStructure: value ?? null })
+            map?.render(() => {
+              if (engine.current !== map || !map.renderer.activeNodeList.includes(node)) return
+              const scale = map.view.scale
+              map.view.translateXY((left - node.left) * scale, (top - node.top) * scale)
+            })
+          }
+        }}
         close={() => setFormatOpen(false)} style={(key, value) => {
           if (node) {
             if (key === 'reset') command('REMOVE_CUSTOM_STYLES', node)

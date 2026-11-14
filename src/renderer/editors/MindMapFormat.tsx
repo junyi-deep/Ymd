@@ -1,6 +1,6 @@
 import { GitBranch, LayoutGrid, Palette as PaletteIcon, SlidersHorizontal, X } from 'lucide-react'
 import type MindMap from 'simple-mind-map'
-import { mapLayouts, palettes, type MapSettings, type Palette } from './mapAppearance'
+import { branchStructure, mapLayouts, palettes, type MapSettings, type Palette, type Structure } from './mapAppearance'
 
 type MapNode = NonNullable<MindMap['renderer']['root']>
 const topics = [
@@ -10,7 +10,7 @@ const topics = [
 ]
 const colorValue = (value: unknown, fallback: string) => typeof value === 'string' && /^#[0-9a-f]{6}$/i.test(value) ? value : fallback
 
-export function MindMapFormat({ tab, settings, node, version, change, onTab, close, style }: {
+export function MindMapFormat({ tab, settings, node, version, change, onTab, close, style, structure }: {
   tab: 'map' | 'topic'
   settings: MapSettings
   node?: MapNode
@@ -19,9 +19,10 @@ export function MindMapFormat({ tab, settings, node, version, change, onTab, clo
   onTab: (tab: 'map' | 'topic') => void
   close: () => void
   style: (key: string, value: unknown) => void
+  structure: (value: Structure | undefined) => void
 }) {
   const data = node?.getData() ?? {}
-  return <aside className="map-format" aria-label="思维导图格式" data-version={version}>
+  return <aside className="map-format" aria-label={tab === 'topic' && node ? '主题格式 ' + (data.text || '未命名') : '思维导图格式'} data-version={version}>
     <header><strong>格式</strong><button className="icon-button" aria-label="收起格式面板" onClick={close}><X size={16} /></button></header>
     <div className="segments map-format-tabs">
       <button type="button" aria-pressed={tab === 'map'} onClick={() => onTab('map')}><LayoutGrid size={14} />导图</button>
@@ -50,6 +51,14 @@ export function MindMapFormat({ tab, settings, node, version, change, onTab, clo
         <label>紧凑排列<input type="checkbox" checked={!!settings.compact} onChange={event => change({ compact: event.target.checked })} /></label>
       </section>
     </> : node ? <>
+      <section><h3><LayoutGrid size={15} />结构</h3>
+        <label>{node.isRoot ? '画布结构' : '分支结构'}<select
+          value={node.isRoot ? settings.layout : branchStructure(data.ymdStructure) ?? ''}
+          onChange={event => structure(branchStructure(event.target.value))}>
+          {!node.isRoot && <option value="">继承父级</option>}
+          {mapLayouts.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+        </select></label>
+      </section>
       <section><h3><LayoutGrid size={15} />形状</h3>
         <label>主题形状<select value={typeof data.shape === 'string' ? data.shape : 'rectangle'} onChange={event => style('shape', event.target.value)}>
           {topics.map(([value, label]) => <option key={value} value={value}>{label}</option>)}

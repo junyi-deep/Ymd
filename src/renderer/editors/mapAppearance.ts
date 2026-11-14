@@ -8,6 +8,11 @@ export const mapLayouts = [
   ['organizationStructure', '组织结构图'], ['catalogOrganization', '树形目录'], ['timeline', '时间轴'],
   ['verticalTimeline', '垂直时间轴'], ['fishbone', '鱼骨图'],
 ] as const
+export type Structure = (typeof mapLayouts)[number][0]
+
+export function branchStructure(value: unknown): Structure | undefined {
+  return mapLayouts.find(([key]) => key === value)?.[0]
+}
 
 export const palettes = {
   ocean: { label: '海湾', root: '#23496f', colors: ['#5886d2', '#4e9d88', '#e39e52', '#8b76ce', '#d66b8d'] },

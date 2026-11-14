@@ -1,5 +1,5 @@
 import JSZip from 'jszip'
-import { mapTheme, palettes, type MapData, type MapSheet } from './mapAppearance'
+import { branchStructure, mapTheme, palettes, type MapData, type MapSheet } from './mapAppearance'
 
 type Sheet = Pick<MapSheet, 'id' | 'title' | 'settings' | 'tree'>
 type Properties = Record<string, string>
@@ -58,7 +58,8 @@ export async function exportXmind(sheets: Sheet[], active: string, dark: boolean
       const { data } = node
       const output: Topic = { id: id(), class: 'topic', title: data.text ?? '' }
       if (data.uid) ids.set(data.uid, output.id)
-      if (depth === 0) output.structureClass = Object.hasOwn(structures, sheet.settings.layout) ? structures[sheet.settings.layout] : structures.mindMap
+      const structure = depth === 0 ? branchStructure(sheet.settings.layout) ?? 'mindMap' : branchStructure(data.ymdStructure)
+      if (structure) output.structureClass = structures[structure]
       if (data.expand === false && node.children?.length) output.branch = 'folded'
       if (data.ymdFloating === true && number(data.customLeft) && number(data.customTop)) {
         output.position = { x: Number(data.customLeft) - Number(rootPosition.customLeft ?? 0), y: Number(data.customTop) - Number(rootPosition.customTop ?? 0) }
