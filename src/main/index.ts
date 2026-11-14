@@ -217,7 +217,7 @@ void app.whenReady().then(async () => {
       if (!item || typeof item.label !== 'string') return []
       const submenu = depth < 2 && Array.isArray(item.children) ? template(item.children, depth + 1) : undefined
       const label = item.label.slice(0, 100)
-      const accelerator = typeof item.shortcut === 'string' && /^(?:CommandOrControl\+)(?:Shift\+)?[A-Z0-9]$/.test(item.shortcut)
+      const accelerator = typeof item.shortcut === 'string' && /^(?:(?:CommandOrControl|Control|Alt|Shift)\+){1,3}[A-Z0-9=\[\]\\`-]$/.test(item.shortcut)
         ? item.shortcut : undefined
       return [
         ...(item.separator ? [{ type: 'separator' } as const] : []),

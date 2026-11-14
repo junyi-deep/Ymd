@@ -8,6 +8,7 @@ import type { ContextMenuItem } from '../../shared/contracts'
 type Alignment = 'left' | 'center' | 'right' | ''
 type Cell = { row: number; column: number }
 type Table = { rows: string[][]; alignment: Alignment[] }
+type Navigation = { next: Cell; change?: (table: Table) => void; edit?: boolean }
 
 function splitRow(line: string) {
   const source = line.trim().replace(/^\|/, '')
@@ -45,6 +46,36 @@ type TableAction = { label: string; run: () => void; disabled?: boolean; separat
 const editRange = (table: HTMLElement, cell: Cell) =>
   table.querySelector<HTMLTableCellElement>('[data-row="' + cell.row + '"][data-column="' + cell.column + '"]')
 
+function focusCell(table: HTMLElement, cell: Cell, edit?: boolean) {
+  const element = editRange(table, cell)
+  if (edit) element?.click()
+  else element?.focus()
+}
+
+function emptyRow(table: Table) {
+  return Array<string>(table.alignment.length).fill('')
+}
+
+function navigate(event: KeyboardEvent, cell: Cell, data: Table): Navigation | undefined {
+  const mod = event.metaKey || event.ctrlKey
+  if (mod && event.key === 'Enter') return {
+    next: { row: cell.row + 1, column: cell.column }, edit: true,
+    change: table => table.rows.splice(cell.row + 1, 0, emptyRow(table)),
+  }
+  if (mod && event.shiftKey && event.key === 'Backspace' && cell.row > 0) return {
+    next: { row: Math.min(cell.row, data.rows.length - 2), column: cell.column },
+    change: table => table.rows.splice(cell.row, 1),
+  }
+  if (event.key !== 'Tab' || mod || event.altKey) return
+  const columns = data.alignment.length
+  const index = cell.row * columns + cell.column + (event.shiftKey ? -1 : 1)
+  if (index < 0) return
+  const next = { row: Math.floor(index / columns), column: index % columns }
+  return next.row === data.rows.length
+    ? { next, edit: true, change: table => table.rows.push(emptyRow(table)) }
+    : { next, edit: true }
+}
+
 class EditableTable extends WidgetType {
   constructor(readonly start: number, readonly text: string, readonly readOnly: boolean) { super() }
 
@@ -62,7 +93,7 @@ class EditableTable extends WidgetType {
     let active: Cell = { row: 0, column: 0 }
     let editor: HTMLInputElement | undefined
 
-    const commit = (data: Table, next?: Cell, remove = false) => {
+    const commit = (data: Table, next?: Cell, remove = false, edit?: boolean) => {
       const pos = this.start
       if (view.state.readOnly || view.state.sliceDoc(pos, pos + this.text.length) !== this.text) return
       view.dispatch({
@@ -72,15 +103,15 @@ class EditableTable extends WidgetType {
       })
       if (next) {
         const updatedTable = view.dom.querySelector<HTMLElement>('.markdown-table-widget[data-table="' + pos + '"]')
-        if (updatedTable) editRange(updatedTable, next)?.focus()
+        if (updatedTable) focusCell(updatedTable, next, edit)
       }
     }
-    const update = (change: (data: Table) => void, next?: Cell) => {
+    const update = (change: (data: Table) => void, next?: Cell, edit?: boolean) => {
       const copy = structuredClone(data)
       change(copy)
-      commit(copy, next)
+      commit(copy, next, false, edit)
     }
-    const addRow = (index: number) => update(copy => copy.rows.splice(index, 0, Array(copy.alignment.length).fill('')), { row: index, column: active.column })
+    const addRow = (index: number) => update(copy => copy.rows.splice(index, 0, emptyRow(copy)), { row: index, column: active.column })
     const addColumn = (index: number) => update(copy => {
       copy.alignment.splice(index, 0, '')
       copy.rows.forEach(row => row.splice(index, 0, ''))
@@ -97,26 +128,25 @@ class EditableTable extends WidgetType {
       const before = cell.innerHTML
       editor = input
       cell.replaceChildren(input)
-      const finish = (save: boolean, next?: Cell) => {
+      const finish = (save: boolean, navigation?: Navigation) => {
         if (editor !== input) return
         editor = undefined
         const result = input.value
         cell.innerHTML = before
-        if (save && result !== initial) update(copy => { copy.rows[coord.row][coord.column] = cellText(result) }, next)
-        else if (next) editRange(table, next)?.focus()
+        if (save && (result !== initial || navigation?.change)) update(copy => {
+          if (result !== initial) copy.rows[coord.row][coord.column] = cellText(result)
+          navigation?.change?.(copy)
+        }, navigation?.next, navigation?.edit)
+        else if (navigation) focusCell(table, navigation.next, navigation.edit)
       }
       input.addEventListener('blur', () => finish(true), { once: true })
       input.addEventListener('keydown', event => {
         if (event.isComposing) return
-        if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); finish(false, coord); return }
-        if (event.key === 'Enter') { event.preventDefault(); event.stopPropagation(); finish(true, coord); return }
-        if (event.key !== 'Tab') return
-        const width = data.alignment.length
-        const index = coord.row * width + coord.column + (event.shiftKey ? -1 : 1)
-        if (index < 0 || index >= data.rows.length * width) return
+        const navigation = navigate(event, coord, data)
+        if (!navigation && event.key !== 'Enter' && event.key !== 'Escape') return
         event.preventDefault()
         event.stopPropagation()
-        finish(true, { row: Math.floor(index / width), column: index % width })
+        finish(event.key !== 'Escape', navigation ?? { next: coord })
       })
       input.focus()
     }
@@ -205,9 +235,14 @@ class EditableTable extends WidgetType {
         cell.addEventListener('focus', () => { active = coord })
         cell.addEventListener('click', event => { event.preventDefault(); attachEditor(cell, coord, text) })
         cell.addEventListener('keydown', event => {
-          if (event.target === cell && (event.key === 'Enter' || event.key === 'F2')) {
-            event.preventDefault(); attachEditor(cell, coord, text)
-          }
+          if (event.target !== cell || event.isComposing) return
+          const navigation = event.key === 'Tab' ? undefined : navigate(event, coord, data)
+          if (!navigation && event.key !== 'Enter' && event.key !== 'F2') return
+          event.preventDefault()
+          event.stopPropagation()
+          if (navigation?.change) update(navigation.change, navigation.next, navigation.edit)
+          else if (navigation) focusCell(table, navigation.next, navigation.edit)
+          else attachEditor(cell, coord, text)
         })
         cell.addEventListener('contextmenu', event => {
           event.preventDefault(); event.stopPropagation(); active = coord; openMenu(event.clientX, event.clientY)

@@ -1,31 +1,40 @@
 import { EditorSelection, Transaction, type ChangeSpec } from '@codemirror/state'
 import { EditorView, type Command, type KeyBinding } from '@codemirror/view'
+import { indentLess, indentMore } from '@codemirror/commands'
 import { searchEngines, type SearchEngine } from '../../shared/contracts'
 import { markdownHtml, markdownPlainText } from './markdownHtml'
 import type { MenuItem } from './MarkdownMenu'
 
-type EditCommand = { label: string; command: Command; key?: string }
+type EditCommand = { label: string; command: Command; key?: string; mac?: string }
 
 const paragraphPrefix = /^(\s*)(?:(?:#{1,6}|>|[-+*]|\d+[.)])(?:[ \t]+|$))(?:\[[ xX]\][ \t]+)?/
 
-function paragraph(prefix: string): Command {
+function paragraph(prefix: string | ((source: string) => string | undefined)): Command {
   return view => {
     const { state } = view
     const selection = state.selection.main
     const first = state.doc.lineAt(selection.from)
-    const last = state.doc.lineAt(selection.to)
+    const last = state.doc.lineAt(selection.empty ? selection.to : selection.to - 1)
     const changes: ChangeSpec[] = []
     for (let number = first.number; number <= last.number; number++) {
       const line = state.doc.line(number)
       const match = paragraphPrefix.exec(line.text)
       const whitespace = match?.[1] ?? /^\s*/.exec(line.text)![0]
+      const next = typeof prefix === 'string' ? prefix : prefix((match?.[0] ?? '').trim())
+      if (next === undefined) continue
       changes.push({ from: line.from, to: match ? line.from + match[0].length : line.from + whitespace.length,
-        insert: whitespace + prefix })
+        insert: whitespace + next })
     }
+    if (!changes.length) return true
     view.dispatch({ changes, userEvent: 'input.format', scrollIntoView: true })
     return true
   }
 }
+
+const headingLevel = (change: number) => paragraph(source => {
+  if (!/^#{1,6}$/.test(source)) return undefined
+  return '#'.repeat(Math.max(1, Math.min(6, source.length + change))) + ' '
+})
 
 function format(start: string, end = start): Command {
   return view => {
@@ -102,40 +111,50 @@ const formats: EditCommand[] = [
   { label: '斜体', command: format('*'), key: 'Mod-i' },
   { label: '下划线', command: format('<u>', '</u>'), key: 'Mod-u' },
   { label: '代码', command: format('`'), key: 'Mod-Shift-`' },
-  { label: '删除线', command: format('~~') },
+  { label: '删除线', command: format('~~'), key: 'Alt-Shift-5', mac: 'Ctrl-Shift-`' },
   { label: '高亮', command: format('==') },
   { label: '超链接', command: insertAsset('link'), key: 'Mod-k' },
-  { label: '清除样式', command: clearStyle },
+  { label: '清除样式', command: clearStyle, key: 'Mod-\\' },
 ]
 const paragraphs: EditCommand[] = [
   ...headings,
-  { label: '引用', command: paragraph('> ') },
-  { label: '有序列表', command: paragraph('1. ') },
-  { label: '无序列表', command: paragraph('- ') },
+  { label: '增加标题级别', command: headingLevel(1), key: 'Mod-=' },
+  { label: '减少标题级别', command: headingLevel(-1), key: 'Mod--' },
+  { label: '引用', command: paragraph('> '), key: 'Mod-Shift-q', mac: 'Alt-Mod-q' },
+  { label: '有序列表', command: paragraph('1. '), key: 'Mod-Shift-[', mac: 'Alt-Mod-o' },
+  { label: '无序列表', command: paragraph('- '), key: 'Mod-Shift-]', mac: 'Alt-Mod-u' },
   { label: '任务列表', command: paragraph('- [ ] ') },
+  { label: '缩进', command: indentMore, key: 'Mod-[' },
+  { label: '减少缩进', command: indentLess, key: 'Mod-]' },
   { label: '段落', command: paragraph(''), key: 'Mod-0' },
 ]
+export const insertMermaid = insertBlock('```mermaid\nflowchart LR\n  A[开始] --> B[结束]\n```', 'flowchart LR\n  A[开始] --> B[结束]')
+const tableKey = { key: 'Mod-t', mac: 'Alt-Mod-t' }
 const inserts: EditCommand[] = [
   { label: '图像', command: insertAsset('image') },
-  { label: '代码块', command: insertBlock('```text\n代码\n```', '代码') },
-  { label: '公式块', command: insertBlock('$$\n公式\n$$', '公式') },
-  { label: '表格', command: insertBlock('| 列一 | 列二 |\n| --- | --- |\n| 内容 | 内容 |', '列一') },
+  { label: '代码块', command: insertBlock('```text\n代码\n```', '代码'), key: 'Mod-Shift-k', mac: 'Alt-Mod-c' },
+  { label: '公式块', command: insertBlock('$$\n公式\n$$', '公式'), key: 'Mod-Shift-m', mac: 'Alt-Mod-b' },
   { label: '水平分割线', command: insertBlock('---') },
-  { label: 'Mermaid 图', command: insertBlock('```mermaid\nflowchart LR\n  A[开始] --> B[结束]\n```', 'flowchart LR\n  A[开始] --> B[结束]') },
+  { label: 'Mermaid 图', command: insertMermaid },
   { label: '在上方插入段落', command: insertParagraph(true) },
   { label: '在下方插入段落', command: insertParagraph(false) },
 ]
 
-export const typographyKeys: KeyBinding[] = [...paragraphs, ...formats].flatMap(item => item.key ? [{ key: item.key, run: view => !view.state.readOnly && item.command(view) }] : [])
-export const insertMermaid = inserts[5].command
+export function typographyKeys(chooseTable: () => void): KeyBinding[] {
+  return [...paragraphs, ...formats, ...inserts, { label: '表格', ...tableKey, command: () => { chooseTable(); return true } }]
+    .flatMap(item => item.key ? [{ key: item.key, mac: item.mac, run: view => !view.state.readOnly && item.command(view) }] : [])
+}
 
 export function contextItems(view: EditorView, platform: string, path: string, report: (error: unknown) => void, readOnly: boolean, searchEngine: SearchEngine, chooseTable: () => void): MenuItem[] {
   const { state } = view
   const selection = state.selection.main
   const source = state.sliceDoc(selection.from, selection.to)
-  const mod = platform === 'darwin' ? '⌘' : 'Ctrl+'
+  const mod = 'CommandOrControl+'
+  const displayKey = (item: Pick<EditCommand, 'key' | 'mac'>) => (platform === 'darwin' ? item.mac ?? item.key : item.key)
+    ?.replace('Mod-', mod).replace('Shift-', 'Shift+').replace('Alt-', 'Alt+').replace('Ctrl-', 'Control+')
+    .replace(/[a-z]$/, key => key.toUpperCase())
   const toMenu = (item: EditCommand): MenuItem =>
-    ({ label: item.label, shortcut: item.key?.replace('Mod-', mod).replace('Shift-', '⇧').toUpperCase(), run: () => { item.command(view); view.focus() } })
+    ({ label: item.label, shortcut: displayKey(item), run: () => { item.command(view); view.focus() } })
   const chooseImage = () => {
     void window.desktop.chooseMarkdownImage(path).then(source => {
       if (!source || !view.dom.isConnected) return
@@ -177,11 +196,10 @@ export function contextItems(view: EditorView, platform: string, path: string, r
     ] },
     { label: '段落', separator: true, disabled: readOnly, children: paragraphs.map(toMenu) },
     { label: '格式', disabled: readOnly, children: formats.map(toMenu) },
-    { label: '插入', disabled: readOnly, children: inserts.map(item => {
-      if (item.label === '图像') return { label: item.label, run: chooseImage }
-      if (item.label === '表格') return { label: item.label, run: chooseTable }
-      return toMenu(item)
-    }) },
+    { label: '插入', disabled: readOnly, children: [
+      { label: '表格', shortcut: displayKey(tableKey), run: chooseTable },
+      ...inserts.map(item => item.label === '图像' ? { label: item.label, run: chooseImage } : toMenu(item)),
+    ] },
     { label: '在网页中搜索选中文字', separator: true, disabled: !source.trim(), run: () => {
       const engine = searchEngines[searchEngine]
       const url = new URL(engine.url)

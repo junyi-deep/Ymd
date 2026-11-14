@@ -236,7 +236,7 @@ export function MarkdownEditor({ text, name, path, modified, platform, remoteIma
         doc: raw.slice(bom.length).replace(/\r\n|\r/g, '\n'),
         extensions: [
           highlightSpecialChars(), history(), drawSelection(), keymap.of([...defaultKeymap, ...historyKeymap]), EditorView.lineWrapping, markdown({ extensions: [GFM, typoraMarkdown], addKeymap: false }),
-          search({ top: true }), Prec.high(keymap.of([...typographyKeys, ...markdownKeymap, ...searchKeymap])),
+          search({ top: true }), Prec.high(keymap.of([...typographyKeys(() => tableDialog.current?.showModal()), ...markdownKeymap, ...searchKeymap])),
           EditorView.contentAttributes.of({ 'aria-label': 'Markdown 编辑器', spellcheck: 'false' }),
           renderMode.current.of([live(path, remoteImages), renderedBlocks, markdownTable]),
           readMode.current.of([]),
@@ -340,11 +340,10 @@ export function MarkdownEditor({ text, name, path, modified, platform, remoteIma
   function openContextMenu(editor: EditorView, x: number, y: number) {
     const mapping: (() => void)[] = []
     const serialize = (items: MenuItem[]): ContextMenuItem[] => items.map(item => {
-      const shortcut = item.shortcut?.replace('⌘', 'CommandOrControl+').replace('Ctrl+', 'CommandOrControl+').replace('⇧', 'Shift+')
       return {
         label: item.label,
         id: item.run ? mapping.push(item.run) - 1 : undefined,
-        shortcut,
+        shortcut: item.shortcut,
         disabled: item.disabled,
         separator: item.separator,
         children: item.children ? serialize(item.children) : undefined,
