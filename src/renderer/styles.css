@@ -72,6 +72,8 @@ kbd { color: var(--muted); font-family: inherit; font-size: .9em; white-space: n
 .title-path { white-space: nowrap; max-width: 44%; padding-left: 7px; }
 .title-path strong, .source-label { overflow: hidden; text-overflow: ellipsis; }
 .title-path strong { font-weight: 650; }
+.document-name { overflow: hidden; text-overflow: ellipsis; font-weight: 650; border-radius: 5px; text-align: left; }
+.document-rename { min-width: 90px; max-width: 240px; width: 100%; padding-inline: 4px; background: var(--soft); border-radius: 5px; -webkit-app-region: no-drag; }
 .title-path svg, .unsaved-dot { flex: none; }
 .source-label { color: var(--muted); }
 .title-actions { padding-right: 12px; }
@@ -396,3 +398,13 @@ dialog button.primary { background: var(--accent); color: var(--accent-ink); }
 .map-minimap div { display: grid; place-items: center; width: 100%; height: 100%; }
 .map-minimap svg { max-width: 160px; max-height: 100px; }
 .map-minimap i { position: absolute; border: 1px solid var(--accent); background: color-mix(in srgb, var(--accent) 11%, transparent); pointer-events: none; }
+.map-document { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.map-sheets { display: flex; align-items: center; gap: 4px; min-height: 36px; padding: 3px 9px; border-top: 1px solid var(--line); overflow-x: auto; }
+.map-sheet-item { display: flex; align-items: center; flex: none; }
+.map-sheet { padding: 4px 10px; border-radius: 6px; white-space: nowrap; }
+.map-sheet[data-active="true"] { background: var(--selected); font-weight: 620; }
+.map-sheet:hover { background: var(--hover); }
+.map-sheet-item .icon-button { width: 23px; height: 23px; opacity: .65; }
+.map-sheet-item input { width: 110px; background: var(--soft); border-radius: 5px; padding: 3px 7px; }
+
+.map-storage-error { flex: none; color: var(--muted); }

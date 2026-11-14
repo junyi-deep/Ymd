@@ -17,10 +17,10 @@ import { UnsupportedList } from './Outline'
 import { projectList, writeList, type Block } from './listProjection'
 import { MindMapFormat } from './MindMapFormat'
 import { MarkdownMenu, type MenuItem } from './MarkdownMenu'
-import { loadMapAppearance, mapTheme, palettes, restoreMapStyles, saveMapAppearance, type MapData, type MapSettings } from './mapAppearance'
+import { defaultMapSettings, loadMapAppearance, mapTheme, palettes, restoreFloating, restoreMapStyles, saveMapAppearance, saveMapSheets, type MapData, type MapSettings, type MapSheet } from './mapAppearance'
 
 for (const plugin of [AssociativeLine, Drag, Export, ExportPDF, ExportXMind, KeyboardNavigation, MiniMap, OuterFrame, RainbowLines, SearchPlugin, Select]) MindMap.usePlugin(plugin)
-MindMap.extendNodeDataNoStylePropList(['ymdMarker'])
+MindMap.extendNodeDataNoStylePropList(['ymdMarker', 'ymdFloating'])
 
 type MapNode = NonNullable<MindMap['renderer']['root']>
 type TopicField = '备注' | '标签' | '链接'
@@ -30,20 +30,126 @@ const toMap = (blocks: Block[]): MapData[] => blocks.map(block => ({
 }))
 
 function fromMap(nodes: MapData[]): Block[] {
-  const marker = nodes.find(node => /^[-+*]$/.test(String(node.data.ymdMarker)))?.data.ymdMarker ?? '-'
-  return nodes.map((node, index) => ({
+  const branches = nodes.filter(node => node.data.ymdFloating !== true)
+  const marker = branches.find(node => /^[-+*]$/.test(String(node.data.ymdMarker)))?.data.ymdMarker ?? '-'
+  return branches.map((node, index) => ({
     id: node.data.uid ?? String(index), text: node.data.text ?? '', marker: String(marker),
     children: fromMap(node.children ?? []),
   }))
 }
 
-export default function MindMapEditor({ text, name, path, dark, onChange, registerFlush }: {
+interface MapEditorProps {
   text: string; name: string; path: string; dark: boolean; onChange: (text: string) => void
   registerFlush: (flush?: () => void) => void
+}
+
+export default function MindMapEditor(props: MapEditorProps) {
+  const { path } = props
+  const [sheets, setSheets] = useState(() => loadMapAppearance(path).sheets ?? [])
+  const [active, setActive] = useState<string>()
+  const [renaming, setRenaming] = useState<string>()
+  const [newTitle, setNewTitle] = useState('')
+  const [remove, setRemove] = useState<MapSheet>()
+  const [storageError, setStorageError] = useState(false)
+  const sheetsRef = useRef(sheets)
+  const removeDialog = useRef<HTMLDialogElement>(null)
+  const flush = useRef<(() => void) | undefined>(undefined)
+  const register = useRef(props.registerFlush)
+  register.current = props.registerFlush
+  const registerCanvas = useRef((callback?: () => void) => {
+    flush.current = callback
+    register.current(callback)
+  }).current
+  const sheet = sheets.find(current => current.id === active)
+
+  useEffect(() => {
+    if (remove) removeDialog.current?.showModal()
+    else if (removeDialog.current?.open) removeDialog.current.close()
+  }, [remove])
+
+  function updateSheets(change: (current: MapSheet[]) => MapSheet[]) {
+    const next = change(sheetsRef.current)
+    try {
+      saveMapSheets(path, next)
+      setStorageError(false)
+    } catch {
+      setStorageError(true)
+      return false
+    }
+    sheetsRef.current = next
+    setSheets(next)
+    return true
+  }
+
+  function select(id?: string) {
+    flush.current?.()
+    setActive(id)
+  }
+
+  function create() {
+    flush.current?.()
+    const id = crypto.randomUUID()
+    let index = 2
+    while (sheetsRef.current.some(item => item.title === '画布 ' + index)) index++
+    const title = '画布 ' + index
+    const created = updateSheets(current => [...current, {
+      id, title, settings: defaultMapSettings, tree: { data: { text: title, uid: rootId }, children: [] },
+    }])
+    if (created) setActive(id)
+  }
+
+  function saveTitle() {
+    if (!renaming || !newTitle.trim()) { setRenaming(undefined); return }
+    const renamed = updateSheets(current => current.map(item => item.id === renaming
+      ? { ...item, title: newTitle.trim(), tree: { ...item.tree, data: { ...item.tree.data, text: newTitle.trim() } } } : item))
+    if (renamed) setRenaming(undefined)
+  }
+
+  return <div className="map-document">
+    <MapCanvas key={sheet ? sheet.id + ':' + sheet.title : rootId} {...props} sheet={sheet} registerFlush={registerCanvas}
+      updateSheet={(id, settings, tree) => {
+        if (!updateSheets(current => current.map(item => item.id === id ? { ...item, settings, tree } : item))) {
+          throw new Error('无法保存画布。')
+        }
+      }} />
+    <nav className="map-sheets" aria-label="思维导图画布列表">
+      <button className="map-sheet" data-active={!active} onClick={() => select()}>主画布</button>
+      {sheets.map(item => <div className="map-sheet-item" key={item.id}>
+        {renaming === item.id
+          ? <input aria-label="画布名称" value={newTitle} autoFocus onFocus={event => event.currentTarget.select()}
+              onChange={event => setNewTitle(event.target.value)} onBlur={() => setRenaming(undefined)}
+              onKeyDown={event => {
+                if (event.nativeEvent.isComposing) return
+                if (event.key === 'Enter') saveTitle()
+                if (event.key === 'Escape') { event.stopPropagation(); setRenaming(undefined) }
+              }} />
+          : <button className="map-sheet" data-active={active === item.id} title={item.title} onClick={() => select(item.id)}
+              onDoubleClick={() => { setNewTitle(item.title); setRenaming(item.id) }}>{item.title}</button>}
+        <button className="icon-button" aria-label={'删除画布 ' + item.title} onClick={() => setRemove(item)}><X size={13} /></button>
+      </div>)}
+      <button className="icon-button" aria-label="新建画布" title="新建画布" onClick={create}><Plus size={16} /></button>
+      {storageError && <span className="map-storage-error" role="alert">无法保存画布</span>}
+    </nav>
+    <dialog ref={removeDialog} onCancel={event => { event.preventDefault(); setRemove(undefined) }}>
+      {remove && <div><h2>删除画布</h2><p>删除「{remove.title}」和它的全部主题？</p>
+        <footer><button onClick={() => setRemove(undefined)}>取消</button><button className="primary" onClick={() => {
+          if (updateSheets(current => current.filter(item => item.id !== remove.id))) {
+            if (remove.id === active) setActive(undefined)
+            setRemove(undefined)
+          }
+        }}>删除</button></footer></div>}
+    </dialog>
+  </div>
+}
+
+function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, updateSheet }: MapEditorProps & {
+  sheet?: MapSheet
+  updateSheet: (id: string, settings: MapSettings, tree: MapData) => void
 }) {
   const [projection] = useState(() => projectList(text))
   const [appearance] = useState(() => loadMapAppearance(path))
-  const [settings, setSettings] = useState(appearance.settings)
+  const [initialSheet] = useState(sheet)
+  const [settings, setSettings] = useState(sheet?.settings ?? appearance.settings)
   const [selected, setSelected] = useState<MapNode[]>([])
   const [formatOpen, setFormatOpen] = useState(true)
   const [tab, setTab] = useState<'map' | 'topic'>('map')
@@ -67,26 +173,34 @@ export default function MindMapEditor({ text, name, path, dark, onChange, regist
   const engine = useRef<MindMap | undefined>(undefined)
   const fieldDialog = useRef<HTMLDialogElement>(null)
   const change = useRef(onChange)
+  const saveSheet = useRef(updateSheet)
   const currentSettings = useRef(settings)
   change.current = onChange
+  saveSheet.current = updateSheet
   currentSettings.current = settings
 
   useEffect(() => {
-    if (!projection || !host.current) return
-    const root: MapData = { data: { text: name.replace(/\.md$/i, ''), uid: rootId }, children: toMap(projection.blocks) }
-    restoreMapStyles(root, appearance.styles)
-    let previous = writeList(projection, projection.blocks)
+    if ((!projection && !initialSheet) || !host.current) return
+    const title = name.replace(/\.md$/i, '')
+    const root: MapData = initialSheet ? structuredClone(initialSheet.tree)
+      : { data: { text: title, uid: rootId }, children: toMap(projection!.blocks) }
+    if (!initialSheet) {
+      restoreMapStyles(root, appearance.styles)
+      restoreFloating(root, appearance.floating ?? [])
+    }
+    const initialSettings = initialSheet?.settings ?? appearance.settings
+    let previous = projection ? writeList(projection, projection.blocks) : ''
     let map: MindMap
     try {
       map = new MindMap({
         el: host.current, data: root, theme: 'default',
-        layout: appearance.settings.layout, themeConfig: mapTheme(appearance.settings, dark),
-        rainbowLinesConfig: { open: appearance.settings.colored, colorsList: palettes[appearance.settings.palette].colors },
+        layout: initialSettings.layout, themeConfig: mapTheme(initialSettings, dark),
+        rainbowLinesConfig: { open: initialSettings.colored, colorsList: palettes[initialSettings.palette].colors },
         customHyperlinkJump: url => { void window.desktop.openExternal(url).catch(() => setNotice('无法打开链接。')) },
         customCheckEnableShortcut: event => !event.defaultPrevented && !event.isComposing && event.target instanceof HTMLElement &&
           (event.target === document.body || event.target.classList.contains('smm-node-edit-wrap') || !!host.current?.contains(event.target)),
         beforeAssociativeLineConnection: () => { setLinking(false); return false },
-        beforeTextEdit: node => !node.isRoot, enableAutoEnterTextEditWhenKeydown: false,
+        beforeTextEdit: node => !!initialSheet || !node.isRoot, enableAutoEnterTextEditWhenKeydown: false, enableFreeDrag: true,
         defaultInsertSecondLevelNodeText: '新主题', defaultInsertBelowSecondLevelNodeText: '子主题',
       })
     } catch (problem) {
@@ -95,9 +209,14 @@ export default function MindMapEditor({ text, name, path, dark, onChange, regist
     }
     engine.current = map
     const onData = (node: MapData) => {
-      const next = writeList(projection, fromMap(node.children ?? []))
-      if (next !== previous) { previous = next; change.current(next) }
-      try { saveMapAppearance(path, currentSettings.current, node) } catch { setNotice('无法保存导图样式。') }
+      if (!initialSheet && projection) {
+        const next = writeList(projection, fromMap(node.children ?? []))
+        if (next !== previous) { previous = next; change.current(next) }
+      }
+      try {
+        if (initialSheet) saveSheet.current(initialSheet.id, currentSettings.current, node)
+        else saveMapAppearance(path, currentSettings.current, node)
+      } catch { setNotice('无法保存导图样式。') }
       setVersion(value => value + 1)
     }
     const sync = () => onData(map.getData())
@@ -145,7 +264,7 @@ export default function MindMapEditor({ text, name, path, dark, onChange, regist
       map.destroy()
       engine.current = undefined
     }
-  }, [name, path, projection, registerFlush, appearance])
+  }, [name, path, projection, registerFlush, appearance, initialSheet])
 
   useEffect(() => {
     const map = engine.current
@@ -207,7 +326,7 @@ export default function MindMapEditor({ text, name, path, dark, onChange, regist
     }
   }, [overview])
 
-  if (!projection) return <UnsupportedList />
+  if (!projection && !initialSheet) return <UnsupportedList />
   if (error) return <div className="editor-empty"><h2>无法加载思维导图</h2><p>{error}</p></div>
 
   function changeSettings(patch: Partial<MapSettings>) {
@@ -217,7 +336,10 @@ export default function MindMapEditor({ text, name, path, dark, onChange, regist
     const map = engine.current
     if (!map) return
     if (patch.layout && patch.layout !== settings.layout) map.setLayout(patch.layout)
-    try { saveMapAppearance(path, next, map.getData()) } catch { setNotice('无法保存导图样式。') }
+    try {
+      if (initialSheet) saveSheet.current(initialSheet.id, next, map.getData())
+      else saveMapAppearance(path, next, map.getData())
+    } catch { setNotice('无法保存导图样式。') }
   }
 
   const command = (name: string, ...args: unknown[]) => engine.current?.execCommand(name, ...args)
@@ -230,6 +352,15 @@ export default function MindMapEditor({ text, name, path, dark, onChange, regist
     if (sibling && node && !node.isRoot) { command('INSERT_NODE'); return }
     const parent = node ?? map.renderer.root
     if (parent) command('INSERT_CHILD_NODE', true, [parent])
+  }
+
+  function addFloating() {
+    const root = engine.current?.renderer.root
+    if (!root) return
+    command('INSERT_CHILD_NODE', true, [root], {
+      text: '浮动主题', ymdFloating: true, customLeft: root.left + root.width + 76, customTop: root.top - 120,
+      fillColor: '#e8edf5', color: '#273343', borderWidth: 1, borderColor: '#aab7cc', lineColor: 'transparent',
+    })
   }
 
   function fieldFor(key: TopicField) {
@@ -274,6 +405,7 @@ export default function MindMapEditor({ text, name, path, dark, onChange, regist
   }
 
   const insertItems: MenuItem[] = [
+    { label: '浮动主题', icon: <Square size={16} />, run: addFloating },
     { label: '关联线', icon: <GitFork size={16} />, disabled: !node, run: () => {
       engine.current?.associativeLine.createLineFromActiveNode()
       setLinking(true)
@@ -299,6 +431,11 @@ export default function MindMapEditor({ text, name, path, dark, onChange, regist
     { label: '添加子主题', shortcut: 'Tab', run: () => add(false) },
     { label: '收起子主题', run: () => { if (node) command('SET_NODE_EXPAND', node, false) } },
     { label: '展开子主题', run: () => { if (node) command('SET_NODE_EXPAND', node, true) } },
+    { label: '折叠级别', children: [
+      { label: '全部展开', run: () => command('EXPAND_ALL') },
+      { label: '全部收起', run: () => command('UNEXPAND_ALL') },
+      ...[1, 2, 3, 4].map(level => ({ label: '展开至第 ' + level + ' 层', run: () => command('UNEXPAND_TO_LEVEL', level) })),
+    ] },
     { label: '插入', separator: true, children: insertItems },
     { label: '删除主题', icon: <Trash2 size={16} />, disabled: !canRemove, run: () => command('REMOVE_NODE') },
   ]

@@ -8,6 +8,7 @@ import { useFileMarks } from './useFileMarks'
 import { useDocuments, type Session } from './documents'
 import { MarkdownEditor } from './editors/Markdown'
 import { OutlineEditor } from './editors/Outline'
+import { relocateMapAppearance } from './editors/mapAppearance'
 
 const MindMapEditor = lazy(() => import('./editors/MindMap'))
 const DrawingEditor = lazy(() => import('./editors/Drawing'))
@@ -46,6 +47,7 @@ export function App() {
   const [prompt, setPrompt] = useState<Prompt>()
   const [notice, setNotice] = useState('')
   const [busy, setBusy] = useState(false)
+  const [rename, setRename] = useState<{ session: Session; name: string }>()
   const flushEditor = useRef<(() => void) | undefined>(undefined)
   const registerFlush = useCallback((flush?: () => void) => { flushEditor.current = flush }, [])
   const modal = useRef<HTMLDialogElement>(null)
@@ -236,17 +238,29 @@ export function App() {
   }
 
   function moveFile(session: Session) {
+    relocateFile(session, saved => window.desktop.move(saved.path, saved.version))
+  }
+
+  function relocateFile(session: Session, operation: (saved: Session) => Promise<Parameters<typeof sessions.open>[0] | null>) {
+    flushEditor.current?.()
     run(async () => {
       if (!await sessions.save(session.path)) return
       const saved = sessions.latest.current.find(document => document.path === session.path)
       if (!saved) return
-      const file = await window.desktop.move(saved.path, saved.version)
+      const file = await operation(saved)
       if (!file || file.path === saved.path) return
       marks.relocate(saved.path, file.path)
+      relocateMapAppearance(saved.path, file.path, file.name)
       sessions.close(saved.path)
       showFile(file)
       setRevision(value => value + 1)
     })
+  }
+
+  function renameActive() {
+    if (!rename) return
+    setRename(undefined)
+    relocateFile(rename.session, saved => window.desktop.rename(saved.path, rename.name, saved.version))
   }
 
   function tree(entry: Entry, scope: Scope, expanded: boolean) {
@@ -271,7 +285,24 @@ export function App() {
       <div className="title-path flex min-w-0 items-center gap-2">
         {settings ? <span>设置</span> : active
           ? <><span className="source-label">{activeScope === 'library' ? '我的文档' : activeScope === 'project' ? '项目空间' : '本机文件'}</span>
-            <ChevronRight size={14} /><strong title={active.path}>{active.name}</strong>{dirty && <span className="unsaved-dot" title="未保存" />}</>
+            <ChevronRight size={14} />
+            {rename?.session.path === active.path
+              ? <input className="document-rename" aria-label="文档名称" autoFocus value={rename.name}
+                  onFocus={event => event.currentTarget.select()} onChange={event => setRename({ ...rename, name: event.target.value })}
+                  onBlur={() => setRename(undefined)} onKeyDown={event => {
+                    if (event.nativeEvent.isComposing) return
+                    if (event.key === 'Escape') { event.stopPropagation(); setRename(undefined) }
+                    if (event.key === 'Enter') renameActive()
+                  }} />
+              : <button className="document-name" title={active.path} aria-label={'重命名 ' + active.name}
+                  onDoubleClick={() => setRename({ session: active, name: active.name.replace(/\.[^.]+$/, '') })}
+                  onKeyDown={event => {
+                    if (event.key === 'F2' || event.key === 'Enter') {
+                      event.preventDefault()
+                      setRename({ session: active, name: active.name.replace(/\.[^.]+$/, '') })
+                    }
+                  }}>{active.name}</button>}
+            {dirty && <span className="unsaved-dot" title="未保存" />}</>
           : <strong>Ymd</strong>}
       </div>
       {!settings && active?.kind === 'markdown' && <div className="segments mode-switch" aria-label="编辑模式">

@@ -157,7 +157,21 @@ export class Files {
   async move(file: string, directory: string, version: string) {
     const original = await this.resolve(file)
     const target = await this.resolve(directory, true)
-    const destination = path.join(target, path.basename(original))
+    return this.relocate(original, path.join(target, path.basename(original)), version)
+  }
+
+  async renameDocument(file: string, name: string, version: string) {
+    const original = await this.authorizedFile(file)
+    if (typeof name !== 'string') throw new Error('文件名无效。')
+    const title = name.trim()
+    if (!title || title.startsWith('.') || /[<>:"/\\|?*\x00-\x1f]|[. ]$/.test(title) ||
+      /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(title)) throw new Error('请输入有效的文件名。')
+    const extension = path.extname(original)
+    const target = title.toLowerCase().endsWith(extension.toLowerCase()) ? title : title + extension
+    return this.relocate(original, path.join(path.dirname(original), target), version)
+  }
+
+  private async relocate(original: string, destination: string, version: string) {
     if (original === destination) return this.read(original, true)
     if (versionOf(await readFile(original)) !== version) throw new Error('磁盘上的文件已变化，请重新载入后移动。')
     try {

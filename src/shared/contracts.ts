@@ -60,6 +60,7 @@ export interface Desktop {
   create(directory: string, kind: FileKind): Promise<DocumentFile>
   save(path: string, text: string, version: string): Promise<{ version: string; modified: number } | { conflict: true }>
   duplicate(path: string, directory: string, text: string): Promise<DocumentFile>
+  rename(path: string, name: string, version: string): Promise<DocumentFile>
   move(path: string, version: string): Promise<DocumentFile | null>
   trash(path: string, version: string): Promise<void>
   openExternal(url: string): Promise<void>

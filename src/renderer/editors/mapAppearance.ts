@@ -23,11 +23,20 @@ export interface MapSettings {
   background?: string
   font: string
   lineWidth: number
+  lineStyle?: 'curve' | 'straight' | 'direct'
+  compact?: boolean
   colored: boolean
 }
 
 interface StoredStyle { address: string; text: string; data: StyleData }
-export interface MapAppearance { settings: MapSettings; styles: StoredStyle[] }
+export interface MapSheet {
+  id: string
+  title: string
+  settings: MapSettings
+  tree: MapData
+}
+
+export interface MapAppearance { settings: MapSettings; styles: StoredStyle[]; sheets?: MapSheet[]; floating?: MapData[] }
 
 export const defaultMapSettings: MapSettings = { layout: 'mindMap', palette: 'ocean', font: 'system-ui', lineWidth: 2, colored: true }
 
@@ -41,13 +50,33 @@ export function loadMapAppearance(path: string): MapAppearance {
 
 export function saveMapAppearance(path: string, settings: MapSettings, tree: MapData) {
   const styles: StoredStyle[] = []
+  const floating: MapData[] = []
   function collect(node: MapData, address: string) {
+    if (node.data.ymdFloating === true) {
+      floating.push(node)
+      return
+    }
     const { text = '', uid: _uid, isActive: _active, richText: _rich, ...data } = node.data
     if (Object.keys(data).length) styles.push({ address, text, data: { ...data, uid: node.data.uid } })
-    node.children?.forEach((child, index) => collect(child, address + '.' + index))
+    let childIndex = 0
+    node.children?.forEach(child => {
+      const floatingChild = child.data.ymdFloating === true
+      collect(child, address + '.' + (floatingChild ? 'floating' : childIndex++))
+    })
   }
   collect(tree, 'root')
-  localStorage.setItem('ymd.map:' + path, JSON.stringify({ settings, styles }))
+  const { sheets } = loadMapAppearance(path)
+  localStorage.setItem('ymd.map:' + path, JSON.stringify({ settings, styles, sheets, floating }))
+}
+
+export function restoreFloating(tree: MapData, floating: MapData[]) {
+  if (!floating.length) return
+  tree.children = [...(tree.children ?? []), ...structuredClone(floating)]
+}
+
+export function saveMapSheets(path: string, sheets: MapSheet[]) {
+  const appearance = loadMapAppearance(path)
+  localStorage.setItem('ymd.map:' + path, JSON.stringify({ ...appearance, sheets }))
 }
 
 export function restoreMapStyles(tree: MapData, styles: StoredStyle[]) {
@@ -68,6 +97,19 @@ export function restoreMapStyles(tree: MapData, styles: StoredStyle[]) {
   apply(tree, 'root')
 }
 
+export function relocateMapAppearance(oldPath: string, newPath: string, title: string) {
+  try {
+    const key = 'ymd.map:' + oldPath
+    const raw = localStorage.getItem(key)
+    if (!raw) return
+    const value = JSON.parse(raw) as MapAppearance
+    const root = value.styles.find(style => style.address === 'root')
+    if (root) root.text = title.replace(/\.md$/i, '')
+    localStorage.setItem('ymd.map:' + newPath, JSON.stringify(value))
+    localStorage.removeItem(key)
+  } catch {}
+}
+
 export function mapTheme(settings: MapSettings, dark: boolean) {
   const palette = palettes[settings.palette]
   const background = settings.background ?? (dark ? '#252629' : '#fafbfc')
@@ -76,9 +118,11 @@ export function mapTheme(settings: MapSettings, dark: boolean) {
     backgroundColor: background,
     lineColor: dark ? '#8994a4' : '#8c9ab1',
     lineWidth: settings.lineWidth,
-    lineStyle: 'curve',
+    lineStyle: settings.lineStyle ?? 'curve',
     root: { fillColor: palette.root, color: '#ffffff', fontFamily: settings.font, fontSize: 26, fontWeight: 'bold', borderWidth: 0, borderRadius: 11, paddingX: 24, paddingY: 14 },
-    second: { fillColor: dark ? '#373b45' : '#eef2f8', color: foreground, fontFamily: settings.font, fontSize: 17, fontWeight: 'bold', borderRadius: 8, borderWidth: 0, paddingX: 13, paddingY: 8 },
-    node: { fillColor: 'transparent', color: foreground, fontFamily: settings.font, fontSize: 15, borderWidth: 0, paddingX: 7, paddingY: 5 },
+    second: { fillColor: dark ? '#373b45' : '#eef2f8', color: foreground, fontFamily: settings.font, fontSize: 17, fontWeight: 'bold',
+      borderRadius: 8, borderWidth: 0, paddingX: 13, paddingY: 8, marginX: settings.compact ? 48 : 100, marginY: settings.compact ? 19 : 40 },
+    node: { fillColor: 'transparent', color: foreground, fontFamily: settings.font, fontSize: 15, borderWidth: 0, paddingX: 7, paddingY: 5,
+      marginX: settings.compact ? 26 : 50, marginY: settings.compact ? 0 : 4 },
   }
 }

@@ -45,6 +45,9 @@ export function MindMapFormat({ tab, settings, node, version, change, onTab, clo
       <section><h3><SlidersHorizontal size={15} />样式</h3>
         <label>全局字体<select value={settings.font} onChange={event => change({ font: event.target.value })}><option value="system-ui">系统字体</option><option value="serif">衬线</option><option value="monospace">等宽</option></select></label>
         <label>分支线宽<input type="range" min="1" max="8" value={settings.lineWidth} onChange={event => change({ lineWidth: Number(event.target.value) })} /></label>
+        <label>分支线型<select value={settings.lineStyle ?? 'curve'} onChange={event => change({ lineStyle: event.target.value as MapSettings['lineStyle'] })}>
+          <option value="curve">曲线</option><option value="straight">折线</option><option value="direct">直线</option></select></label>
+        <label>紧凑排列<input type="checkbox" checked={!!settings.compact} onChange={event => change({ compact: event.target.checked })} /></label>
       </section>
     </> : node ? <>
       <section><h3><LayoutGrid size={15} />形状</h3>
@@ -54,6 +57,8 @@ export function MindMapFormat({ tab, settings, node, version, change, onTab, clo
         <label>填充<input type="color" value={colorValue(data.fillColor, '#eef2f8')} onChange={event => style('fillColor', event.target.value)} /></label>
         <label>边框颜色<input type="color" value={colorValue(data.borderColor, '#758190')} onChange={event => style('borderColor', event.target.value)} /></label>
         <label>边框宽度<input type="range" min="0" max="8" value={Number(data.borderWidth ?? 0)} onChange={event => style('borderWidth', Number(event.target.value))} /></label>
+        <label>边框线型<select value={String(data.borderDasharray ?? 'none')} onChange={event => style('borderDasharray', event.target.value)}>
+          <option value="none">实线</option><option value="6,4">虚线</option><option value="2,3">点线</option></select></label>
       </section>
       <section><h3><SlidersHorizontal size={15} />文字</h3>
         <label>字号<input type="number" min="10" max="72" value={Number(data.fontSize ?? (node.isRoot ? 26 : 16))}
@@ -61,6 +66,7 @@ export function MindMapFormat({ tab, settings, node, version, change, onTab, clo
         <label>文字颜色<input type="color" value={colorValue(data.color, node.isRoot ? '#ffffff' : '#242830')} onChange={event => style('color', event.target.value)} /></label>
         <label>加粗<input type="checkbox" checked={data.fontWeight === 'bold'} onChange={event => style('fontWeight', event.target.checked ? 'bold' : 'normal')} /></label>
         <label>斜体<input type="checkbox" checked={data.fontStyle === 'italic'} onChange={event => style('fontStyle', event.target.checked ? 'italic' : 'normal')} /></label>
+        <label>下划线<input type="checkbox" checked={data.textDecoration === 'underline'} onChange={event => style('textDecoration', event.target.checked ? 'underline' : 'none')} /></label>
         <label>对齐<select value={String(data.textAlign ?? 'left')} onChange={event => style('textAlign', event.target.value)}><option value="left">左对齐</option><option value="center">居中</option><option value="right">右对齐</option></select></label>
       </section>
       <section><h3><GitBranch size={15} />分支</h3>

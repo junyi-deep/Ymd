@@ -13,6 +13,7 @@ const desktop: Desktop = {
   create: (directory, kind) => ipcRenderer.invoke('ymd:create', directory, kind),
   save: (path, text, version) => ipcRenderer.invoke('ymd:save', path, text, version),
   duplicate: (path, directory, text) => ipcRenderer.invoke('ymd:duplicate', path, directory, text),
+  rename: (path, name, version) => ipcRenderer.invoke('ymd:rename', path, name, version),
   move: (path, version) => ipcRenderer.invoke('ymd:move', path, version),
   trash: (path, version) => ipcRenderer.invoke('ymd:trash', path, version),
   openExternal: url => ipcRenderer.invoke('ymd:openExternal', url),

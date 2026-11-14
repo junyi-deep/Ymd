@@ -1,6 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, net, protocol, shell } from 'electron'
 import type { IpcMainInvokeEvent, MenuItemConstructorOptions } from 'electron'
-import { readFile, writeFile, rename } from 'node:fs/promises'
+import { mkdir, readFile, writeFile, rename } from 'node:fs/promises'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { defaultPreferences } from '../shared/contracts'
@@ -98,6 +98,7 @@ void app.whenReady().then(async () => {
   }
   const library = await files.library(data)
   const defaultProject = app.getPath('documents')
+  await mkdir(defaultProject, { recursive: true }).catch(() => {})
   const authorizeProject = (directory: string) => files.authorizeDirectory(directory).catch(() => null)
   let project: Entry | null = preferences.projectDirectory ? await authorizeProject(preferences.projectDirectory) : null
   project ??= await authorizeProject(defaultProject)
@@ -164,6 +165,7 @@ void app.whenReady().then(async () => {
     if (typeof text !== 'string') throw new Error('文件内容无效。')
     return files.duplicate(file, directory, text)
   })
+  handle('rename', (file: string, name: string, version: string) => files.renameDocument(file, name, version))
   handle('move', async (file: string, version: string) => {
     const canonical = await files.authorizedFile(file)
     const result = await dialog.showOpenDialog(window!, { defaultPath: path.dirname(canonical), properties: ['openDirectory'] })

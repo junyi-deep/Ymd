@@ -7,6 +7,9 @@ declare module 'simple-mind-map' {
   interface MapNode {
     isRoot: boolean
     uid: string
+    left: number
+    top: number
+    width: number
     getData(): NodeData['data']
     getData(property: string): unknown
   }
@@ -54,6 +57,7 @@ declare module 'simple-mind-map' {
       beforeTextEdit?: (node: MapNode) => boolean
       rainbowLinesConfig?: { open: boolean; colorsList: string[] }
       enableAutoEnterTextEditWhenKeydown?: boolean
+      enableFreeDrag?: boolean
       initRootNodePosition?: string[]
     })
     on<K extends keyof MapEvents>(event: K, callback: (...args: MapEvents[K]) => void): void
