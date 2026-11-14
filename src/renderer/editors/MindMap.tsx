@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { ChevronDown, ChevronsLeft, ClipboardList, Crosshair, Download, Focus, GitBranch, GitFork, ImagePlus, ListTree, Map, Maximize, Mic, Minus, Paperclip, Plus, Redo2, Search, SlidersHorizontal, Square, Star, StickyNote, Tag, Trash2, Undo2, X } from 'lucide-react'
+import { ChevronDown, ChevronsLeft, ClipboardList, Crosshair, Download, Focus, GitBranch, GitFork, ImagePlus, ListTree, Map, Maximize, Mic, Minus, Paperclip, Plus, Redo2, Search, SlidersHorizontal, Square, Star, Sticker, StickyNote, Tag, Trash2, Undo2, X } from 'lucide-react'
 import DOMPurify from 'dompurify'
 import MindMap from 'simple-mind-map'
 import AssociativeLine from 'simple-mind-map/src/plugins/AssociativeLine.js'
@@ -8,6 +8,7 @@ import Export from 'simple-mind-map/src/plugins/Export.js'
 import ExportPDF from 'simple-mind-map/src/plugins/ExportPDF.js'
 import KeyboardNavigation from 'simple-mind-map/src/plugins/KeyboardNavigation.js'
 import MiniMap from 'simple-mind-map/src/plugins/MiniMap.js'
+import NodeImgAdjust from 'simple-mind-map/src/plugins/NodeImgAdjust.js'
 import OuterFrame from 'simple-mind-map/src/plugins/OuterFrame.js'
 import RainbowLines from 'simple-mind-map/src/plugins/RainbowLines.js'
 import SearchPlugin from 'simple-mind-map/src/plugins/Search.js'
@@ -17,6 +18,8 @@ import { projectList, writeList, type Block } from './listProjection'
 import { MindMapFormat } from './MindMapFormat'
 import { MindMapTask, readTask, taskBadge, taskTopics } from './MindMapTask'
 import { MindMapRecorder } from './MindMapRecorder'
+import { MindMapArt } from './MindMapArt'
+import { addTopicImage, applyArt, imagePlacements, installTopicImageGestures, isTopicImage, placeTopicImage, removeTopicImage, resetTopicImage, topicAcceptsArt } from './mapTopicImages'
 import { audioButton, audioTitle, createAudioPlayer, forgetAudio, loadAudio, readAudioNote, storeAudio, type AudioNote } from './mapAudio'
 import { MarkdownMenu, type MenuItem } from './MarkdownMenu'
 import { branchStructure, defaultMapSettings, loadMapAppearance, mapTheme, palettes, restoreFloating, restoreMapStyles, saveMapAppearance, saveMapSheets, type MapAppearance, type MapData, type MapSettings, type MapSheet } from './mapAppearance'
@@ -33,8 +36,8 @@ class MapAssociativeLine extends AssociativeLine {
   }
 }
 
-for (const plugin of [MapAssociativeLine, Drag, Export, ExportPDF, KeyboardNavigation, MiniMap, OuterFrame, RainbowLines, SearchPlugin, Select]) MindMap.usePlugin(plugin)
-MindMap.extendNodeDataNoStylePropList(['ymdMarker', 'ymdFloating', 'ymdTask', 'ymdStructure', 'ymdAudio'])
+for (const plugin of [MapAssociativeLine, Drag, Export, ExportPDF, KeyboardNavigation, MiniMap, NodeImgAdjust, OuterFrame, RainbowLines, SearchPlugin, Select]) MindMap.usePlugin(plugin)
+MindMap.extendNodeDataNoStylePropList(['ymdMarker', 'ymdFloating', 'ymdTask', 'ymdStructure', 'ymdAudio', 'ymdOriginalImageSize'])
 
 type MapNode = NonNullable<MindMap['renderer']['root']>
 type TopicField = '备注' | '标签' | '链接'
@@ -268,7 +271,8 @@ function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, upd
   const [version, setVersion] = useState(0)
   const [zen, setZen] = useState(false)
   const [linking, setLinking] = useState(false)
-  const [menu, setMenu] = useState<'export' | 'insert' | { x: number; y: number }>()
+  const [menu, setMenu] = useState<'export' | 'insert' | { x: number; y: number; image?: boolean }>()
+  const [artOpen, setArtOpen] = useState(false)
   const [query, setQuery] = useState('')
   const [replace, setReplace] = useState('')
   const [searchOpen, setSearchOpen] = useState(false)
@@ -281,6 +285,7 @@ function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, upd
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const host = useRef<HTMLDivElement>(null)
+  const artTrigger = useRef<HTMLButtonElement>(null)
   const resourceInput = useRef<HTMLInputElement>(null)
   const resourceTarget = useRef<{ node: MapNode; image: boolean } | undefined>(undefined)
   const engine = useRef<MindMap | undefined>(undefined)
@@ -324,6 +329,9 @@ function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, upd
         beforeAssociativeLineConnection: () => { setLinking(false); return false },
         beforeTextEdit: node => !readAudioNote(node.getData('ymdAudio')) && (!!initialSheet || !node.isRoot),
         beforeDragEnd: ({ overlapNodeUid }) => !!readAudioNote(map?.renderer.findNodeByUid(overlapNodeUid)?.getData('ymdAudio')),
+        beforeDeleteNodeImg: node => { removeTopicImage(map, node); return true },
+        maxImgResizeWidthInheritTheme: false,
+        maxImgResizeWidth: 480, maxImgResizeHeight: 480,
         enableAutoEnterTextEditWhenKeydown: false, enableFreeDrag: true,
         defaultInsertSecondLevelNodeText: '新主题', defaultInsertBelowSecondLevelNodeText: '子主题',
       })
@@ -334,6 +342,7 @@ function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, upd
     }
     engine.current = map
     const removeBranchLayouts = installBranchLayouts(map)
+    const removeImageGestures = installTopicImageGestures(map, host.current)
     const onData = (node: MapData) => {
       const audioId = audio.activeId
       if (audioId && !hasAudio(node, audioId)) audio.stop()
@@ -356,7 +365,7 @@ function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, upd
     const context = (event: MouseEvent, node: MapNode) => {
       event.preventDefault()
       select(node, map.renderer.activeNodeList)
-      setMenu({ x: event.clientX, y: event.clientY })
+      setMenu({ x: event.clientX, y: event.clientY, image: isTopicImage(event.target) })
     }
     const scale = (value: number) => setZoom(Math.round(value * 100))
     const syncLinkMode = () => setLinking(map.associativeLine.isCreatingLine)
@@ -385,6 +394,7 @@ function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, upd
     return () => {
       resize.disconnect()
       audio.stop()
+      removeImageGestures()
       removeBranchLayouts()
       registerFlush()
       map.off('afterExecCommand', sync)
@@ -423,18 +433,23 @@ function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, upd
   }, [searchOpen, query])
 
   useEffect(() => {
-    if (!zen && !linking && !searchOpen && !formatOpen) return
+    if (!zen && !linking && !searchOpen && !formatOpen && !artOpen) return
     const escape = (event: KeyboardEvent) => {
       if (event.key !== 'Escape' || event.isComposing || event.defaultPrevented || field || taskNode || audioParent ||
           event.target instanceof HTMLElement && event.target.closest('.smm-node-edit-wrap, .document-menu')) return
       if (linking) { engine.current?.associativeLine.cancelCreateLine(); setLinking(false) }
       else if (searchOpen) { setQuery(''); setReplace(''); setSearchOpen(false); engine.current?.search.endSearch() }
+      else if (artOpen) {
+        event.preventDefault()
+        setArtOpen(false)
+        artTrigger.current?.focus()
+      }
       else if (zen) setZen(false)
       else setFormatOpen(false)
     }
     window.addEventListener('keydown', escape)
     return () => window.removeEventListener('keydown', escape)
-  }, [zen, linking, searchOpen, formatOpen, field, taskNode, audioParent])
+  }, [zen, linking, searchOpen, formatOpen, artOpen, field, taskNode, audioParent])
 
   useEffect(() => {
     const map = engine.current
@@ -586,7 +601,8 @@ function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, upd
       const image = new Image()
       image.onload = () => {
         const width = Math.min(image.naturalWidth, 240)
-        if (selected()) command('SET_NODE_IMAGE', target.node, { url: source, width, height: width * image.naturalHeight / image.naturalWidth })
+        const map = engine.current
+        if (selected() && map) addTopicImage(map, target.node, source, file.name, { width, height: width * image.naturalHeight / image.naturalWidth }, false)
       }
       image.onerror = () => setNotice('无法读取图片。')
       image.src = source
@@ -611,11 +627,13 @@ function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, upd
     { label: '标签', icon: <Tag size={16} />, disabled: !node, run: () => fieldFor('标签') },
     { label: '链接', disabled: !node || !!audioNote, run: () => fieldFor('链接') },
     { label: '图片', icon: <ImagePlus size={16} />, disabled: !node, run: () => chooseResource(true) },
+    { label: '贴纸与插图', icon: <Sticker size={16} />, run: () => setArtOpen(true) },
     { label: '附件', icon: <Paperclip size={16} />, disabled: !node, run: () => chooseResource(false) },
     { label: '标记', icon: <Star size={16} />, disabled: !node, children: [
       ...[1, 2, 3, 4, 5].map(level => ({ label: '优先级 ' + level, run: () => command('SET_NODE_ICON', node, ['priority_' + level]) })),
       { label: '已完成', run: () => command('SET_NODE_ICON', node, ['progress_8']) },
       { label: '移除标记', run: () => command('SET_NODE_ICON', node, []) },
+      { label: '贴纸与插图', separator: true, run: () => setArtOpen(true) },
     ] },
   ]
   async function exportWorkbook(all: boolean) {
@@ -639,7 +657,17 @@ function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, upd
       label, run: () => { void engine.current?.export(format, true, sheet?.title ?? mapTitle(name)).catch(() => setNotice('导出失败。')) },
     })),
   ]
-  const contextItems: MenuItem[] = audioNote ? [
+  const imageItems: MenuItem[] = node?.getData('image') && engine.current ? [
+    { label: '图片位置', children: imagePlacements.map(([value, label]) => ({
+      label, selected: (node.getData('imgPlacement') ?? 'top') === value,
+      run: () => { if (engine.current) placeTopicImage(engine.current, node, value) },
+    })) },
+    { label: '重置大小', run: () => {
+      if (engine.current) void resetTopicImage(engine.current, node).catch(() => setNotice('无法读取图片的原始尺寸。'))
+    } },
+    { label: '删除图片', icon: <Trash2 size={16} />, run: () => { if (engine.current) removeTopicImage(engine.current, node) } },
+  ] : []
+  const contextItems: MenuItem[] = typeof menu === 'object' && menu.image && imageItems.length ? imageItems : audioNote ? [
     { label: '另存录音…', icon: <Download size={16} />, run: () => saveAudioToFile(audioNote) },
     { label: '删除录音', icon: <Trash2 size={16} />, run: () => command('REMOVE_NODE') },
   ] : [
@@ -653,6 +681,7 @@ function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, upd
       ...[1, 2, 3, 4].map(level => ({ label: '展开至第 ' + level + ' 层', run: () => command('UNEXPAND_TO_LEVEL', level) })),
     ] },
     { label: '插入', separator: true, children: insertItems },
+    ...(imageItems.length ? [{ label: '图片', children: imageItems }] : []),
     { label: '删除主题', icon: <Trash2 size={16} />, disabled: !canRemove, run: () => command('REMOVE_NODE') },
   ]
   const closeMenu = () => setMenu(undefined)
@@ -674,6 +703,8 @@ function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, upd
         <button className="icon-button" aria-label="删除主题" disabled={!canRemove} onClick={() => command('REMOVE_NODE')}><Trash2 size={16} /></button>
       </div>
       <div className="map-toolbar-group map-toolbar-trailing">
+        <button ref={artTrigger} className="icon-button" title="贴纸与插图" aria-label="贴纸与插图" aria-expanded={artOpen}
+          onClick={() => setArtOpen(!artOpen)}><Sticker size={17} /></button>
         <button className="icon-button" title="查找主题" aria-label="查找主题" aria-expanded={searchOpen}
           onClick={() => searchOpen ? closeMapSearch() : setSearchOpen(true)}><Search size={17} /></button>
         <div className="menu-anchor">
@@ -681,7 +712,9 @@ function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, upd
           {menu === 'export' && <MarkdownMenu items={exportItems} close={closeMenu} />}
         </div>
         <button className="icon-button" title="专注模式" aria-label="专注模式" onClick={() => setZen(true)}><Focus size={17} /></button>
-        <button className="tool-button" aria-pressed={formatOpen} onClick={() => setFormatOpen(!formatOpen)}><SlidersHorizontal size={16} />格式</button>
+        <button className="tool-button" aria-pressed={formatOpen && !artOpen} onClick={() => {
+          if (artOpen) { setArtOpen(false); setFormatOpen(true) } else setFormatOpen(!formatOpen)
+        }}><SlidersHorizontal size={16} />格式</button>
       </div>
     </div>}
     <input ref={resourceInput} type="file" hidden onChange={event => attach(event.target.files?.[0])} />
@@ -725,7 +758,11 @@ function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, upd
           <button className="icon-button" aria-label="放大" onClick={() => engine.current?.view.enlarge()}><Plus size={16} /></button>
         </div>
       </div>
-      {!zen && formatOpen && <MindMapFormat {...{ tab, settings, node, version }} change={changeSettings} onTab={setTab}
+      {!zen && artOpen && <MindMapArt
+        target={topicAcceptsArt(node) ? String(node?.getData('text') || '未命名主题') : undefined}
+        apply={art => { if (engine.current && node) applyArt(engine.current, node, art) }}
+        close={() => { setArtOpen(false); artTrigger.current?.focus() }} />}
+      {!zen && !artOpen && formatOpen && <MindMapFormat {...{ tab, settings, node, version }} change={changeSettings} onTab={setTab}
         structure={value => {
           if (node?.isRoot && value) changeSettings({ layout: value })
           else if (node && branchStructure(node.getData('ymdStructure')) !== value) {

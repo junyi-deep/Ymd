@@ -17,11 +17,13 @@ declare module 'simple-mind-map' {
     parent: MapNode | null
     children: MapNode[]
     nodeData: NodeData
+    group?: { node: Element }
     expandBtnSize: number
     _generalizationNodeWidth: number
     _generalizationNodeHeight: number
     checkHasGeneralization(): boolean
     hasCustomPosition(): boolean
+    active(): void
     getData(): NodeData['data']
     getData(property: string): unknown
   }
@@ -49,7 +51,7 @@ declare module 'simple-mind-map' {
     data_change: [data: NodeData]
     afterExecCommand: [command: string]
     node_active: [node: MapNode | null, active: MapNode[]]
-    node_click: [node: MapNode]
+    node_click: [node: MapNode, event: MouseEvent]
     draw_click: []
     contextmenu: []
     node_contextmenu: [event: MouseEvent, node: MapNode]
@@ -96,6 +98,10 @@ declare module 'simple-mind-map' {
       customCheckEnableShortcut?: (event: KeyboardEvent) => boolean
       beforeTextEdit?: (node: MapNode) => boolean
       beforeDragEnd?: (event: { overlapNodeUid: string }) => boolean
+      beforeDeleteNodeImg?: (node: MapNode) => boolean
+      maxImgResizeWidthInheritTheme?: boolean
+      maxImgResizeWidth?: number
+      maxImgResizeHeight?: number
       rainbowLinesConfig?: { open: boolean; colorsList: string[] }
       enableAutoEnterTextEditWhenKeydown?: boolean
       enableFreeDrag?: boolean

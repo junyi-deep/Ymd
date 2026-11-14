@@ -9,7 +9,7 @@ type Topic = {
   position?: { x: number; y: number }; branch?: 'folded'
   style?: { id: string; properties: Properties }; href?: string
   notes?: { plain: { content: string } }; labels?: string[]
-  image?: { src: string; width: number; height: number }; markers?: { markerId: string }[]
+  image?: { src: string; width: number; height: number; align?: string }; markers?: { markerId: string }[]
   summaries?: { id: string; class: 'summary'; range: string; topicId: string }[]
   boundaries?: { id: string; class: 'boundary'; title: string; range: string }[]
   extensions?: { provider: string; content: { duration: number }[]; resourceRefs: string[] }[]
@@ -102,7 +102,9 @@ export async function exportXmind(sheets: Sheet[], active: string, dark: boolean
       const image = typeof data.image === 'string' && /^data:image\/(png|jpeg|gif|webp|avif|bmp);base64,([A-Za-z0-9+/=]+)$/i.exec(data.image)
       const size = record(data.imageSize)
       if (image && number(size.width) && number(size.height)) {
-        output.image = { src: resource(image[1] === 'jpeg' ? 'jpg' : image[1], image[2]), width: Number(size.width), height: Number(size.height) }
+        const align = typeof data.imgPlacement === 'string' && /^(top|bottom|left|right)$/.test(data.imgPlacement) ? data.imgPlacement : undefined
+        output.image = { src: resource(image[1] === 'jpeg' ? 'jpg' : image[1], image[2]),
+          width: Number(size.width), height: Number(size.height), align }
       }
       const labelsByTarget = record(data.associativeLineText)
       for (const related of list(data.associativeLineTargets)) {
