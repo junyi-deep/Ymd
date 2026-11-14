@@ -1,4 +1,5 @@
 import type MindMap from 'simple-mind-map'
+import { readAudioNote } from './mapAudio'
 
 export type MapData = ConstructorParameters<typeof MindMap>[0]['data']
 type StyleData = Record<string, unknown>
@@ -33,7 +34,12 @@ export interface MapSettings {
   colored: boolean
 }
 
-interface StoredStyle { address: string; text: string; data: StyleData }
+interface StoredStyle {
+  address: string
+  text: string
+  data: StyleData
+  audio?: { index: number; node: MapData }[]
+}
 export interface MapSheet {
   id: string
   title: string
@@ -62,12 +68,22 @@ export function saveMapAppearance(path: string, settings: MapSettings, tree: Map
       return
     }
     const { text = '', uid: _uid, isActive: _active, richText: _rich, ...data } = node.data
-    if (Object.keys(data).length) styles.push({ address, text, data: { ...data, uid: node.data.uid } })
+    const audio: NonNullable<StoredStyle['audio']> = []
     let childIndex = 0
-    node.children?.forEach(child => {
-      const floatingChild = child.data.ymdFloating === true
-      collect(child, address + '.' + (floatingChild ? 'floating' : childIndex++))
-    })
+    let position = 0
+    function collectChild(child: MapData) {
+      if (child.data.ymdFloating === true) { collect(child, address + '.floating'); return }
+      if (readAudioNote(child.data.ymdAudio)) {
+        audio.push({ index: position++, node: { data: { ...child.data, isActive: false } } })
+        child.children?.forEach(collectChild)
+      } else {
+        position++
+        collect(child, address + '.' + childIndex++)
+      }
+    }
+    node.children?.forEach(collectChild)
+    if (Object.keys(data).length || audio.length) styles.push({ address, text, data: { ...data, uid: node.data.uid },
+      ...(audio.length ? { audio } : {}) })
   }
   collect(tree, 'root')
   const { sheets } = loadMapAppearance(path)
@@ -92,12 +108,17 @@ export function restoreMapStyles(tree: MapData, styles: StoredStyle[]) {
   function apply(node: MapData, address: string) {
     const label = node.data.text ?? ''
     const at = exact.get(address)
-    const style = at?.text === label ? at : byText.get(label)
-    if (style && !used.has(style)) {
+    const matching = at?.text === label ? at : byText.get(label)
+    const style = matching && !used.has(matching) ? matching : undefined
+    if (style) {
       used.add(style)
       node.data = { ...node.data, ...style.data }
     }
     node.children?.forEach((child, index) => apply(child, address + '.' + index))
+    for (const item of style?.audio ?? []) {
+      node.children ??= []
+      node.children.splice(item.index, 0, structuredClone(item.node))
+    }
   }
   apply(tree, 'root')
 }

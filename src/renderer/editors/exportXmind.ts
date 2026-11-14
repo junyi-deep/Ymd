@@ -1,5 +1,6 @@
 import JSZip from 'jszip'
 import { branchStructure, mapTheme, palettes, type MapData, type MapSheet } from './mapAppearance'
+import { loadAudio, readAudioNote } from './mapAudio'
 
 type Sheet = Pick<MapSheet, 'id' | 'title' | 'settings' | 'tree'>
 type Properties = Record<string, string>
@@ -11,6 +12,7 @@ type Topic = {
   image?: { src: string; width: number; height: number }; markers?: { markerId: string }[]
   summaries?: { id: string; class: 'summary'; range: string; topicId: string }[]
   boundaries?: { id: string; class: 'boundary'; title: string; range: string }[]
+  extensions?: { provider: string; content: { duration: number }[]; resourceRefs: string[] }[]
   children?: { attached?: Topic[]; detached?: Topic[]; summary?: Topic[] }
 }
 
@@ -40,12 +42,13 @@ const range = (from: number, to: number) => '(' + from + ',' + to + ')'
 export async function exportXmind(sheets: Sheet[], active: string, dark: boolean): Promise<ArrayBuffer> {
   const zip = new JSZip()
   const manifest = { 'file-entries': { 'content.json': {}, 'metadata.json': {} } as Record<string, object> }
-  const resource = (extension: string, base64: string) => {
+  const resource = (extension: string, data: string | Promise<ArrayBuffer>) => {
     const path = 'resources/' + id() + '.' + extension
-    zip.file(path, base64, { base64: true })
+    zip.file(path, data, { base64: typeof data === 'string' })
     manifest['file-entries'][path] = {}
     return 'xap:' + path
   }
+  const audioResources = new Map<string, string>()
 
   const content = sheets.map(sheet => {
     const ids = new Map<string, string>()
@@ -57,6 +60,15 @@ export async function exportXmind(sheets: Sheet[], active: string, dark: boolean
     function topic(node: MapData, depth: number, branch: number): Topic {
       const { data } = node
       const output: Topic = { id: id(), class: 'topic', title: data.text ?? '' }
+      const audio = readAudioNote(data.ymdAudio)
+      if (audio) {
+        let ref = audioResources.get(audio.id)
+        if (!ref) {
+          ref = resource('webm', loadAudio(audio.id).then(blob => blob.arrayBuffer()))
+          audioResources.set(audio.id, ref)
+        }
+        output.extensions = [{ provider: 'org.xmind.ui.audionotes', content: [{ duration: Math.round(audio.duration * 1000) }], resourceRefs: [ref] }]
+      }
       if (data.uid) ids.set(data.uid, output.id)
       const structure = depth === 0 ? branchStructure(sheet.settings.layout) ?? 'mindMap' : branchStructure(data.ymdStructure)
       if (structure) output.structureClass = structures[structure]

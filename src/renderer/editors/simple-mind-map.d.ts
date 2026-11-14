@@ -7,6 +7,7 @@ declare module 'simple-mind-map' {
   export interface MapNode {
     isRoot: boolean
     uid: string
+    isGeneralization?: boolean
     left: number
     top: number
     width: number
@@ -68,6 +69,8 @@ declare module 'simple-mind-map' {
       layout: MapLayout
       activeNodeList: MapNode[]
       textEdit: { hideEditTextBox(): void }
+      findNodeByUid(uid: string): MapNode | undefined
+      moveNodeToCenter(node: MapNode, resetScale?: boolean): void
       setNodeDataRender(node: MapNode, data: Record<string, unknown>): void
     }
     view: { scale: number; enlarge(): void; narrow(): void; fit(): void; reset(): void; translateXY(x: number, y: number): void }
@@ -92,6 +95,7 @@ declare module 'simple-mind-map' {
       createNodePostfixContent?: (node: MapNode) => { el: HTMLElement; width: number; height: number } | undefined
       customCheckEnableShortcut?: (event: KeyboardEvent) => boolean
       beforeTextEdit?: (node: MapNode) => boolean
+      beforeDragEnd?: (event: { overlapNodeUid: string }) => boolean
       rainbowLinesConfig?: { open: boolean; colorsList: string[] }
       enableAutoEnterTextEditWhenKeydown?: boolean
       enableFreeDrag?: boolean

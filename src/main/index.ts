@@ -1,5 +1,5 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, net, protocol, shell } from 'electron'
-import type { IpcMainInvokeEvent, MenuItemConstructorOptions } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, net, protocol, session, shell } from 'electron'
+import type { IpcMainInvokeEvent, MediaAccessPermissionRequest, MenuItemConstructorOptions } from 'electron'
 import { mkdir, readFile, writeFile, rename } from 'node:fs/promises'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -82,6 +82,21 @@ function handle<A extends unknown[], R>(name: keyof Desktop, run: (...args: A) =
 }
 
 void app.whenReady().then(async () => {
+  session.defaultSession.setPermissionCheckHandler((contents, permission, _origin, details) => {
+    if (permission === 'media') {
+      return contents === window?.webContents && details.isMainFrame && details.mediaType === 'audio' && contents?.getURL() === rendererUrl
+    }
+    return permission !== 'display-capture'
+  })
+  session.defaultSession.setPermissionRequestHandler((contents, permission, reply, details) => {
+    if (permission === 'media') {
+      const types = (details as MediaAccessPermissionRequest).mediaTypes
+      reply(contents === window?.webContents && details.isMainFrame && details.requestingUrl === rendererUrl &&
+        types?.length === 1 && types[0] === 'audio')
+      return
+    }
+    reply(permission !== 'display-capture')
+  })
   protocol.handle('ymd', request => {
     const url = new URL(request.url)
     const relative = decodeURIComponent(url.pathname.slice(1)) || 'index.html'
@@ -241,6 +256,15 @@ void app.whenReady().then(async () => {
     const result = await dialog.showSaveDialog(window!, { defaultPath: title + '.xmind', filters: [{ name: 'Xmind', extensions: ['xmind'] }] })
     if (result.canceled || !result.filePath) return false
     const destination = /\.xmind$/i.test(result.filePath) ? result.filePath : result.filePath + '.xmind'
+    await writeFile(destination, Buffer.from(data), { flush: true })
+    return true
+  })
+  handle('saveAudioNote', async (data: ArrayBuffer) => {
+    if (!(data instanceof ArrayBuffer) || data.byteLength < 4 ||
+        new DataView(data).getUint32(0) !== 0x1a45dfa3) throw new Error('录音文件内容无效。')
+    const result = await dialog.showSaveDialog(window!, { defaultPath: '录音备注.webm', filters: [{ name: 'WebM 音频', extensions: ['webm'] }] })
+    if (result.canceled || !result.filePath) return false
+    const destination = /\.webm$/i.test(result.filePath) ? result.filePath : result.filePath + '.webm'
     await writeFile(destination, Buffer.from(data), { flush: true })
     return true
   })

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { ChevronDown, ChevronsLeft, ClipboardList, Crosshair, Download, Focus, GitBranch, GitFork, ImagePlus, ListTree, Map, Maximize, Minus, Paperclip, Plus, Redo2, Search, SlidersHorizontal, Square, Star, StickyNote, Tag, Trash2, Undo2, X } from 'lucide-react'
+import { ChevronDown, ChevronsLeft, ClipboardList, Crosshair, Download, Focus, GitBranch, GitFork, ImagePlus, ListTree, Map, Maximize, Mic, Minus, Paperclip, Plus, Redo2, Search, SlidersHorizontal, Square, Star, StickyNote, Tag, Trash2, Undo2, X } from 'lucide-react'
 import DOMPurify from 'dompurify'
 import MindMap from 'simple-mind-map'
 import AssociativeLine from 'simple-mind-map/src/plugins/AssociativeLine.js'
@@ -16,6 +16,8 @@ import { UnsupportedList } from './Outline'
 import { projectList, writeList, type Block } from './listProjection'
 import { MindMapFormat } from './MindMapFormat'
 import { MindMapTask, readTask, taskBadge, taskTopics } from './MindMapTask'
+import { MindMapRecorder } from './MindMapRecorder'
+import { audioButton, audioTitle, createAudioPlayer, forgetAudio, loadAudio, readAudioNote, storeAudio, type AudioNote } from './mapAudio'
 import { MarkdownMenu, type MenuItem } from './MarkdownMenu'
 import { branchStructure, defaultMapSettings, loadMapAppearance, mapTheme, palettes, restoreFloating, restoreMapStyles, saveMapAppearance, saveMapSheets, type MapAppearance, type MapData, type MapSettings, type MapSheet } from './mapAppearance'
 import { installBranchLayouts } from './mixedMapLayout'
@@ -32,7 +34,7 @@ class MapAssociativeLine extends AssociativeLine {
 }
 
 for (const plugin of [MapAssociativeLine, Drag, Export, ExportPDF, KeyboardNavigation, MiniMap, OuterFrame, RainbowLines, SearchPlugin, Select]) MindMap.usePlugin(plugin)
-MindMap.extendNodeDataNoStylePropList(['ymdMarker', 'ymdFloating', 'ymdTask', 'ymdStructure'])
+MindMap.extendNodeDataNoStylePropList(['ymdMarker', 'ymdFloating', 'ymdTask', 'ymdStructure', 'ymdAudio'])
 
 type MapNode = NonNullable<MindMap['renderer']['root']>
 type TopicField = '备注' | '标签' | '链接'
@@ -42,8 +44,12 @@ const toMap = (blocks: Block[]): MapData[] => blocks.map(block => ({
   data: { text: block.text, uid: block.id, ymdMarker: block.marker }, children: toMap(block.children),
 }))
 
+function documentTopics(nodes: MapData[]): MapData[] {
+  return nodes.flatMap(node => node.data.ymdFloating === true ? [] : readAudioNote(node.data.ymdAudio) ? documentTopics(node.children ?? []) : [node])
+}
+
 function fromMap(nodes: MapData[]): Block[] {
-  const branches = nodes.filter(node => node.data.ymdFloating !== true)
+  const branches = documentTopics(nodes)
   const marker = branches.find(node => /^[-+*]$/.test(String(node.data.ymdMarker)))?.data.ymdMarker ?? '-'
   return branches.map((node, index) => ({
     id: node.data.uid ?? String(index), text: node.data.text ?? '', marker: String(marker),
@@ -64,6 +70,10 @@ function findTopic(tree: MapData, uid: string): MapData | undefined {
     const found = findTopic(child, uid)
     if (found) return found
   }
+}
+
+function hasAudio(tree: MapData, id: string): boolean {
+  return readAudioNote(tree.data.ymdAudio)?.id === id || !!tree.children?.some(child => hasAudio(child, id))
 }
 
 interface MapEditorProps {
@@ -267,6 +277,7 @@ function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, upd
   const [matches, setMatches] = useState({ total: 0, currentIndex: -1 })
   const [field, setField] = useState<{ key: TopicField; node: MapNode; value: string }>()
   const [taskNode, setTaskNode] = useState<MapNode>()
+  const [audioParent, setAudioParent] = useState<MapNode>()
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const host = useRef<HTMLDivElement>(null)
@@ -288,6 +299,7 @@ function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, upd
       : mainMap(name, projection!.blocks, appearance)
     const initialSettings = initialSheet?.settings ?? appearance.settings
     let previous = projection ? writeList(projection, projection.blocks) : ''
+    const audio = createAudioPlayer(host.current, setNotice)
     let map: MindMap
     try {
       map = new MindMap({
@@ -296,22 +308,35 @@ function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, upd
         rainbowLinesConfig: { open: initialSettings.colored, colorsList: palettes[initialSettings.palette].colors },
         customHyperlinkJump: url => { void window.desktop.openExternal(url).catch(() => setNotice('无法打开链接。')) },
         createNodePostfixContent: node => {
+          const note = readAudioNote(node.getData('ymdAudio'))
+          if (note) {
+            const button = audioButton(note, () => void audio.toggle(note))
+            audio.decorate(button.el, note)
+            return button
+          }
           const task = readTask(node.getData('ymdTask'))
           if (task) return taskBadge(task, () => setTaskNode(node))
         },
         customCheckEnableShortcut: event => !event.defaultPrevented && !event.isComposing && event.target instanceof HTMLElement &&
+          !(map?.renderer.activeNodeList.some(node => readAudioNote(node.getData('ymdAudio'))) &&
+            (event.key === 'Tab' || (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'v')) &&
           (event.target === document.body || event.target.classList.contains('smm-node-edit-wrap') || !!host.current?.contains(event.target)),
         beforeAssociativeLineConnection: () => { setLinking(false); return false },
-        beforeTextEdit: node => !!initialSheet || !node.isRoot, enableAutoEnterTextEditWhenKeydown: false, enableFreeDrag: true,
+        beforeTextEdit: node => !readAudioNote(node.getData('ymdAudio')) && (!!initialSheet || !node.isRoot),
+        beforeDragEnd: ({ overlapNodeUid }) => !!readAudioNote(map?.renderer.findNodeByUid(overlapNodeUid)?.getData('ymdAudio')),
+        enableAutoEnterTextEditWhenKeydown: false, enableFreeDrag: true,
         defaultInsertSecondLevelNodeText: '新主题', defaultInsertBelowSecondLevelNodeText: '子主题',
       })
     } catch (problem) {
+      audio.stop()
       setError(problem instanceof Error ? problem.message : String(problem))
       return
     }
     engine.current = map
     const removeBranchLayouts = installBranchLayouts(map)
     const onData = (node: MapData) => {
+      const audioId = audio.activeId
+      if (audioId && !hasAudio(node, audioId)) audio.stop()
       if (!initialSheet && projection) {
         const next = writeList(projection, fromMap(node.children ?? []))
         if (next !== previous) { previous = next; change.current(next) }
@@ -359,6 +384,7 @@ function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, upd
     resize.observe(host.current)
     return () => {
       resize.disconnect()
+      audio.stop()
       removeBranchLayouts()
       registerFlush()
       map.off('afterExecCommand', sync)
@@ -399,7 +425,7 @@ function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, upd
   useEffect(() => {
     if (!zen && !linking && !searchOpen && !formatOpen) return
     const escape = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape' || event.isComposing || event.defaultPrevented || field || taskNode ||
+      if (event.key !== 'Escape' || event.isComposing || event.defaultPrevented || field || taskNode || audioParent ||
           event.target instanceof HTMLElement && event.target.closest('.smm-node-edit-wrap, .document-menu')) return
       if (linking) { engine.current?.associativeLine.cancelCreateLine(); setLinking(false) }
       else if (searchOpen) { setQuery(''); setReplace(''); setSearchOpen(false); engine.current?.search.endSearch() }
@@ -408,7 +434,7 @@ function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, upd
     }
     window.addEventListener('keydown', escape)
     return () => window.removeEventListener('keydown', escape)
-  }, [zen, linking, searchOpen, formatOpen, field, taskNode])
+  }, [zen, linking, searchOpen, formatOpen, field, taskNode, audioParent])
 
   useEffect(() => {
     const map = engine.current
@@ -455,12 +481,14 @@ function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, upd
 
   const command = (name: string, ...args: unknown[]) => engine.current?.execCommand(name, ...args)
   const node = selected[0]
+  const audioNote = readAudioNote(node?.getData('ymdAudio'))
   const canRemove = selected.some(item => !item.isRoot)
 
   function add(sibling: boolean) {
     const map = engine.current
     if (!map) return
     if (sibling && node && !node.isRoot) { command('INSERT_NODE'); return }
+    if (audioNote) return
     const parent = node ?? map.renderer.root
     if (parent) command('INSERT_CHILD_NODE', true, [parent])
   }
@@ -489,6 +517,47 @@ function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, upd
     if (!node) return
     const value = node.getData(key === '备注' ? 'note' : key === '链接' ? 'hyperlink' : 'tag')
     setField({ key, node, value: Array.isArray(value) ? value.join(', ') : typeof value === 'string' ? value : '' })
+  }
+
+  async function addRecordedAudio(parent: MapNode, audio: Blob, duration: number) {
+    const map = engine.current
+    if (!map) throw new Error('录音所属的画布已关闭。')
+    const note: AudioNote = { id: crypto.randomUUID(), duration }
+    await storeAudio(note.id, audio)
+    const newTopic = { uid: crypto.randomUUID(), text: audioTitle, ymdAudio: note, expand: true, isActive: false, richText: false }
+    let current: MapNode
+    try {
+      if (engine.current !== map) throw new Error('录音所属的画布已关闭。')
+      const snapshot = map.getData()
+      const target = findTopic(snapshot, parent.uid)
+      const topic = map.renderer.findNodeByUid(parent.uid)
+      if (!target || !topic || topic.isGeneralization) throw new Error('录音所属的主题已关闭。')
+      current = topic
+      target.data.expand = true
+      target.children = [...(target.children ?? []), { data: newTopic, children: [] }]
+      if (initialSheet) saveSheet.current(initialSheet.id, currentSettings.current, snapshot)
+      else saveMapAppearance(path, currentSettings.current, snapshot)
+    } catch (problem) {
+      await forgetAudio(note.id).catch(() => {})
+      throw problem
+    }
+    command('INSERT_CHILD_NODE', false, [current], newTopic)
+    map.render(() => {
+      if (engine.current !== map || !host.current) return
+      const recorded = map.renderer.findNodeByUid(newTopic.uid)
+      const control = host.current.querySelector('[data-audio-note="' + note.id + '"]')?.getBoundingClientRect()
+      const canvas = host.current.getBoundingClientRect()
+      if (recorded && (!control || control.left < canvas.left || control.right > canvas.right ||
+          control.top < canvas.top || control.bottom > canvas.bottom)) {
+        map.renderer.moveNodeToCenter(recorded, false)
+      }
+    })
+    setAudioParent(undefined)
+  }
+
+  function saveAudioToFile(note: AudioNote) {
+    void loadAudio(note.id).then(audio => audio.arrayBuffer()).then(data => window.desktop.saveAudioNote(data))
+      .catch(error => setNotice(error instanceof Error ? error.message : '无法另存录音。'))
   }
 
   function chooseResource(image: boolean) {
@@ -527,7 +596,7 @@ function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, upd
   }
 
   const insertItems: MenuItem[] = [
-    { label: '由主题新建画布', disabled: !node || node.isRoot || selected.length !== 1, run: sheetFromTopic },
+    { label: '由主题新建画布', disabled: !node || node.isRoot || !!audioNote || selected.length !== 1, run: sheetFromTopic },
     { label: '浮动主题', icon: <Square size={16} />, run: addFloating },
     { label: '关联线', icon: <GitFork size={16} />, disabled: !node, run: () => {
       engine.current?.associativeLine.createLineFromActiveNode()
@@ -537,8 +606,10 @@ function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, upd
     { label: '概要', icon: <ListTree size={16} />, disabled: !canRemove, run: () => command('ADD_GENERALIZATION') },
     { label: '任务', icon: <ClipboardList size={16} />, disabled: !node, separator: true, run: () => setTaskNode(node) },
     { label: '备注', icon: <StickyNote size={16} />, disabled: !node, separator: true, run: () => fieldFor('备注') },
+    { label: audioTitle, icon: <Mic size={16} />, disabled: !node || !!audioNote || !!node.isGeneralization || selected.length !== 1,
+      run: () => setAudioParent(node) },
     { label: '标签', icon: <Tag size={16} />, disabled: !node, run: () => fieldFor('标签') },
-    { label: '链接', disabled: !node, run: () => fieldFor('链接') },
+    { label: '链接', disabled: !node || !!audioNote, run: () => fieldFor('链接') },
     { label: '图片', icon: <ImagePlus size={16} />, disabled: !node, run: () => chooseResource(true) },
     { label: '附件', icon: <Paperclip size={16} />, disabled: !node, run: () => chooseResource(false) },
     { label: '标记', icon: <Star size={16} />, disabled: !node, children: [
@@ -568,7 +639,10 @@ function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, upd
       label, run: () => { void engine.current?.export(format, true, sheet?.title ?? mapTitle(name)).catch(() => setNotice('导出失败。')) },
     })),
   ]
-  const contextItems: MenuItem[] = [
+  const contextItems: MenuItem[] = audioNote ? [
+    { label: '另存录音…', icon: <Download size={16} />, run: () => saveAudioToFile(audioNote) },
+    { label: '删除录音', icon: <Trash2 size={16} />, run: () => command('REMOVE_NODE') },
+  ] : [
     { label: '添加同级主题', shortcut: 'Enter', run: () => add(true) },
     { label: '添加子主题', shortcut: 'Tab', run: () => add(false) },
     { label: '收起子主题', run: () => { if (node) command('SET_NODE_EXPAND', node, false) } },
@@ -592,7 +666,7 @@ function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, upd
       </div>
       <div className="map-toolbar-group">
         <button className="tool-button" onClick={() => add(true)}><Plus size={16} />主题</button>
-        <button className="tool-button" onClick={() => add(false)}><GitBranch size={16} />子主题</button>
+        <button className="tool-button" disabled={!!audioNote} onClick={() => add(false)}><GitBranch size={16} />子主题</button>
         <div className="menu-anchor">
           <button className="tool-button" aria-haspopup="menu" aria-expanded={menu === 'insert'} onClick={() => setMenu(menu === 'insert' ? undefined : 'insert')}><Plus size={16} />插入</button>
           {menu === 'insert' && <MarkdownMenu items={insertItems} close={closeMenu} />}
@@ -673,6 +747,8 @@ function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, upd
         }} />}
     </div>
     {typeof menu === 'object' && <MarkdownMenu items={contextItems} close={closeMenu} point={menu} nativeStyle />}
+    {audioParent && <MindMapRecorder title={String(audioParent.getData('text') ?? '')}
+      close={() => setAudioParent(undefined)} save={(audio, duration) => addRecordedAudio(audioParent, audio, duration)} />}
     {taskNode && <MindMapTask initial={readTask(taskNode.getData('ymdTask'))}
       title={String(taskNode.getData('text') ?? '')} topics={taskTopics(engine.current?.getData(), taskNode.uid)}
       close={() => setTaskNode(undefined)} save={task => {

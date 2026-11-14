@@ -22,6 +22,7 @@ const desktop: Desktop = {
   markdownContextMenu: (x, y, items) => ipcRenderer.invoke('ymd:markdownContextMenu', x, y, items),
   exportPdf: (name, html) => ipcRenderer.invoke('ymd:exportPdf', name, html),
   saveXmind: (name, data) => ipcRenderer.invoke('ymd:saveXmind', name, data),
+  saveAudioNote: data => ipcRenderer.invoke('ymd:saveAudioNote', data),
   printDocument: (name, html) => ipcRenderer.invoke('ymd:printDocument', name, html),
   saveCopy: (path, text) => ipcRenderer.invoke('ymd:saveCopy', path, text),
   reveal: path => ipcRenderer.invoke('ymd:reveal', path),

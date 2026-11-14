@@ -7,6 +7,8 @@ files:
   - package.json
 mac:
   icon: build/icon.icns
+  extendInfo:
+    NSMicrophoneUsageDescription: Ymd 使用麦克风为思维导图主题录制语音备注。
   extraResources:
     - from: node_modules/@vscode/ripgrep-universal/bin/darwin-arm64/rg
       to: ripgrep/rg
