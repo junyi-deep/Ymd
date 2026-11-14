@@ -1,9 +1,12 @@
 import DOMPurify from 'dompurify'
 import { Marked } from 'marked'
 import type { Tokens } from 'marked'
+import markedFootnote from 'marked-footnote'
+import { markdownBody } from './markdownExtras'
 
 export async function printMarkdown(file: string, source: string) {
   const parser = new Marked({ gfm: true, breaks: false })
+  parser.use(markedFootnote({ description: '脚注', backRefLabel: '返回脚注引用 {0}', headingClass: '' }))
   parser.use({
     walkTokens: async token => {
       if (token.type === 'code') {
@@ -34,7 +37,7 @@ export async function printMarkdown(file: string, source: string) {
       }
     },
   })
-  const html = await parser.parse(source, { async: true })
+  const html = await parser.parse(markdownBody(source), { async: true })
   return DOMPurify.sanitize(html, {
     USE_PROFILES: { html: true, svg: true, svgFilters: true, mathMl: true },
     FORBID_TAGS: ['form', 'style', 'iframe', 'video', 'audio', 'object', 'embed', 'foreignObject'],

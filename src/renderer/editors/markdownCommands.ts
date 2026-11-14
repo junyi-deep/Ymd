@@ -3,6 +3,7 @@ import { EditorView, type Command, type KeyBinding } from '@codemirror/view'
 import { indentLess, indentMore } from '@codemirror/commands'
 import { searchEngines, type SearchEngine } from '../../shared/contracts'
 import { markdownHtml, markdownPlainText } from './markdownHtml'
+import { insertFootnote, insertMetadata } from './markdownNotes'
 import type { MenuItem } from './MarkdownMenu'
 
 type EditCommand = { label: string; command: Command; key?: string; mac?: string }
@@ -136,6 +137,8 @@ const inserts: EditCommand[] = [
   { label: '公式块', command: insertBlock('$$\n公式\n$$', '公式'), key: 'Mod-Shift-m', mac: 'Alt-Mod-b' },
   { label: '水平分割线', command: insertBlock('---') },
   { label: 'Mermaid 图', command: insertMermaid },
+  { label: '脚注', command: insertFootnote },
+  { label: 'YAML 元数据', command: insertMetadata },
   { label: '在上方插入段落', command: insertParagraph(true) },
   { label: '在下方插入段落', command: insertParagraph(false) },
 ]

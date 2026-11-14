@@ -5,14 +5,13 @@ import { contextItems, insertMermaid, typographyKeys } from './markdownCommands'
 import { markdownPlainText } from './markdownHtml'
 import { renderedBlocks } from './renderedBlocks'
 import { insertTable, markdownTable } from './markdownTable'
-import { typoraMarkdown } from './markdownExtras'
+import { expandMetadata, FootnoteReference, footnotes, insertFootnote, insertMetadata, markdownNotes, markdownWithMetadata, referenceNote } from './markdownNotes'
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands'
-import { markdown, markdownKeymap } from '@codemirror/lang-markdown'
+import { markdownKeymap } from '@codemirror/lang-markdown'
 import { ensureSyntaxTree, syntaxTree } from '@codemirror/language'
 import { openSearchPanel, search, searchKeymap } from '@codemirror/search'
 import { Compartment, EditorState, Prec, type Range } from '@codemirror/state'
 import { Decoration, drawSelection, EditorView, highlightSpecialChars, keymap, ViewPlugin, WidgetType, type DecorationSet, type ViewUpdate } from '@codemirror/view'
-import { GFM } from '@lezer/markdown'
 import type { ContextMenuItem, SearchEngine } from '../../shared/contracts'
 
 const inlineStyles: Record<string, string> = {
@@ -100,6 +99,12 @@ function liveMarkdown(view: EditorView, path: string, loadRemote: boolean) {
   for (const viewport of view.visibleRanges) {
     tree.iterate({ from: viewport.from, to: viewport.to, enter(node) {
       const { name, from, to } = node
+      if (name === 'Frontmatter') return false
+      if (name === 'FootnoteReference' && !visible(from, to)) {
+        const note = referenceNote(state, from, to)
+        if (note) ranges.push(Decoration.replace({ widget: new FootnoteReference(note) }).range(from, to))
+        return false
+      }
       const parent = node.node.parent
       const sourceLine = state.doc.lineAt(from)
       const heading = /^(?:ATX|Setext)Heading([1-6])$/.exec(name)
@@ -235,10 +240,11 @@ export function MarkdownEditor({ text, name, path, modified, platform, remoteIma
       state: EditorState.create({
         doc: raw.slice(bom.length).replace(/\r\n|\r/g, '\n'),
         extensions: [
-          highlightSpecialChars(), history(), drawSelection(), keymap.of([...defaultKeymap, ...historyKeymap]), EditorView.lineWrapping, markdown({ extensions: [GFM, typoraMarkdown], addKeymap: false }),
-          search({ top: true }), Prec.high(keymap.of([...typographyKeys(() => tableDialog.current?.showModal()), ...markdownKeymap, ...searchKeymap])),
+          highlightSpecialChars(), history(), drawSelection(), keymap.of([...defaultKeymap, ...historyKeymap]), EditorView.lineWrapping, markdownWithMetadata, footnotes,
+          search({ top: true }), Prec.high(keymap.of([{ key: 'Enter', run: expandMetadata },
+            ...typographyKeys(() => tableDialog.current?.showModal()), ...markdownKeymap, ...searchKeymap])),
           EditorView.contentAttributes.of({ 'aria-label': 'Markdown 编辑器', spellcheck: 'false' }),
-          renderMode.current.of([live(path, remoteImages), renderedBlocks, markdownTable]),
+          renderMode.current.of([live(path, remoteImages), renderedBlocks, markdownTable, markdownNotes]),
           readMode.current.of([]),
           EditorView.updateListener.of(update => {
             if (update.docChanged) change.current(bom + update.state.doc.toString().replaceAll('\n', newline))
@@ -256,7 +262,7 @@ export function MarkdownEditor({ text, name, path, modified, platform, remoteIma
   }, [registerFlush])
 
   useEffect(() => {
-    view.current?.dispatch({ effects: renderMode.current.reconfigure(source ? [] : [live(path, remoteImages), renderedBlocks, markdownTable]) })
+    view.current?.dispatch({ effects: renderMode.current.reconfigure(source ? [] : [live(path, remoteImages), renderedBlocks, markdownTable, markdownNotes]) })
   }, [source, path, remoteImages])
   useEffect(() => {
     view.current?.dispatch({ effects: readMode.current.reconfigure([
@@ -294,6 +300,7 @@ export function MarkdownEditor({ text, name, path, modified, platform, remoteIma
   if (outline && state) {
     const tree = ensureSyntaxTree(state, state.doc.length, 30) ?? syntaxTree(state)
     tree.iterate({ enter(node) {
+      if (node.name === 'Frontmatter') return false
       const match = /^(?:ATX|Setext)Heading([1-6])$/.exec(node.name)
       if (!match) return
       const title = state.sliceDoc(node.from, node.to).split('\n')[0].replace(/^#{1,6}\s+|\s+#+\s*$/g, '').trim()
@@ -327,6 +334,8 @@ export function MarkdownEditor({ text, name, path, modified, platform, remoteIma
     { label: '更多', icon: <MoreHorizontal size={16} />, children: [
       { label: reading ? '编辑模式' : '阅读模式', icon: <Eye size={16} />, run: () => setReading(!reading) },
       { label: '插入 Mermaid 图', icon: <ListTree size={16} />, disabled: reading, run: () => { if (view.current) { insertMermaid(view.current); view.current.focus() } } },
+      { label: '插入脚注', disabled: reading, run: () => { if (view.current) { insertFootnote(view.current); view.current.focus() } } },
+      { label: '插入 YAML 元数据', disabled: reading, run: () => { if (view.current) { insertMetadata(view.current); view.current.focus() } } },
       { label: '在文件管理器中显示', icon: <LocateFixed size={16} />, run: reveal },
       { label: '拷贝文件路径', icon: <Copy size={16} />, run: () => { void navigator.clipboard.writeText(path).catch(report) } },
     ] },

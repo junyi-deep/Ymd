@@ -186,6 +186,23 @@ kbd { color: var(--muted); font-family: inherit; font-size: .9em; white-space: n
 .markdown-surface .md-rule { background: linear-gradient(var(--line), var(--line)) center / 100% 1px no-repeat; }
 .md-link { color: var(--link); text-decoration: underline; text-underline-offset: .17em; }
 .md-bullet { display: inline-block; width: .7em; }
+.md-metadata { margin: 5px 0 12px; padding: 9px 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--soft); }
+.md-metadata > :first-child { color: var(--muted); font-size: .78em; font-weight: 620; }
+.md-metadata button:hover { color: var(--link); }
+.md-metadata pre { margin: 3px 0 0; font-size: .84em; white-space: pre-wrap; overflow-wrap: anywhere; }
+.md-footnote-reference { position: relative; margin-inline: .1em; }
+.md-footnote-reference button { line-height: 1; }
+.md-footnote-reference button, .md-footnote-definition > button:first-child { color: var(--link); min-width: 1em; }
+.md-footnote-reference button:hover, .md-footnote-definition > button:hover { text-decoration: underline; }
+.md-footnote-preview {
+  position: absolute; z-index: 4; top: calc(100% + 4px); left: 0; display: none;
+  width: max-content; max-width: min(21rem, 48vw); padding: 8px 11px; border: 1px solid var(--line); border-radius: 6px;
+  background: var(--page); color: var(--text); box-shadow: var(--shadow); font-size: .85rem; line-height: 1.45;
+  white-space: pre-wrap; overflow-wrap: anywhere; pointer-events: none;
+}
+.md-footnote-reference:hover .md-footnote-preview, .md-footnote-reference:focus-within .md-footnote-preview { display: block; }
+.md-footnote-definition { display: flex; align-items: baseline; gap: .45em; color: var(--muted); font-size: .92em; }
+.md-footnote-content { min-width: 0; text-align: left; white-space: pre-wrap; overflow-wrap: anywhere; }
 .markdown-surface input[type="checkbox"] { accent-color: var(--accent); vertical-align: baseline; }
 .markdown-surface .md-table { background: var(--soft); font-variant-numeric: tabular-nums; }
 .md-cell { padding: 0 3px; }

@@ -3,9 +3,48 @@ import type { DelimiterType, MarkdownConfig } from '@lezer/markdown'
 const highlight: DelimiterType = { resolve: 'Highlight', mark: 'HighlightMark' }
 const underline: DelimiterType = { resolve: 'Underline', mark: 'UnderlineMark' }
 
+export const footnoteDefinition = /^\[\^([^\]\s]+)\]:[ \t]*/
+const footnoteReference = /^\[\^([^\]\s]+)\](?![:[(])/
+export const metadataOpening = '---\n'
+export const metadataClosing = /^---$/m
+
+export function markdownBody(source: string) {
+  const text = source.replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n')
+  const close = text.startsWith(metadataOpening) ? metadataClosing.exec(text.slice(metadataOpening.length)) : null
+  return close ? text.slice(metadataOpening.length + close.index + close[0].length + 1) : text
+}
+
 export const typoraMarkdown: MarkdownConfig = {
-  defineNodes: ['Highlight', 'HighlightMark', 'Underline', 'UnderlineMark'],
+  defineNodes: ['Highlight', 'HighlightMark', 'Underline', 'UnderlineMark', 'FootnoteReference',
+    { name: 'FootnoteDefinition', block: true }],
+  parseBlock: [{
+    name: 'FootnoteDefinition',
+    after: 'IndentedCode',
+    endLeaf(context, line) {
+      return context.depth === 1 && line.indent < 4 && footnoteDefinition.test(line.text.slice(line.pos))
+    },
+    parse(context, line) {
+      if (context.depth !== 1 || !footnoteDefinition.test(line.text.slice(line.pos))) return false
+      const from = context.lineStart + line.pos
+      let to = context.lineStart + line.text.length
+      while (context.nextLine()) {
+        if (line.pos === line.text.length && /^(?: {4}| {0,3}\t)[ \t]*\S/.test(context.peekLine())) continue
+        if (line.indent < 4 || line.pos === line.text.length) break
+        to = context.lineStart + line.text.length
+      }
+      context.addElement(context.elt('FootnoteDefinition', from, to))
+      return true
+    },
+  }],
   parseInline: [{
+    name: 'FootnoteReference',
+    before: 'Link',
+    parse(context, next, pos) {
+      if (next !== 91 || context.char(pos + 1) !== 94 || context.hasOpenLink) return -1
+      const match = footnoteReference.exec(context.slice(pos, context.end))
+      return match ? context.addElement(context.elt('FootnoteReference', pos, pos + match[0].length)) : -1
+    },
+  }, {
     name: 'Highlight',
     after: 'Emphasis',
     parse(context, next, pos) {
