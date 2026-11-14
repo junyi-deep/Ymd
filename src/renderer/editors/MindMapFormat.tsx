@@ -5,7 +5,8 @@ import { mapLayouts, palettes, type MapSettings, type Palette } from './mapAppea
 type MapNode = NonNullable<MindMap['renderer']['root']>
 const topics = [
   ['rectangle', '矩形'], ['roundedRectangle', '圆角矩形'], ['diamond', '菱形'],
-  ['ellipse', '椭圆'], ['parallelogram', '平行四边形'], ['hexagon', '六边形'], ['underline', '下划线'],
+  ['ellipse', '椭圆'], ['circle', '圆形'], ['parallelogram', '平行四边形'],
+  ['octagonalRectangle', '八边形'], ['outerTriangularRectangle', '外三角矩形'], ['innerTriangularRectangle', '内三角矩形'],
 ]
 const colorValue = (value: unknown, fallback: string) => typeof value === 'string' && /^#[0-9a-f]{6}$/i.test(value) ? value : fallback
 

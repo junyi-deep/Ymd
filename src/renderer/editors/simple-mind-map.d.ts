@@ -19,6 +19,8 @@ declare module 'simple-mind-map' {
     scale: [scale: number]
     search_info_change: [info: { total: number; currentIndex: number }]
     node_tree_render_end: []
+    view_data_change: []
+    node_attachmentClick: [node: MapNode]
   }
 
   export default class MindMap {
@@ -30,6 +32,12 @@ declare module 'simple-mind-map' {
       textEdit: { hideEditTextBox(): void }
     }
     view: { scale: number; enlarge(): void; narrow(): void; fit(): void; reset(): void }
+    miniMap: {
+      calculationMiniMap(width: number, height: number): { svgHTML: string; viewBoxStyle: Record<string, string> }
+      onViewBoxMousedown(event: { clientX: number; clientY: number }): void
+      onViewBoxMousemove(event: { clientX: number; clientY: number }): void
+      onMouseup(): void
+    }
     associativeLine: { createLineFromActiveNode(): void; cancelCreateLine(): void }
     search: { search(text: string): void; endSearch(): void; searchNext(): void; replace(text: string, jumpNext?: boolean): void; replaceAll(text: string): void }
     constructor(options: {
@@ -41,6 +49,8 @@ declare module 'simple-mind-map' {
       defaultInsertSecondLevelNodeText?: string
       defaultInsertBelowSecondLevelNodeText?: string
       beforeAssociativeLineConnection?: () => boolean
+      customHyperlinkJump?: (link: string) => void
+      customCheckEnableShortcut?: (event: KeyboardEvent) => boolean
       beforeTextEdit?: (node: MapNode) => boolean
       rainbowLinesConfig?: { open: boolean; colorsList: string[] }
       enableAutoEnterTextEditWhenKeydown?: boolean

@@ -71,6 +71,10 @@ export function Settings({ preferences, platform, library, project, windowsAcryl
               <button className="switch" role="switch" aria-label="自动保存" aria-checked={preferences.autoSave}
                 onClick={() => onChange({ autoSave: !preferences.autoSave })} />
             </Row>
+            <Row label="自动下载网络图片" detail="关闭后按需加载 Markdown 中的网络图片。">
+              <button className="switch" role="switch" aria-label="自动下载网络图片" aria-checked={preferences.remoteImages}
+                onClick={() => onChange({ remoteImages: !preferences.remoteImages })} />
+            </Row>
             <Row label="快捷新建" detail={`${mod} + N 新建 Markdown，${mod} + Shift + N 新建绘图。`} />
           </>}
           {page === '文档库' && <>

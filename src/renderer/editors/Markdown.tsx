@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
 import { BetweenHorizontalStart, Check, ChevronsLeft, ChevronsRight, Code2, Copy, Eye, FileDown, FileText, FolderInput, Info, Keyboard, ListTree, LocateFixed, MoreHorizontal, Pin, Printer, Search, Star, Trash2 } from 'lucide-react'
 import { MarkdownMenu, type MenuItem } from './MarkdownMenu'
 import { contextItems, insertMermaid, typographyKeys } from './markdownCommands'
@@ -12,6 +12,7 @@ import { openSearchPanel, search, searchKeymap } from '@codemirror/search'
 import { Compartment, EditorState, Prec, type Range } from '@codemirror/state'
 import { Decoration, drawSelection, EditorView, highlightSpecialChars, keymap, ViewPlugin, WidgetType, type DecorationSet, type ViewUpdate } from '@codemirror/view'
 import { GFM } from '@lezer/markdown'
+import type { ContextMenuItem } from '../../shared/contracts'
 
 const inlineStyles: Record<string, string> = {
   StrongEmphasis: 'md-bold', Emphasis: 'md-italic', Strikethrough: 'md-strike',
@@ -37,7 +38,48 @@ class TaskBox extends WidgetType {
   }
 }
 
-function liveMarkdown(view: EditorView) {
+class MarkdownImage extends WidgetType {
+  constructor(readonly file: string, readonly source: string, readonly label: string, readonly loadRemote: boolean) { super() }
+
+  eq(other: MarkdownImage) {
+    return this.file === other.file && this.source === other.source && this.label === other.label && this.loadRemote === other.loadRemote
+  }
+
+  toDOM(view: EditorView) {
+    const wrapper = document.createElement('span')
+    wrapper.className = 'md-image'
+    const label = this.label || '图像'
+    const display = (source: string) => {
+      const image = document.createElement('img')
+      image.alt = label
+      image.referrerPolicy = 'no-referrer'
+      image.addEventListener('load', () => view.requestMeasure(), { once: true })
+      image.addEventListener('error', () => { wrapper.textContent = label + ' · 无法读取图像' }, { once: true })
+      wrapper.replaceChildren(image)
+      image.src = source
+    }
+    if (/^https?:\/\//i.test(this.source)) {
+      if (this.loadRemote) display(this.source)
+      else {
+        const button = document.createElement('button')
+        button.type = 'button'
+        button.textContent = label + ' · 加载网络图像'
+        button.addEventListener('click', () => display(this.source))
+        wrapper.append(button)
+      }
+    } else if (/^data:image\/(png|jpeg|gif|webp|avif|bmp);base64,/i.test(this.source)) display(this.source)
+    else {
+      wrapper.textContent = label
+      void window.desktop.readMarkdownImage(this.file, this.source).then(source => {
+        if (source) display(source)
+        else wrapper.textContent = label + ' · 找不到图像'
+      }, () => { wrapper.textContent = label + ' · 无法读取图像' })
+    }
+    return wrapper
+  }
+}
+
+function liveMarkdown(view: EditorView, path: string, loadRemote: boolean) {
   const ranges: Range<Decoration>[] = []
   const state = view.state
   const visible = (from: number, to: number) => state.selection.ranges.some(range => !state.readOnly && range.from <= to && range.to >= from)
@@ -82,6 +124,16 @@ function liveMarkdown(view: EditorView) {
       if (name === 'TaskMarker' && !activeLine(from)) {
         ranges.push(Decoration.replace({ widget: new TaskBox(from, /x/i.test(state.sliceDoc(from, to)), state.readOnly) }).range(from, to))
       }
+      if (name === 'Image' && !visible(from, to)) {
+        const url = node.node.getChild('URL')
+        const end = node.node.getChildren('LinkMark')[1]
+        if (url && end) {
+          const src = state.sliceDoc(url.from, url.to).replace(/^<|>$/g, '')
+          const label = state.sliceDoc(from + 2, end.from)
+          if (sourceLine.to >= to) ranges.push(Decoration.replace({ widget: new MarkdownImage(path, src, label, loadRemote) }).range(from, to))
+        }
+        return false
+      }
       if (name === 'Link' && !visible(from, to)) {
         const labelEnd = node.node.getChildren('LinkMark')[1]
         if (labelEnd) {
@@ -110,14 +162,14 @@ class Bullet extends WidgetType {
   }
 }
 
-const live = ViewPlugin.fromClass(class {
+const live = (path: string, loadRemote: boolean) => ViewPlugin.fromClass(class {
   decorations: DecorationSet
 
-  constructor(view: EditorView) { this.decorations = liveMarkdown(view) }
+  constructor(view: EditorView) { this.decorations = liveMarkdown(view, path, loadRemote) }
 
   update(update: ViewUpdate) {
     if (update.startState.readOnly !== update.state.readOnly || update.docChanged || update.selectionSet || update.viewportChanged || syntaxTree(update.startState) !== syntaxTree(update.state)) {
-      this.decorations = liveMarkdown(update.view)
+      this.decorations = liveMarkdown(update.view, path, loadRemote)
     }
   }
 }, { decorations: plugin => plugin.decorations })
@@ -125,7 +177,7 @@ const live = ViewPlugin.fromClass(class {
 type OutlinePosition = 'left' | 'right'
 type StatusKind = 'words' | 'lines' | 'modified'
 type Width = 'narrow' | 'normal' | 'wide'
-type OpenMenu = 'outline' | 'more' | 'status' | { x: number; y: number }
+type OpenMenu = 'outline' | 'more' | 'status'
 
 interface Props {
   text: string
@@ -133,6 +185,7 @@ interface Props {
   path: string
   modified: number
   platform: string
+  remoteImages: boolean
   onChange: (text: string) => void
   find: number
   jump?: { line: number; id: number }
@@ -151,7 +204,7 @@ interface Props {
   report: (error: unknown) => void
 }
 
-export function MarkdownEditor({ text, name, path, modified, platform, onChange, find, jump, reveal, saveCopy, duplicate, move, trash, shortcuts, exportPdf, printDocument, pinned, starred, togglePin, toggleStar, report }: Props) {
+export function MarkdownEditor({ text, name, path, modified, platform, remoteImages, onChange, find, jump, reveal, saveCopy, duplicate, move, trash, shortcuts, exportPdf, printDocument, pinned, starred, togglePin, toggleStar, report }: Props) {
   const host = useRef<HTMLDivElement>(null)
   const view = useRef<EditorView>(null)
   const change = useRef(onChange)
@@ -181,7 +234,7 @@ export function MarkdownEditor({ text, name, path, modified, platform, onChange,
           highlightSpecialChars(), history(), drawSelection(), keymap.of([...defaultKeymap, ...historyKeymap]), EditorView.lineWrapping, markdown({ extensions: [GFM, typoraMarkdown], addKeymap: false }),
           search({ top: true }), Prec.high(keymap.of([...typographyKeys, ...markdownKeymap, ...searchKeymap])),
           EditorView.contentAttributes.of({ 'aria-label': 'Markdown 编辑器', spellcheck: 'false' }),
-          renderMode.current.of([live, renderedBlocks]),
+          renderMode.current.of([live(path, remoteImages), renderedBlocks]),
           readMode.current.of([]),
           EditorView.updateListener.of(update => {
             if (update.docChanged) change.current(bom + update.state.doc.toString().replaceAll('\n', newline))
@@ -194,8 +247,8 @@ export function MarkdownEditor({ text, name, path, modified, platform, onChange,
   }, [])
 
   useEffect(() => {
-    view.current?.dispatch({ effects: renderMode.current.reconfigure(source ? [] : [live, renderedBlocks]) })
-  }, [source])
+    view.current?.dispatch({ effects: renderMode.current.reconfigure(source ? [] : [live(path, remoteImages), renderedBlocks]) })
+  }, [source, path, remoteImages])
   useEffect(() => {
     view.current?.dispatch({ effects: readMode.current.reconfigure([
       EditorState.readOnly.of(reading), EditorView.editable.of(!reading),
@@ -220,7 +273,10 @@ export function MarkdownEditor({ text, name, path, modified, platform, onChange,
   }, [find])
   const close = () => setMenu(undefined)
   const toggleMenu = (value: OpenMenu) => setMenu(current => current === value ? undefined : value)
-  const characters = markdownPlainText(text).replace(/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/gu, ' $& ').match(/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]|[\p{L}\p{N}]+(?:[.'’_-][\p{L}\p{N}]+)*|[^\u0000-\u007f\s]/gu)?.length ?? 0
+  const statisticsText = useDeferredValue(text)
+  const characters = useMemo(() => markdownPlainText(statisticsText)
+    .replace(/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/gu, ' $& ')
+    .match(/[\p{L}\p{N}]+(?:[.'’_-][\p{L}\p{N}]+)*|[^\u0000-\u007f\s]/gu)?.length ?? 0, [statisticsText])
   const lineCount = text.split(/\r\n|\n|\r/).length
   const updateTime = new Intl.DateTimeFormat('zh-CN', { dateStyle: 'short', timeStyle: 'short' }).format(modified)
   const statusText = status === 'words' ? `${characters} 字` : status === 'lines' ? `${lineCount} 行` : updateTime
@@ -272,6 +328,27 @@ export function MarkdownEditor({ text, name, path, modified, platform, onChange,
     ['words', '字数'], ['lines', '行数'], ['modified', '更新时间'],
   ] as const).map(([value, label]) => ({ label, selected: status === value, run: () => setStatus(value) }))
 
+  function openContextMenu(editor: EditorView, x: number, y: number) {
+    const mapping: (() => void)[] = []
+    const serialize = (items: MenuItem[]): ContextMenuItem[] => items.map(item => {
+      const shortcut = item.shortcut?.replace('⌘', 'CommandOrControl+').replace('Ctrl+', 'CommandOrControl+').replace('⇧', 'Shift+')
+      return {
+        label: item.label,
+        id: item.run ? mapping.push(item.run) - 1 : undefined,
+        shortcut,
+        disabled: item.disabled,
+        separator: item.separator,
+        children: item.children ? serialize(item.children) : undefined,
+      }
+    })
+    void window.desktop.markdownContextMenu(x, y, serialize(contextItems(editor, platform, path, report, reading)))
+      .then(index => {
+        if (!editor.dom.isConnected) return
+        editor.focus()
+        if (index !== null) mapping[index]?.()
+      }).catch(report)
+  }
+
   return <div className="markdown-editor" data-source={source} data-width={width}>
     <div className="editor-tools">
       <div className="menu-anchor">
@@ -298,18 +375,29 @@ export function MarkdownEditor({ text, name, path, modified, platform, onChange,
           }}>{heading.title}</button>)}</nav>
         {!headings.length && <p>还没有标题</p>}
       </aside>}
-      <div className="markdown-surface" ref={host} onContextMenu={event => {
+      <div className="markdown-surface" ref={host} onClick={event => {
+        if ((!event.metaKey && !event.ctrlKey) || !view.current) return
+        const editor = view.current
+        const pos = editor.posAtCoords({ x: event.clientX, y: event.clientY })
+        if (pos === null) return
+        let node = syntaxTree(editor.state).resolveInner(pos, -1)
+        while (node.parent && !['Link', 'Autolink'].includes(node.name)) node = node.parent
+        const url = node.getChild('URL')
+        if (url) {
+          event.preventDefault()
+          void window.desktop.openExternal(editor.state.sliceDoc(url.from, url.to).replace(/^<|>$/g, '')).catch(report)
+        }
+      }} onContextMenu={event => {
         const editor = view.current
         if (!editor) return
         event.preventDefault()
         const pos = editor.posAtCoords({ x: event.clientX, y: event.clientY })
         const selection = editor.state.selection.main
         if (pos !== null && (pos < selection.from || pos > selection.to)) editor.dispatch({ selection: { anchor: pos } })
-        setMenu({ x: event.clientX, y: event.clientY })
+        close()
+        openContextMenu(editor, event.clientX, event.clientY)
       }} />
     </div>
-    {typeof menu === 'object' && view.current && <MarkdownMenu point={menu} nativeStyle
-      items={contextItems(view.current, platform, report, reading)} close={() => { close(); view.current?.focus() }} />}
     <footer className="document-status">
       <div className="menu-anchor">
         <button className="tool-button" aria-haspopup="menu" aria-expanded={menu === 'status'} title="切换文档统计" onClick={() => toggleMenu('status')}>{statusText}</button>

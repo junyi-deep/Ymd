@@ -25,6 +25,15 @@ export interface SearchHit extends Entry {
   line?: number
 }
 
+export interface ContextMenuItem {
+  label: string
+  id?: number
+  shortcut?: string
+  disabled?: boolean
+  separator?: boolean
+  children?: ContextMenuItem[]
+}
+
 export interface Preferences {
   theme: Theme
   size: 'small' | 'normal' | 'large'
@@ -33,9 +42,10 @@ export interface Preferences {
   animations: boolean
   documentTheme: 'classic' | 'paper' | 'mono'
   autoSave: boolean
+  remoteImages: boolean
 }
 
-export const defaultPreferences: Preferences = { theme: 'system', size: 'normal', solidBackground: false, animations: true, documentTheme: 'classic', autoSave: false }
+export const defaultPreferences: Preferences = { theme: 'system', size: 'normal', solidBackground: false, animations: true, documentTheme: 'classic', autoSave: false, remoteImages: false }
 export type Command = 'open-file' | 'new-file' | 'new-drawing' | 'search' | 'save' | 'preferences' | 'close' | 'find'
 
 export interface Desktop {
@@ -52,8 +62,12 @@ export interface Desktop {
   duplicate(path: string, directory: string, text: string): Promise<DocumentFile>
   move(path: string, version: string): Promise<DocumentFile | null>
   trash(path: string, version: string): Promise<void>
-  exportPdf(name: string): Promise<boolean>
-  printDocument(): Promise<void>
+  openExternal(url: string): Promise<void>
+  chooseMarkdownImage(path: string): Promise<string | null>
+  readMarkdownImage(path: string, source: string): Promise<string | null>
+  markdownContextMenu(x: number, y: number, items: ContextMenuItem[]): Promise<number | null>
+  exportPdf(name: string, html: string): Promise<boolean>
+  printDocument(name: string, html: string): Promise<void>
   saveCopy(path: string, text: string): Promise<DocumentFile | null>
   reveal(path: string): Promise<void>
   setPreferences(preferences: Preferences): Promise<Preferences>

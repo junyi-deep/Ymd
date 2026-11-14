@@ -347,15 +347,21 @@ export function App() {
             {active.kind === 'drawing'
               ? <DrawingEditor key={active.path + ':' + active.reload} text={active.text} dark={dark} onChange={edit} />
               : active.mode === 'markdown'
-                ? <MarkdownEditor key={active.path + ':' + active.reload} text={active.text} name={active.name} path={active.path} modified={active.modified} platform={platform}
+                ? <MarkdownEditor key={active.path + ':' + active.reload} text={active.text} name={active.name} path={active.path} modified={active.modified} platform={platform} remoteImages={preferences.remoteImages}
                   find={find} jump={jump?.path === active.path ? jump : undefined} onChange={edit}
                   report={error => setNotice(message(error))}
                   pinned={marks.pinned.includes(active.path)} starred={marks.starred.includes(active.path)}
                   togglePin={() => marks.toggle('pinned', active.path)} toggleStar={() => marks.toggle('starred', active.path)}
                   move={() => moveFile(active)} trash={() => setPrompt({ type: 'trash', session: active })}
                   shortcuts={() => { setSettingsPage('快捷键'); setSettings(true) }}
-                  printDocument={() => run(() => window.desktop.printDocument())}
-                  exportPdf={() => run(() => window.desktop.exportPdf(active.name))}
+                  printDocument={() => run(async () => {
+                    const { printMarkdown } = await import('./editors/printMarkdown')
+                    return window.desktop.printDocument(active.name, await printMarkdown(active.path, active.text))
+                  })}
+                  exportPdf={() => run(async () => {
+                    const { printMarkdown } = await import('./editors/printMarkdown')
+                    return window.desktop.exportPdf(active.name, await printMarkdown(active.path, active.text))
+                  })}
                   duplicate={() => run(async () => {
                     const file = await window.desktop.duplicate(active.path, activeScope === 'project' && project ? project.path : library.path, active.text)
                     setRevision(value => value + 1)

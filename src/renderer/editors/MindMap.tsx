@@ -1,11 +1,14 @@
 import { useEffect, useRef, useState } from 'react'
-import { ChevronsLeft, Crosshair, Download, Focus, GitBranch, GitFork, ListTree, Maximize, Minus, Plus, Redo2, Search, SlidersHorizontal, Square, StickyNote, Tag, Trash2, Undo2, X } from 'lucide-react'
+import { ChevronsLeft, Crosshair, Download, Focus, GitBranch, GitFork, ImagePlus, ListTree, Map, Maximize, Minus, Paperclip, Plus, Redo2, Search, SlidersHorizontal, Square, Star, StickyNote, Tag, Trash2, Undo2, X } from 'lucide-react'
+import DOMPurify from 'dompurify'
 import MindMap from 'simple-mind-map'
 import AssociativeLine from 'simple-mind-map/src/plugins/AssociativeLine.js'
 import Drag from 'simple-mind-map/src/plugins/Drag.js'
 import Export from 'simple-mind-map/src/plugins/Export.js'
+import ExportPDF from 'simple-mind-map/src/plugins/ExportPDF.js'
 import ExportXMind from 'simple-mind-map/src/plugins/ExportXMind.js'
 import KeyboardNavigation from 'simple-mind-map/src/plugins/KeyboardNavigation.js'
+import MiniMap from 'simple-mind-map/src/plugins/MiniMap.js'
 import OuterFrame from 'simple-mind-map/src/plugins/OuterFrame.js'
 import RainbowLines from 'simple-mind-map/src/plugins/RainbowLines.js'
 import SearchPlugin from 'simple-mind-map/src/plugins/Search.js'
@@ -16,7 +19,7 @@ import { MindMapFormat } from './MindMapFormat'
 import { MarkdownMenu, type MenuItem } from './MarkdownMenu'
 import { loadMapAppearance, mapTheme, palettes, restoreMapStyles, saveMapAppearance, type MapData, type MapSettings } from './mapAppearance'
 
-for (const plugin of [AssociativeLine, Drag, Export, ExportXMind, KeyboardNavigation, OuterFrame, RainbowLines, SearchPlugin, Select]) MindMap.usePlugin(plugin)
+for (const plugin of [AssociativeLine, Drag, Export, ExportPDF, ExportXMind, KeyboardNavigation, MiniMap, OuterFrame, RainbowLines, SearchPlugin, Select]) MindMap.usePlugin(plugin)
 MindMap.extendNodeDataNoStylePropList(['ymdMarker'])
 
 type MapNode = NonNullable<MindMap['renderer']['root']>
@@ -52,11 +55,15 @@ export default function MindMapEditor({ text, name, path, dark, onChange, regist
   const [query, setQuery] = useState('')
   const [replace, setReplace] = useState('')
   const [searchOpen, setSearchOpen] = useState(false)
+  const [overview, setOverview] = useState(false)
+  const [miniMap, setMiniMap] = useState<{ markup: string; viewport: Record<string, string> }>()
   const [matches, setMatches] = useState({ total: 0, currentIndex: -1 })
   const [field, setField] = useState<{ key: TopicField; node: MapNode; value: string }>()
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const host = useRef<HTMLDivElement>(null)
+  const resourceInput = useRef<HTMLInputElement>(null)
+  const resourceTarget = useRef<{ node: MapNode; image: boolean } | undefined>(undefined)
   const engine = useRef<MindMap | undefined>(undefined)
   const fieldDialog = useRef<HTMLDialogElement>(null)
   const change = useRef(onChange)
@@ -75,6 +82,9 @@ export default function MindMapEditor({ text, name, path, dark, onChange, regist
         el: host.current, data: root, theme: 'default',
         layout: appearance.settings.layout, themeConfig: mapTheme(appearance.settings, dark),
         rainbowLinesConfig: { open: appearance.settings.colored, colorsList: palettes[appearance.settings.palette].colors },
+        customHyperlinkJump: url => { void window.desktop.openExternal(url).catch(() => setNotice('无法打开链接。')) },
+        customCheckEnableShortcut: event => !event.defaultPrevented && !event.isComposing && event.target instanceof HTMLElement &&
+          (event.target === document.body || event.target.classList.contains('smm-node-edit-wrap') || !!host.current?.contains(event.target)),
         beforeAssociativeLineConnection: () => { setLinking(false); return false },
         beforeTextEdit: node => !node.isRoot, enableAutoEnterTextEditWhenKeydown: false,
         defaultInsertSecondLevelNodeText: '新主题', defaultInsertBelowSecondLevelNodeText: '子主题',
@@ -104,12 +114,21 @@ export default function MindMapEditor({ text, name, path, dark, onChange, regist
     }
     const scale = (value: number) => setZoom(Math.round(value * 100))
     const searchInfo = (info: typeof matches) => setMatches(info)
+    const download = (node: MapNode) => {
+      const source = node.getData('attachmentUrl')
+      if (typeof source !== 'string' || !source.startsWith('data:application/octet-stream;base64,')) return
+      const anchor = document.createElement('a')
+      anchor.href = source
+      anchor.download = String(node.getData('attachmentName') ?? '附件')
+      anchor.click()
+    }
     map.on('data_change', onData)
     map.on('afterExecCommand', sync)
     map.on('node_active', select)
     map.on('node_contextmenu', context)
     map.on('scale', scale)
     map.on('search_info_change', searchInfo)
+    map.on('node_attachmentClick', download)
     registerFlush(flush)
     const resize = new ResizeObserver(() => map.resize())
     resize.observe(host.current)
@@ -122,6 +141,7 @@ export default function MindMapEditor({ text, name, path, dark, onChange, regist
       map.off('node_contextmenu', context)
       map.off('scale', scale)
       map.off('search_info_change', searchInfo)
+      map.off('node_attachmentClick', download)
       map.destroy()
       engine.current = undefined
     }
@@ -160,6 +180,33 @@ export default function MindMapEditor({ text, name, path, dark, onChange, regist
     return () => window.removeEventListener('keydown', escape)
   }, [zen, linking, searchOpen, formatOpen, field])
 
+  useEffect(() => {
+    const map = engine.current
+    if (!overview || !map) return
+    let pending = 0
+    const update = () => {
+      cancelAnimationFrame(pending)
+      pending = requestAnimationFrame(() => {
+        try {
+          const { svgHTML, viewBoxStyle } = map.miniMap.calculationMiniMap(160, 100)
+          const markup = DOMPurify.sanitize(svgHTML, {
+            USE_PROFILES: { svg: true },
+            FORBID_TAGS: ['a', 'foreignObject', 'image', 'style'],
+          })
+          setMiniMap({ markup, viewport: viewBoxStyle })
+        } catch {}
+      })
+    }
+    map.on('node_tree_render_end', update)
+    map.on('view_data_change', update)
+    update()
+    return () => {
+      cancelAnimationFrame(pending)
+      map.off('node_tree_render_end', update)
+      map.off('view_data_change', update)
+    }
+  }, [overview])
+
   if (!projection) return <UnsupportedList />
   if (error) return <div className="editor-empty"><h2>无法加载思维导图</h2><p>{error}</p></div>
 
@@ -191,6 +238,41 @@ export default function MindMapEditor({ text, name, path, dark, onChange, regist
     setField({ key, node, value: Array.isArray(value) ? value.join(', ') : typeof value === 'string' ? value : '' })
   }
 
+  function chooseResource(image: boolean) {
+    if (!node || !resourceInput.current) return
+    resourceTarget.current = { node, image }
+    resourceInput.current.accept = image ? 'image/png,image/jpeg,image/gif,image/webp,image/avif,image/bmp' : ''
+    resourceInput.current.value = ''
+    resourceInput.current.click()
+  }
+
+  function attach(file?: File) {
+    const target = resourceTarget.current
+    if (!file || !target) return
+    if (file.size > 2 * 1024 * 1024) { setNotice('每个导图附件最大 2 MB。'); return }
+    const selected = () => engine.current?.renderer.activeNodeList.includes(target.node)
+    const reader = new FileReader()
+    reader.addEventListener('load', () => {
+      if (!selected()) return
+      const source = String(reader.result)
+      if (!target.image) {
+        const safeName = file.name.replace(/[<>:"/\\|?*]/g, '_').replace(/&/g, '与')
+        command('SET_NODE_ATTACHMENT', target.node, source.replace(/^data:[^;]*;/, 'data:application/octet-stream;'), safeName)
+        return
+      }
+      if (!/^data:image\/(png|jpeg|gif|webp|avif|bmp);base64,/i.test(source)) { setNotice('图片格式不受支持。'); return }
+      const image = new Image()
+      image.onload = () => {
+        const width = Math.min(image.naturalWidth, 240)
+        if (selected()) command('SET_NODE_IMAGE', target.node, { url: source, width, height: width * image.naturalHeight / image.naturalWidth })
+      }
+      image.onerror = () => setNotice('无法读取图片。')
+      image.src = source
+    })
+    reader.addEventListener('error', () => setNotice('无法读取附件。'))
+    reader.readAsDataURL(file)
+  }
+
   const insertItems: MenuItem[] = [
     { label: '关联线', icon: <GitFork size={16} />, disabled: !node, run: () => {
       engine.current?.associativeLine.createLineFromActiveNode()
@@ -201,8 +283,15 @@ export default function MindMapEditor({ text, name, path, dark, onChange, regist
     { label: '备注', icon: <StickyNote size={16} />, disabled: !node, separator: true, run: () => fieldFor('备注') },
     { label: '标签', icon: <Tag size={16} />, disabled: !node, run: () => fieldFor('标签') },
     { label: '链接', disabled: !node, run: () => fieldFor('链接') },
+    { label: '图片', icon: <ImagePlus size={16} />, disabled: !node, run: () => chooseResource(true) },
+    { label: '附件', icon: <Paperclip size={16} />, disabled: !node, run: () => chooseResource(false) },
+    { label: '标记', icon: <Star size={16} />, disabled: !node, children: [
+      ...[1, 2, 3, 4, 5].map(level => ({ label: '优先级 ' + level, run: () => command('SET_NODE_ICON', node, ['priority_' + level]) })),
+      { label: '已完成', run: () => command('SET_NODE_ICON', node, ['progress_8']) },
+      { label: '移除标记', run: () => command('SET_NODE_ICON', node, []) },
+    ] },
   ]
-  const exportItems: MenuItem[] = [['png', 'PNG 图片'], ['svg', 'SVG 矢量图'], ['xmind', 'Xmind 文件'], ['md', 'Markdown']].map(([format, label]) => ({
+  const exportItems: MenuItem[] = [['png', 'PNG 图片'], ['svg', 'SVG 矢量图'], ['pdf', 'PDF'], ['xmind', 'Xmind 文件'], ['md', 'Markdown'], ['txt', '纯文本']].map(([format, label]) => ({
     label, run: () => { void engine.current?.export(format, true, name.replace(/\.md$/i, '')).catch(() => setNotice('导出失败。')) },
   }))
   const contextItems: MenuItem[] = [
@@ -242,9 +331,12 @@ export default function MindMapEditor({ text, name, path, dark, onChange, regist
         <button className="tool-button" aria-pressed={formatOpen} onClick={() => setFormatOpen(!formatOpen)}><SlidersHorizontal size={16} />格式</button>
       </div>
     </div>}
+    <input ref={resourceInput} type="file" hidden onChange={event => attach(event.target.files?.[0])} />
     <div className="map-body">
       <div className="map-stage">
-        <div className="map-canvas" ref={host} aria-label="思维导图画布" onContextMenu={event => event.preventDefault()} />
+        <div className="map-canvas" ref={host} tabIndex={0} aria-label="思维导图画布"
+          onPointerDown={event => { if (event.target instanceof SVGElement) event.currentTarget.focus() }}
+          onContextMenu={event => event.preventDefault()} />
         {linking && <div className="map-action-status" role="status">选择关联线的目标主题 <kbd>Esc 取消</kbd></div>}
         {notice && <div className="map-action-status" role="status">{notice}<button className="icon-button" aria-label="关闭提示" onClick={() => setNotice('')}><X size={14} /></button></div>}
         {searchOpen && <div className="map-search" role="search">
@@ -256,8 +348,20 @@ export default function MindMapEditor({ text, name, path, dark, onChange, regist
             <button className="tool-button" disabled={!matches.total} onClick={() => engine.current?.search.replace(replace, true)}>替换</button>
             <button className="tool-button" disabled={!matches.total} onClick={() => engine.current?.search.replaceAll(replace)}>全部</button></div>
         </div>}
+        {overview && miniMap && <div className="map-minimap" aria-label="导图概览"
+          onPointerDown={event => {
+            event.currentTarget.setPointerCapture(event.pointerId)
+            engine.current?.miniMap.onViewBoxMousedown(event)
+          }}
+          onPointerMove={event => engine.current?.miniMap.onViewBoxMousemove(event)}
+          onPointerUp={() => engine.current?.miniMap.onMouseup()}
+          onPointerCancel={() => engine.current?.miniMap.onMouseup()}>
+          <div aria-hidden="true" dangerouslySetInnerHTML={{ __html: miniMap.markup }} />
+          <i style={miniMap.viewport} />
+        </div>}
         <div className="map-status" role="group" aria-label="画布视图">
           {zen && <button className="tool-button" onClick={() => setZen(false)}><ChevronsLeft size={15} />退出专注</button>}
+          <button className="icon-button" aria-label="导图概览" aria-pressed={overview} onClick={() => setOverview(!overview)}><Map size={16} /></button>
           <button className="icon-button" aria-label="回到中心主题" title="回到中心主题" onClick={() => command('GO_TARGET_NODE', rootId)}><Crosshair size={16} /></button>
           <button className="icon-button" aria-label="适合窗口" title="适合窗口" onClick={() => engine.current?.view.fit()}><Maximize size={15} /></button>
           <button className="icon-button" aria-label="缩小" onClick={() => engine.current?.view.narrow()}><Minus size={16} /></button>

@@ -4,9 +4,10 @@ import { readFile, writeFile, rename } from 'node:fs/promises'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { defaultPreferences } from '../shared/contracts'
-import type { Command, Desktop, Entry, FileKind, Preferences } from '../shared/contracts'
+import type { Command, ContextMenuItem, Desktop, Entry, FileKind, Preferences } from '../shared/contracts'
 import { Files, fileKind } from './files'
 import { searchRoots } from './search'
+import { printView } from './printing'
 
 const files = new Files()
 const dev = !app.isPackaged && process.argv.includes('--dev')
@@ -29,6 +30,7 @@ function normalizePreferences(value: Partial<Preferences> | null): Preferences {
     animations: value?.animations !== false,
     documentTheme: value?.documentTheme === 'paper' || value?.documentTheme === 'mono' ? value.documentTheme : 'classic',
     autoSave: value?.autoSave === true,
+    remoteImages: value?.remoteImages === true,
   }
 }
 
@@ -165,7 +167,13 @@ void app.whenReady().then(async () => {
   handle('move', async (file: string, version: string) => {
     const canonical = await files.authorizedFile(file)
     const result = await dialog.showOpenDialog(window!, { defaultPath: path.dirname(canonical), properties: ['openDirectory'] })
-    return result.canceled ? null : files.move(canonical, result.filePaths[0], version)
+    if (result.canceled) return null
+    const selected = await files.authorizeDirectory(result.filePaths[0])
+    try {
+      return await files.move(canonical, selected.path, version)
+    } finally {
+      files.retainRoots(project ? [library, project] : [library])
+    }
   })
   handle('trash', async (file: string, version: string) => {
     const canonical = await files.authorizedFile(file)
@@ -173,14 +181,53 @@ void app.whenReady().then(async () => {
     if (current.version !== version) throw new Error('磁盘上的文件已变化，请重新载入后删除。')
     await shell.trashItem(canonical)
   })
-  handle('exportPdf', async (name: string) => {
+  handle('openExternal', async (input: string) => {
+    if (typeof input !== 'string' || input.length > 4096) throw new Error('链接无效。')
+    const url = new URL(input)
+    if (!['https:', 'http:', 'mailto:'].includes(url.protocol)) throw new Error('链接类型不受支持。')
+    await shell.openExternal(url.href)
+  })
+  handle('chooseMarkdownImage', async (file: string) => {
+    const canonical = await files.authorizedFile(file)
+    const result = await dialog.showOpenDialog(window!, {
+      defaultPath: path.dirname(canonical), properties: ['openFile'],
+      filters: [{ name: '图片', extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'avif', 'bmp'] }],
+    })
+    return result.canceled ? null : files.importImage(canonical, result.filePaths[0])
+  })
+  handle('readMarkdownImage', (file: string, source: string) => {
+    if (typeof source !== 'string') throw new Error('图片路径无效。')
+    return files.readImage(file, source)
+  })
+  handle('markdownContextMenu', (x: number, y: number, items: ContextMenuItem[]) => new Promise<number | null>(resolve => {
+    if (!window || !Number.isFinite(x) || !Number.isFinite(y) || !Array.isArray(items)) { resolve(null); return }
+    const template = (rows: ContextMenuItem[], depth = 0): MenuItemConstructorOptions[] => rows.slice(0, 30).flatMap(item => {
+      if (!item || typeof item.label !== 'string') return []
+      const submenu = depth < 2 && Array.isArray(item.children) ? template(item.children, depth + 1) : undefined
+      const label = item.label.slice(0, 100)
+      const accelerator = typeof item.shortcut === 'string' && /^(?:CommandOrControl\+)(?:Shift\+)?[A-Z0-9]$/.test(item.shortcut)
+        ? item.shortcut : undefined
+      return [
+        ...(item.separator ? [{ type: 'separator' } as const] : []),
+        { label, submenu, enabled: item.disabled !== true, accelerator, registerAccelerator: false,
+          click: () => resolve(Number.isSafeInteger(item.id) ? item.id! : null) },
+      ]
+    })
+    Menu.buildFromTemplate(template(items)).popup({ window, x: Math.max(0, Math.round(x)), y: Math.max(0, Math.round(y)), callback: () => resolve(null) })
+  }))
+  handle('exportPdf', async (name: string, html: string) => {
     const result = await dialog.showSaveDialog(window!, { defaultPath: path.parse(name).name + '.pdf', filters: [{ name: 'PDF', extensions: ['pdf'] }] })
     if (result.canceled || !result.filePath || !window) return false
-    const data = await window.webContents.printToPDF({ printBackground: true })
+    const data = await printView(name, html, view => view.webContents.printToPDF({ printBackground: true }))
     await writeFile(result.filePath, data)
     return true
   })
-  handle('printDocument', () => { window?.webContents.print({ printBackground: true }) })
+  handle('printDocument', (name: string, html: string) => printView(name, html, view => new Promise<void>((resolve, reject) => {
+    view.webContents.print({ printBackground: true }, (printed, reason) => {
+      if (printed || reason === 'Print job canceled') resolve()
+      else reject(new Error(reason || '无法打印文档。'))
+    })
+  })))
   handle('saveCopy', async (file: string, text: string) => {
     const kind = fileKind(file)
     if (!kind || typeof text !== 'string') throw new Error('文件内容无效。')

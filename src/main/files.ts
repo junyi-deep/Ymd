@@ -3,6 +3,13 @@ import { lstat, mkdir, link, unlink, readFile, readdir, realpath, rename, rm, st
 import path from 'node:path'
 import type { DocumentFile, Entry, FileKind } from '../shared/contracts'
 
+const imageMime: Record<string, string> = {
+  '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif',
+  '.webp': 'image/webp', '.avif': 'image/avif', '.bmp': 'image/bmp',
+}
+const maxImageBytes = 15 * 1024 * 1024
+
+
 export const fileKind = (name: string): FileKind | undefined => {
   const extension = path.extname(name).toLowerCase()
   if (extension === '.md') return 'markdown'
@@ -100,6 +107,44 @@ export class Files {
         if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
       }
     }
+  }
+
+  async importImage(file: string, image: string) {
+    const original = await this.authorizedFile(file)
+    const extension = path.extname(image).toLowerCase()
+    if (!imageMime[extension]) throw new Error('请选择受支持的图片。')
+    const imageInfo = await stat(image)
+    if (!imageInfo.isFile() || imageInfo.size > maxImageBytes) throw new Error('图片超过 15 MB 或类型无效。')
+    const data = await readFile(image)
+    if (data.length > maxImageBytes) throw new Error('图片超过 15 MB。')
+    const directory = path.join(path.dirname(original), 'assets')
+    await mkdir(directory, { recursive: true })
+    const info = await lstat(directory)
+    if (!info.isDirectory() || info.isSymbolicLink()) throw new Error('附件目录无效。')
+    const name = randomUUID() + extension
+    await writeFile(path.join(directory, name), data, { flag: 'wx', flush: true })
+    return 'assets/' + name
+  }
+
+  async readImage(file: string, source: string) {
+    const parent = path.dirname(await this.authorizedFile(file))
+    if (!source || source.length > 2048 || /[:\\\x00]/.test(source) || path.isAbsolute(source)) return null
+    const decoded = decodeURIComponent(source)
+    if (/[:\\\x00]/.test(decoded) || path.isAbsolute(decoded)) return null
+    const target = path.resolve(parent, decoded)
+    const canonical = await realpath(target).catch(() => null)
+    if (!canonical) return null
+    const relative = path.relative(parent, canonical)
+    const underParent = relative && !path.isAbsolute(relative) && relative.split(path.sep).every(part => !part.startsWith('.'))
+    if (!underParent) {
+      const authorized = await this.resolve(canonical).catch(() => null)
+      if (!authorized) return null
+    }
+    const mime = imageMime[path.extname(canonical).toLowerCase()]
+    const info = mime && await stat(canonical).catch(() => null)
+    if (!info || !info.isFile() || info.size > maxImageBytes) return null
+    const data = await readFile(canonical)
+    return data.length <= maxImageBytes ? `data:${mime};base64,${data.toString('base64')}` : null
   }
 
   async duplicate(file: string, directory: string, text: string) {

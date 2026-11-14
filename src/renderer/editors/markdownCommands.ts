@@ -128,13 +128,23 @@ const inserts: EditCommand[] = [
 export const typographyKeys: KeyBinding[] = [...paragraphs, ...formats].flatMap(item => item.key ? [{ key: item.key, run: view => !view.state.readOnly && item.command(view) }] : [])
 export const insertMermaid = inserts[5].command
 
-export function contextItems(view: EditorView, platform: string, report: (error: unknown) => void, readOnly: boolean): MenuItem[] {
+export function contextItems(view: EditorView, platform: string, path: string, report: (error: unknown) => void, readOnly: boolean): MenuItem[] {
   const { state } = view
   const selection = state.selection.main
   const source = state.sliceDoc(selection.from, selection.to)
   const mod = platform === 'darwin' ? '⌘' : 'Ctrl+'
   const toMenu = (item: EditCommand): MenuItem =>
     ({ label: item.label, shortcut: item.key?.replace('Mod-', mod).replace('Shift-', '⇧').toUpperCase(), run: () => { item.command(view); view.focus() } })
+  const chooseImage = () => {
+    void window.desktop.chooseMarkdownImage(path).then(source => {
+      if (!source || !view.dom.isConnected) return
+      const { from, to } = view.state.selection.main
+      const label = (view.state.sliceDoc(from, to) || '图片').replaceAll(']', '\\]').replace(/\s+/g, ' ')
+      const insert = '![' + label + '](' + source + ')'
+      view.dispatch({ changes: { from, to, insert }, selection: { anchor: from + insert.length }, userEvent: 'input' })
+      view.focus()
+    }).catch(report)
+  }
   const paste = () => navigator.clipboard.readText().then(insert => {
     const { from, to } = view.state.selection.main
     view.dispatch({ changes: { from, to, insert }, selection: { anchor: from + insert.length }, annotations: Transaction.userEvent.of('input.paste') })
@@ -166,6 +176,6 @@ export function contextItems(view: EditorView, platform: string, report: (error:
     ] },
     { label: '段落', separator: true, disabled: readOnly, children: paragraphs.map(toMenu) },
     { label: '格式', disabled: readOnly, children: formats.map(toMenu) },
-    { label: '插入', disabled: readOnly, children: inserts.map(toMenu) },
+    { label: '插入', disabled: readOnly, children: inserts.map(item => item.label === '图像' ? { label: item.label, run: chooseImage } : toMenu(item)) },
   ]
 }

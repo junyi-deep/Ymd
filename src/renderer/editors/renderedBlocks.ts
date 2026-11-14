@@ -54,7 +54,8 @@ function previews(state: EditorState): DecorationSet {
     if (node.name === 'Paragraph') {
       const raw = state.sliceDoc(node.from, node.to)
       const math = /^\$\$[ \t]*\n([\s\S]+)\n\$\$[ \t]*$/.exec(raw)
-      if (!math || state.selection.ranges.some(range => !state.readOnly && range.from <= node.to && range.to >= node.from)) return
+      if (!math || state.doc.lineAt(node.from).from !== node.from ||
+        state.selection.ranges.some(range => !state.readOnly && range.from <= node.to && range.to >= node.from)) return
       ranges.push(Decoration.replace({ block: true, widget: new RenderedBlock(math[1], 'math', state.readOnly) }).range(node.from, node.to))
       return false
     }

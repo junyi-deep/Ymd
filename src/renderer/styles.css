@@ -387,3 +387,12 @@ dialog button.primary { background: var(--accent); color: var(--accent-ink); }
 .md-highlight { background: #f8e398; color: #2b251a; }
 :root[data-theme="dark"] .md-highlight { background: #7d6230; color: #fff0bd; }
 .md-underline { text-decoration: underline; text-underline-offset: .14em; }
+
+.md-image { display: inline-block; max-width: 100%; vertical-align: middle; }
+.md-image img { display: block; max-width: min(660px, 100%); max-height: 55vh; object-fit: contain; border-radius: 5px; }
+.md-image button { color: var(--link); text-decoration: underline; text-underline-offset: .15em; }
+.map-canvas:focus { outline: none; }
+.map-minimap { position: absolute; z-index: 1; right: 12px; bottom: 53px; width: 162px; height: 102px; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: var(--page); touch-action: none; cursor: grab; }
+.map-minimap div { display: grid; place-items: center; width: 100%; height: 100%; }
+.map-minimap svg { max-width: 160px; max-height: 100px; }
+.map-minimap i { position: absolute; border: 1px solid var(--accent); background: color-mix(in srgb, var(--accent) 11%, transparent); pointer-events: none; }
