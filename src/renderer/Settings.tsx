@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from 'react'
 import { ArrowLeft, HardDrive, Info, Keyboard, Palette, SlidersHorizontal } from 'lucide-react'
-import type { Entry, Preferences } from '../shared/contracts'
+import { searchEngines, type Entry, type Preferences, type SearchEngine, type VersionStatus } from '../shared/contracts'
 
 const pages = [
   { label: '通用', icon: SlidersHorizontal },
@@ -23,13 +23,19 @@ function Choices<T extends string>({ value, choices, onChange }: {
     <button key={key} aria-pressed={value === key} onClick={() => onChange(key)}>{label}</button>)}</div>
 }
 
-export function Settings({ preferences, platform, library, project, windowsAcrylic, initialPage, onChange, onReturn, onProjectChange }: {
+export function Settings({ preferences, platform, library, project, windowsAcrylic, initialPage, version, release, checking, onCheckUpdates, onOpenRelease, onOpenDirectory, onChange, onReturn, onProjectChange }: {
   preferences: Preferences
   platform: string
   library: Entry
   project: Entry | null
   initialPage: (typeof pages)[number]['label']
   windowsAcrylic: boolean
+  version: string
+  release?: VersionStatus
+  checking: boolean
+  onCheckUpdates: () => void
+  onOpenRelease: (url: string) => void
+  onOpenDirectory: (location: 'library' | 'project') => void
   onProjectChange: (reset?: boolean) => void
   onChange: (preferences: Partial<Preferences>) => void
   onReturn: () => void
@@ -64,7 +70,7 @@ export function Settings({ preferences, platform, library, project, windowsAcryl
               onChange={size => onChange({ size })} /></Row>
             <Row label="文档主题"><Choices value={preferences.documentTheme} choices={ [['classic','标准'], ['paper','纸张'], ['mono','等宽']] }
               onChange={documentTheme => onChange({ documentTheme })} /></Row>
-            <div className="theme-preview"><article><h2>写作预览</h2><p>一段包含<strong>重点</strong>和 <code>Markdown</code> 的正文。</p><blockquote>文档保存在本机。</blockquote></article></div>
+            <div className="theme-preview"><article className="theme-preview-paper"><h2>写作预览</h2><p>一段包含<strong>重点</strong>和 <code>Markdown</code> 的正文。</p><blockquote>文档保存在本机。</blockquote></article></div>
           </>}
           {page === '通用' && <>
             <Row label="自动保存" detail="停止编辑后自动保存在本机。磁盘版本冲突时保留草稿。">
@@ -75,18 +81,42 @@ export function Settings({ preferences, platform, library, project, windowsAcryl
               <button className="switch" role="switch" aria-label="自动下载网络图片" aria-checked={preferences.remoteImages}
                 onClick={() => onChange({ remoteImages: !preferences.remoteImages })} />
             </Row>
+            <Row label="自动检查更新" detail="启动时读取 GitHub 版本信息。发现新版本后，可打开发布页下载。">
+              <button className="switch" role="switch" aria-label="自动检查更新" aria-checked={preferences.autoCheckUpdates}
+                onClick={() => onChange({ autoCheckUpdates: !preferences.autoCheckUpdates })} />
+            </Row>
+            <Row label="网页搜索" detail="在 Markdown 中选中文字，右键可在浏览器中搜索。">
+              <select aria-label="网页搜索" value={preferences.searchEngine}
+                onChange={event => onChange({ searchEngine: event.target.value as SearchEngine })}>
+                {Object.entries(searchEngines).map(([key, item]) => <option value={key} key={key}>{item.label}</option>)}
+              </select>
+            </Row>
             <Row label="快捷新建" detail={`${mod} + N 新建 Markdown，${mod} + Shift + N 新建绘图。`} />
           </>}
           {page === '文档库' && <>
             <Row label="项目空间" detail={project?.path ?? '文档目录不可用，请选择位置。'}>
               <div className="setting-actions">
+                {project && <button className="tool-button" onClick={() => onOpenDirectory('project')}>显示文件夹</button>}
                 {preferences.projectDirectory && <button className="tool-button" onClick={() => onProjectChange(true)}>恢复默认</button>}
                 <button className="tool-button" onClick={() => onProjectChange()}>更改位置…</button>
               </div>
             </Row>
-            <Row label="我的文档" detail={library.path} />
+            <Row label="我的文档" detail={library.path}>
+              <div className="setting-actions"><button className="tool-button" onClick={() => onOpenDirectory('library')}>显示文件夹</button></div>
+            </Row>
           </>}
-          {page === '关于' && <Row label="Ymd" detail="本地 Markdown 与 Excalidraw 编辑器。" />}
+          {page === '关于' && <>
+            <Row label="Ymd" detail={version ? '当前版本 ' + version : '本地 Markdown 与 Excalidraw 编辑器。'} />
+            <Row label="软件更新" detail={release?.update ? '可下载 ' + release.update.version : release ? '已是当前发布渠道的最新版本。' : undefined}>
+              <div className="setting-actions">
+                <button className="tool-button" disabled={checking} onClick={onCheckUpdates}>{checking ? '正在检查…' : '检查更新'}</button>
+                {release?.update && <button className="tool-button" onClick={() => onOpenRelease(release.update!.url)}>打开发布页</button>}
+              </div>
+            </Row>
+            <Row label="源代码"><div className="setting-actions">
+              <button className="tool-button" onClick={() => onOpenRelease('https://github.com/junyi-deep/Ymd')}>在 GitHub 查看</button>
+            </div></Row>
+          </>}
           {page === '快捷键' && [
             ['新建', 'N'], ['打开文件', 'O'], ['新建绘图', 'Shift + N'], ['保存', 'S'], ['查找和替换', 'F'], ['搜索文档', 'J'], ['设置', ','],
           ].map(([label, key]) => <Row key={label} label={label}><kbd>{mod} + {key}</kbd></Row>)}

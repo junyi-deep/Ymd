@@ -33,6 +33,7 @@ declare module 'simple-mind-map' {
       root: MapNode | null
       activeNodeList: MapNode[]
       textEdit: { hideEditTextBox(): void }
+      setNodeDataRender(node: MapNode, data: Record<string, unknown>): void
     }
     view: { scale: number; enlarge(): void; narrow(): void; fit(): void; reset(): void }
     miniMap: {
@@ -53,6 +54,7 @@ declare module 'simple-mind-map' {
       defaultInsertBelowSecondLevelNodeText?: string
       beforeAssociativeLineConnection?: () => boolean
       customHyperlinkJump?: (link: string) => void
+      createNodePostfixContent?: (node: MapNode) => { el: HTMLElement; width: number; height: number } | undefined
       customCheckEnableShortcut?: (event: KeyboardEvent) => boolean
       beforeTextEdit?: (node: MapNode) => boolean
       rainbowLinesConfig?: { open: boolean; colorsList: string[] }

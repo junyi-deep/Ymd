@@ -1,6 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { ArrowLeft, Check, ChevronRight, CircleAlert, FilePlus2, FileText, Home, ListTree, Network, PanelLeft, LocateFixed, Pin, Plus, Save, Search, Settings2, Shapes, Star, X } from 'lucide-react'
-import { defaultPreferences, type Command, type EditorMode, type Entry, type FileKind, type Preferences, type Scope, type SearchHit } from '../shared/contracts'
+import { defaultPreferences, type Command, type EditorMode, type Entry, type FileKind, type Preferences, type Scope, type SearchHit, type VersionStatus } from '../shared/contracts'
 import { DocumentIcon, FilesTree } from './FilesTree'
 import { SearchDialog } from './SearchDialog'
 import { Settings } from './Settings'
@@ -39,7 +39,12 @@ export function App() {
   const [systemDark, setSystemDark] = useState(() => matchMedia('(prefers-color-scheme: dark)').matches)
   const [sidebar, setSidebar] = useState(true)
   const [settings, setSettings] = useState(false)
-  const [settingsPage, setSettingsPage] = useState<'外观' | '文档库' | '快捷键'>('外观')
+  const [version, setVersion] = useState('')
+  const [release, setRelease] = useState<VersionStatus>()
+  const [checking, setChecking] = useState(false)
+  const releaseCheckInFlight = useRef(false)
+  const checkedAtStartup = useRef(false)
+  const [settingsPage, setSettingsPage] = useState<'外观' | '文档库' | '快捷键' | '关于'>('外观')
   const [searchOpen, setSearchOpen] = useState(false)
   const [jump, setJump] = useState<{ path: string; line: number; id: number }>()
   const [revision, setRevision] = useState(0)
@@ -61,6 +66,20 @@ export function App() {
     void action().catch(error => setNotice(message(error)))
   }
 
+  async function checkForUpdates(manual = true) {
+    if (releaseCheckInFlight.current) return
+    releaseCheckInFlight.current = true
+    setChecking(true)
+    try {
+      setRelease(await window.desktop.checkForUpdates())
+    } catch (error) {
+      if (manual) setNotice(message(error))
+    } finally {
+      releaseCheckInFlight.current = false
+      setChecking(false)
+    }
+  }
+
   useEffect(() => {
     run(async () => {
       const result = await window.desktop.initialize()
@@ -68,6 +87,7 @@ export function App() {
       setProject(result.project)
       setWindowsAcrylic(result.windowsAcrylic)
       setPlatform(result.platform)
+      setVersion(result.version)
       setPreferences(result.preferences)
       lastPreferences.current = result.preferences
     })
@@ -83,6 +103,12 @@ export function App() {
       window.removeEventListener('focus', onFocus)
     }
   }, [])
+
+  useEffect(() => {
+    if (!version || !preferences.autoCheckUpdates || checkedAtStartup.current) return
+    checkedAtStartup.current = true
+    void checkForUpdates(false)
+  }, [version, preferences.autoCheckUpdates])
 
   useEffect(() => {
     document.documentElement.dataset.theme = dark ? 'dark' : 'light'
@@ -323,7 +349,11 @@ export function App() {
       </div>
     </header>
     <div className="window-body">
-      {settings ? <Settings initialPage={settingsPage} {...{ preferences, platform, library, project, windowsAcrylic }} onProjectChange={changeProject} onReturn={() => setSettings(false)}
+      {settings ? <Settings initialPage={settingsPage} {...{ preferences, platform, library, project, windowsAcrylic, version, release, checking }}
+        onProjectChange={changeProject} onReturn={() => setSettings(false)}
+        onCheckUpdates={() => void checkForUpdates()}
+        onOpenRelease={url => run(() => window.desktop.openExternal(url))}
+        onOpenDirectory={location => run(() => window.desktop.openLibraryDirectory(location))}
         onChange={patch => {
           const next = { ...lastPreferences.current, ...patch }
           lastPreferences.current = next
@@ -356,6 +386,9 @@ export function App() {
                 </div>)) : <button className="tree-row subtle" onClick={openFile}><FileText size={17} /><span>打开文件…</span></button>}
             </section>
           </div>
+          {release?.update && <button className="tree-row" onClick={() => { setSettingsPage('关于'); setSettings(true) }}>
+            <CircleAlert size={16} /><span>可更新至 {release.update.version}</span>
+          </button>}
           <button className="tree-row sidebar-footer" onClick={() => commandRef.current('preferences')}><Settings2 size={18} /><span>设置</span></button>
         </aside>}
         <main className="workspace">
@@ -379,6 +412,7 @@ export function App() {
               ? <DrawingEditor key={active.path + ':' + active.reload} text={active.text} dark={dark} onChange={edit} />
               : active.mode === 'markdown'
                 ? <MarkdownEditor key={active.path + ':' + active.reload} text={active.text} name={active.name} path={active.path} modified={active.modified} platform={platform} remoteImages={preferences.remoteImages}
+                  searchEngine={preferences.searchEngine} registerFlush={registerFlush}
                   find={find} jump={jump?.path === active.path ? jump : undefined} onChange={edit}
                   report={error => setNotice(message(error))}
                   pinned={marks.pinned.includes(active.path)} starred={marks.starred.includes(active.path)}

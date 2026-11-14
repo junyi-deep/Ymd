@@ -141,7 +141,8 @@ kbd { color: var(--muted); font-family: inherit; font-size: .9em; white-space: n
 .switch[aria-checked="true"] { background: var(--accent); }
 .switch[aria-checked="true"]::after { margin-left: auto; }
 .theme-preview { padding: 16px; background: var(--soft); }
-.theme-preview article { border: 1px solid var(--line); border-radius: 8px; background: var(--page); padding: 24px 29px; font-size: 1.12rem; }
+.theme-preview-paper { border: 1px solid var(--line); border-radius: 8px; background: var(--editor-page, var(--page)); padding: 24px 29px; font: 1.12rem var(--editor-font, system-ui, sans-serif); }
+.settings-row select { padding: 5px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--page); color: var(--text); }
 .theme-preview h2 { font-size: 1.7rem; font-weight: 680; margin-bottom: 10px; }
 .theme-preview blockquote { border-left: 1px solid var(--selected); color: var(--muted); margin: 12px 0 0; padding-left: 9px; }
 
@@ -394,6 +395,21 @@ dialog button.primary { background: var(--accent); color: var(--accent-ink); }
 .md-image img { display: block; max-width: min(660px, 100%); max-height: 55vh; object-fit: contain; border-radius: 5px; }
 .md-image button { color: var(--link); text-decoration: underline; text-underline-offset: .15em; }
 .map-canvas:focus { outline: none; }
+.map-task-dialog { width: min(460px, calc(100vw - 32px)); }
+.map-task-dialog p { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.map-task-fields { display: grid; gap: 8px; margin-top: 12px; }
+.map-task-fields label { display: grid; grid-template-columns: 92px minmax(0, 1fr); align-items: center; gap: 8px; }
+.map-task-fields label:first-child { grid-template-columns: 92px 40px minmax(0, 1fr); }
+.map-task-fields input[type="range"], .map-task-dependencies input { accent-color: var(--accent); }
+.map-task-fields input[type="range"] { width: 100%; padding: 0; border: 0; }
+.map-task-fields select { max-width: 100%; background: var(--soft); border-radius: 5px; padding: 5px 8px; }
+.map-task-dependencies { margin-top: 14px; border-top: 1px solid var(--line); }
+.map-task-dependencies legend { margin-bottom: 6px; padding-right: 8px; }
+.map-task-dependencies div { max-height: 110px; overflow: auto; }
+.map-task-dependencies label { display: flex; align-items: center; gap: 8px; padding: 4px 0; }
+.map-task-dependencies label input { flex: none; }
+.map-task-dependencies label span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.map-task-remove { margin-right: auto; }
 .map-minimap { position: absolute; z-index: 1; right: 12px; bottom: 53px; width: 162px; height: 102px; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: var(--page); touch-action: none; cursor: grab; }
 .map-minimap div { display: grid; place-items: center; width: 100%; height: 100%; }
 .map-minimap svg { max-width: 160px; max-height: 100px; }
@@ -408,3 +424,13 @@ dialog button.primary { background: var(--accent); color: var(--accent-ink); }
 .map-sheet-item input { width: 110px; background: var(--soft); border-radius: 5px; padding: 3px 7px; }
 
 .map-storage-error { flex: none; color: var(--muted); }
+
+.markdown-table-widget { max-width: 100%; margin: 1.05em 0; overflow: auto; }
+.markdown-table-tools { display: flex; justify-content: flex-end; gap: 4px; margin-bottom: 4px; font: 12px/1.4 system-ui, sans-serif; }
+.markdown-table-widget table { border-collapse: collapse; min-width: 50%; max-width: 100%; }
+.markdown-table-widget :is(th, td) { min-width: 68px; min-height: 1.8em; height: 1.8em; padding: .23em .55em; border: 1px solid var(--line); overflow-wrap: anywhere; }
+.markdown-table-widget th { background: var(--soft); font-weight: 650; }
+.markdown-table-widget :is(td, th):focus-within { background: var(--soft); box-shadow: inset 0 0 0 1px var(--accent); outline: none; }
+.markdown-table-widget input { width: 100%; min-width: 55px; outline: none; padding: 0; border: 0; background: transparent; font: inherit; }
+.markdown-table-widget code { padding: 0 .18em; background: var(--soft); }
+@media print { .markdown-table-tools { display: none; } }

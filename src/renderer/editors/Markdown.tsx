@@ -4,6 +4,7 @@ import { MarkdownMenu, type MenuItem } from './MarkdownMenu'
 import { contextItems, insertMermaid, typographyKeys } from './markdownCommands'
 import { markdownPlainText } from './markdownHtml'
 import { renderedBlocks } from './renderedBlocks'
+import { insertTable, markdownTable } from './markdownTable'
 import { typoraMarkdown } from './markdownExtras'
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands'
 import { markdown, markdownKeymap } from '@codemirror/lang-markdown'
@@ -12,11 +13,11 @@ import { openSearchPanel, search, searchKeymap } from '@codemirror/search'
 import { Compartment, EditorState, Prec, type Range } from '@codemirror/state'
 import { Decoration, drawSelection, EditorView, highlightSpecialChars, keymap, ViewPlugin, WidgetType, type DecorationSet, type ViewUpdate } from '@codemirror/view'
 import { GFM } from '@lezer/markdown'
-import type { ContextMenuItem } from '../../shared/contracts'
+import type { ContextMenuItem, SearchEngine } from '../../shared/contracts'
 
 const inlineStyles: Record<string, string> = {
   StrongEmphasis: 'md-bold', Emphasis: 'md-italic', Strikethrough: 'md-strike',
-  InlineCode: 'md-inline-code', Highlight: 'md-highlight', Underline: 'md-underline', Link: 'md-link', Autolink: 'md-link', TableCell: 'md-cell',
+  InlineCode: 'md-inline-code', Highlight: 'md-highlight', Underline: 'md-underline', Link: 'md-link', Autolink: 'md-link',
 }
 const markers = new Set(['HeaderMark', 'EmphasisMark', 'StrikethroughMark', 'CodeMark', 'QuoteMark', 'HighlightMark', 'UnderlineMark'])
 
@@ -186,6 +187,8 @@ interface Props {
   modified: number
   platform: string
   remoteImages: boolean
+  searchEngine: SearchEngine
+  registerFlush: (flush?: () => void) => void
   onChange: (text: string) => void
   find: number
   jump?: { line: number; id: number }
@@ -204,7 +207,7 @@ interface Props {
   report: (error: unknown) => void
 }
 
-export function MarkdownEditor({ text, name, path, modified, platform, remoteImages, onChange, find, jump, reveal, saveCopy, duplicate, move, trash, shortcuts, exportPdf, printDocument, pinned, starred, togglePin, toggleStar, report }: Props) {
+export function MarkdownEditor({ text, name, path, modified, platform, remoteImages, searchEngine, registerFlush, onChange, find, jump, reveal, saveCopy, duplicate, move, trash, shortcuts, exportPdf, printDocument, pinned, starred, togglePin, toggleStar, report }: Props) {
   const host = useRef<HTMLDivElement>(null)
   const view = useRef<EditorView>(null)
   const change = useRef(onChange)
@@ -218,6 +221,7 @@ export function MarkdownEditor({ text, name, path, modified, platform, remoteIma
   const [reading, setReading] = useState(false)
   const [info, setInfo] = useState(false)
   const infoDialog = useRef<HTMLDialogElement>(null)
+  const tableDialog = useRef<HTMLDialogElement>(null)
   const readMode = useRef(new Compartment())
   const renderMode = useRef(new Compartment())
   change.current = onChange
@@ -234,7 +238,7 @@ export function MarkdownEditor({ text, name, path, modified, platform, remoteIma
           highlightSpecialChars(), history(), drawSelection(), keymap.of([...defaultKeymap, ...historyKeymap]), EditorView.lineWrapping, markdown({ extensions: [GFM, typoraMarkdown], addKeymap: false }),
           search({ top: true }), Prec.high(keymap.of([...typographyKeys, ...markdownKeymap, ...searchKeymap])),
           EditorView.contentAttributes.of({ 'aria-label': 'Markdown 编辑器', spellcheck: 'false' }),
-          renderMode.current.of([live(path, remoteImages), renderedBlocks]),
+          renderMode.current.of([live(path, remoteImages), renderedBlocks, markdownTable]),
           readMode.current.of([]),
           EditorView.updateListener.of(update => {
             if (update.docChanged) change.current(bom + update.state.doc.toString().replaceAll('\n', newline))
@@ -247,7 +251,12 @@ export function MarkdownEditor({ text, name, path, modified, platform, remoteIma
   }, [])
 
   useEffect(() => {
-    view.current?.dispatch({ effects: renderMode.current.reconfigure(source ? [] : [live(path, remoteImages), renderedBlocks]) })
+    registerFlush(() => view.current?.dom.querySelector<HTMLInputElement>('.markdown-table-widget input:focus')?.blur())
+    return () => registerFlush()
+  }, [registerFlush])
+
+  useEffect(() => {
+    view.current?.dispatch({ effects: renderMode.current.reconfigure(source ? [] : [live(path, remoteImages), renderedBlocks, markdownTable]) })
   }, [source, path, remoteImages])
   useEffect(() => {
     view.current?.dispatch({ effects: readMode.current.reconfigure([
@@ -341,7 +350,7 @@ export function MarkdownEditor({ text, name, path, modified, platform, remoteIma
         children: item.children ? serialize(item.children) : undefined,
       }
     })
-    void window.desktop.markdownContextMenu(x, y, serialize(contextItems(editor, platform, path, report, reading)))
+    void window.desktop.markdownContextMenu(x, y, serialize(contextItems(editor, platform, path, report, reading, searchEngine, () => tableDialog.current?.showModal())))
       .then(index => {
         if (!editor.dom.isConnected) return
         editor.focus()
@@ -376,6 +385,7 @@ export function MarkdownEditor({ text, name, path, modified, platform, remoteIma
         {!headings.length && <p>还没有标题</p>}
       </aside>}
       <div className="markdown-surface" ref={host} onClick={event => {
+        if (event.defaultPrevented) return
         if ((!event.metaKey && !event.ctrlKey) || !view.current) return
         const editor = view.current
         const pos = editor.posAtCoords({ x: event.clientX, y: event.clientY })
@@ -404,6 +414,26 @@ export function MarkdownEditor({ text, name, path, modified, platform, remoteIma
         {menu === 'status' && <MarkdownMenu items={statusItems} close={close} upward />}
       </div>
     </footer>
+    <dialog ref={tableDialog} aria-label="插入表格">
+      <form onSubmit={event => {
+        event.preventDefault()
+        const values = new FormData(event.currentTarget)
+        const rows = Number(values.get('rows'))
+        const columns = Number(values.get('columns'))
+        if (!view.current || !Number.isInteger(rows) || rows < 1 || rows > 100 ||
+            !Number.isInteger(columns) || columns < 1 || columns > 30) return
+        tableDialog.current?.close()
+        insertTable(view.current, rows, columns)
+      }}>
+        <h2>插入表格</h2>
+        <label>行数（含表头）<input name="rows" type="number" min="1" max="100" defaultValue="3" required autoFocus /></label>
+        <label>列数<input name="columns" type="number" min="1" max="30" defaultValue="2" required /></label>
+        <footer>
+          <button type="button" onClick={() => tableDialog.current?.close()}>取消</button>
+          <button type="submit" className="primary">插入</button>
+        </footer>
+      </form>
+    </dialog>
     <dialog ref={infoDialog} onCancel={event => { event.preventDefault(); setInfo(false) }}>
       <h2>文档信息</h2>
       <dl className="document-info">

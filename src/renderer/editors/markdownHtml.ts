@@ -12,3 +12,10 @@ export function markdownHtml(text: string) {
 export function markdownPlainText(text: string) {
   return new DOMParser().parseFromString(markdownHtml(text), 'text/html').body.textContent ?? ''
 }
+
+export function markdownInlineHtml(text: string) {
+  return DOMPurify.sanitize(marked.parseInline(text, { gfm: true, async: false }), {
+    ALLOWED_TAGS: ['b', 'strong', 'i', 'em', 's', 'del', 'code', 'mark', 'u', 'br'],
+    ALLOWED_ATTR: [],
+  })
+}

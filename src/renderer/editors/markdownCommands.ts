@@ -1,5 +1,6 @@
 import { EditorSelection, Transaction, type ChangeSpec } from '@codemirror/state'
 import { EditorView, type Command, type KeyBinding } from '@codemirror/view'
+import { searchEngines, type SearchEngine } from '../../shared/contracts'
 import { markdownHtml, markdownPlainText } from './markdownHtml'
 import type { MenuItem } from './MarkdownMenu'
 
@@ -128,7 +129,7 @@ const inserts: EditCommand[] = [
 export const typographyKeys: KeyBinding[] = [...paragraphs, ...formats].flatMap(item => item.key ? [{ key: item.key, run: view => !view.state.readOnly && item.command(view) }] : [])
 export const insertMermaid = inserts[5].command
 
-export function contextItems(view: EditorView, platform: string, path: string, report: (error: unknown) => void, readOnly: boolean): MenuItem[] {
+export function contextItems(view: EditorView, platform: string, path: string, report: (error: unknown) => void, readOnly: boolean, searchEngine: SearchEngine, chooseTable: () => void): MenuItem[] {
   const { state } = view
   const selection = state.selection.main
   const source = state.sliceDoc(selection.from, selection.to)
@@ -176,6 +177,16 @@ export function contextItems(view: EditorView, platform: string, path: string, r
     ] },
     { label: '段落', separator: true, disabled: readOnly, children: paragraphs.map(toMenu) },
     { label: '格式', disabled: readOnly, children: formats.map(toMenu) },
-    { label: '插入', disabled: readOnly, children: inserts.map(item => item.label === '图像' ? { label: item.label, run: chooseImage } : toMenu(item)) },
+    { label: '插入', disabled: readOnly, children: inserts.map(item => {
+      if (item.label === '图像') return { label: item.label, run: chooseImage }
+      if (item.label === '表格') return { label: item.label, run: chooseTable }
+      return toMenu(item)
+    }) },
+    { label: '在网页中搜索选中文字', separator: true, disabled: !source.trim(), run: () => {
+      const engine = searchEngines[searchEngine]
+      const url = new URL(engine.url)
+      url.searchParams.set(engine.parameter, source.trim())
+      void window.desktop.openExternal(url.href).catch(report)
+    } },
   ]
 }

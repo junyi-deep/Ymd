@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { ChevronsLeft, Crosshair, Download, Focus, GitBranch, GitFork, ImagePlus, ListTree, Map, Maximize, Minus, Paperclip, Plus, Redo2, Search, SlidersHorizontal, Square, Star, StickyNote, Tag, Trash2, Undo2, X } from 'lucide-react'
+import { ChevronsLeft, ClipboardList, Crosshair, Download, Focus, GitBranch, GitFork, ImagePlus, ListTree, Map, Maximize, Minus, Paperclip, Plus, Redo2, Search, SlidersHorizontal, Square, Star, StickyNote, Tag, Trash2, Undo2, X } from 'lucide-react'
 import DOMPurify from 'dompurify'
 import MindMap from 'simple-mind-map'
 import AssociativeLine from 'simple-mind-map/src/plugins/AssociativeLine.js'
@@ -16,11 +16,12 @@ import Select from 'simple-mind-map/src/plugins/Select.js'
 import { UnsupportedList } from './Outline'
 import { projectList, writeList, type Block } from './listProjection'
 import { MindMapFormat } from './MindMapFormat'
+import { MindMapTask, readTask, taskBadge, taskTopics } from './MindMapTask'
 import { MarkdownMenu, type MenuItem } from './MarkdownMenu'
 import { defaultMapSettings, loadMapAppearance, mapTheme, palettes, restoreFloating, restoreMapStyles, saveMapAppearance, saveMapSheets, type MapData, type MapSettings, type MapSheet } from './mapAppearance'
 
 for (const plugin of [AssociativeLine, Drag, Export, ExportPDF, ExportXMind, KeyboardNavigation, MiniMap, OuterFrame, RainbowLines, SearchPlugin, Select]) MindMap.usePlugin(plugin)
-MindMap.extendNodeDataNoStylePropList(['ymdMarker', 'ymdFloating'])
+MindMap.extendNodeDataNoStylePropList(['ymdMarker', 'ymdFloating', 'ymdTask'])
 
 type MapNode = NonNullable<MindMap['renderer']['root']>
 type TopicField = '备注' | '标签' | '链接'
@@ -165,6 +166,7 @@ function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, upd
   const [miniMap, setMiniMap] = useState<{ markup: string; viewport: Record<string, string> }>()
   const [matches, setMatches] = useState({ total: 0, currentIndex: -1 })
   const [field, setField] = useState<{ key: TopicField; node: MapNode; value: string }>()
+  const [taskNode, setTaskNode] = useState<MapNode>()
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const host = useRef<HTMLDivElement>(null)
@@ -197,6 +199,10 @@ function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, upd
         layout: initialSettings.layout, themeConfig: mapTheme(initialSettings, dark),
         rainbowLinesConfig: { open: initialSettings.colored, colorsList: palettes[initialSettings.palette].colors },
         customHyperlinkJump: url => { void window.desktop.openExternal(url).catch(() => setNotice('无法打开链接。')) },
+        createNodePostfixContent: node => {
+          const task = readTask(node.getData('ymdTask'))
+          if (task) return taskBadge(task, () => setTaskNode(node))
+        },
         customCheckEnableShortcut: event => !event.defaultPrevented && !event.isComposing && event.target instanceof HTMLElement &&
           (event.target === document.body || event.target.classList.contains('smm-node-edit-wrap') || !!host.current?.contains(event.target)),
         beforeAssociativeLineConnection: () => { setLinking(false); return false },
@@ -288,7 +294,7 @@ function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, upd
   useEffect(() => {
     if (!zen && !linking && !searchOpen && !formatOpen) return
     const escape = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape' || event.isComposing || event.defaultPrevented || field ||
+      if (event.key !== 'Escape' || event.isComposing || event.defaultPrevented || field || taskNode ||
           event.target instanceof HTMLElement && event.target.closest('.smm-node-edit-wrap, .document-menu')) return
       if (linking) { engine.current?.associativeLine.cancelCreateLine(); setLinking(false) }
       else if (searchOpen) { setQuery(''); setReplace(''); setSearchOpen(false); engine.current?.search.endSearch() }
@@ -297,7 +303,7 @@ function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, upd
     }
     window.addEventListener('keydown', escape)
     return () => window.removeEventListener('keydown', escape)
-  }, [zen, linking, searchOpen, formatOpen, field])
+  }, [zen, linking, searchOpen, formatOpen, field, taskNode])
 
   useEffect(() => {
     const map = engine.current
@@ -412,6 +418,7 @@ function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, upd
     } },
     { label: '边界', icon: <Square size={16} />, disabled: !canRemove, run: () => command('ADD_OUTER_FRAME') },
     { label: '概要', icon: <ListTree size={16} />, disabled: !canRemove, run: () => command('ADD_GENERALIZATION') },
+    { label: '任务', icon: <ClipboardList size={16} />, disabled: !node, separator: true, run: () => setTaskNode(node) },
     { label: '备注', icon: <StickyNote size={16} />, disabled: !node, separator: true, run: () => fieldFor('备注') },
     { label: '标签', icon: <Tag size={16} />, disabled: !node, run: () => fieldFor('标签') },
     { label: '链接', disabled: !node, run: () => fieldFor('链接') },
@@ -515,6 +522,12 @@ function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, upd
         }} />}
     </div>
     {typeof menu === 'object' && <MarkdownMenu items={contextItems} close={closeMenu} point={menu} nativeStyle />}
+    {taskNode && <MindMapTask initial={readTask(taskNode.getData('ymdTask'))}
+      title={String(taskNode.getData('text') ?? '')} topics={taskTopics(engine.current?.getData(), taskNode.uid)}
+      close={() => setTaskNode(undefined)} save={task => {
+        engine.current?.renderer.setNodeDataRender(taskNode, { ymdTask: task })
+        setTaskNode(undefined)
+      }} />}
     <dialog ref={fieldDialog} onCancel={event => { event.preventDefault(); setField(undefined) }}>
       {field && <form onSubmit={event => {
         event.preventDefault()

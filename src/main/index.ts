@@ -3,11 +3,12 @@ import type { IpcMainInvokeEvent, MenuItemConstructorOptions } from 'electron'
 import { mkdir, readFile, writeFile, rename } from 'node:fs/promises'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { defaultPreferences } from '../shared/contracts'
+import { defaultPreferences, searchEngines } from '../shared/contracts'
 import type { Command, ContextMenuItem, Desktop, Entry, FileKind, Preferences } from '../shared/contracts'
 import { Files, fileKind } from './files'
 import { searchRoots } from './search'
 import { printView } from './printing'
+import { readReleaseStatus } from './releases'
 
 const files = new Files()
 const dev = !app.isPackaged && process.argv.includes('--dev')
@@ -31,6 +32,8 @@ function normalizePreferences(value: Partial<Preferences> | null): Preferences {
     documentTheme: value?.documentTheme === 'paper' || value?.documentTheme === 'mono' ? value.documentTheme : 'classic',
     autoSave: value?.autoSave === true,
     remoteImages: value?.remoteImages === true,
+    autoCheckUpdates: value?.autoCheckUpdates === true,
+    searchEngine: value?.searchEngine && Object.hasOwn(searchEngines, value.searchEngine) ? value.searchEngine : 'google',
   }
 }
 
@@ -125,7 +128,14 @@ void app.whenReady().then(async () => {
     return project
   }
 
-  handle('initialize', () => ({ library, project, preferences, platform: process.platform, windowsAcrylic }))
+  handle('initialize', () => ({ library, project, preferences, platform: process.platform, windowsAcrylic, version: app.getVersion() }))
+  handle('checkForUpdates', () => readReleaseStatus(app.getVersion()))
+  handle('openLibraryDirectory', async (location: 'library' | 'project') => {
+    const entry = location === 'library' ? library : location === 'project' ? project : null
+    if (!entry) throw new Error('文档目录不可用。')
+    const message = await shell.openPath(entry.path)
+    if (message) throw new Error(message)
+  })
   handle('list', (directory: string) => files.list(directory))
   handle('chooseProjectDirectory', async () => {
     const result = await dialog.showOpenDialog(window!, { defaultPath: project?.path, properties: ['openDirectory'] })

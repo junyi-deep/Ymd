@@ -2,6 +2,19 @@ export type FileKind = 'markdown' | 'drawing'
 export type Scope = 'library' | 'project' | 'local'
 export type EditorMode = 'markdown' | 'outline' | 'map'
 export type Theme = 'system' | 'light' | 'dark'
+export type SearchEngine = 'google' | 'baidu' | 'bing' | 'duckduckgo'
+
+export const searchEngines: Record<SearchEngine, { label: string; url: string; parameter: string }> = {
+  google: { label: 'Google', url: 'https://www.google.com/search', parameter: 'q' },
+  baidu: { label: '百度', url: 'https://www.baidu.com/s', parameter: 'wd' },
+  bing: { label: 'Bing', url: 'https://www.bing.com/search', parameter: 'q' },
+  duckduckgo: { label: 'DuckDuckGo', url: 'https://duckduckgo.com/', parameter: 'q' },
+}
+
+export interface VersionStatus {
+  current: string
+  update?: { version: string; url: string }
+}
 
 export interface Entry {
   path: string
@@ -43,13 +56,18 @@ export interface Preferences {
   documentTheme: 'classic' | 'paper' | 'mono'
   autoSave: boolean
   remoteImages: boolean
+  autoCheckUpdates: boolean
+  searchEngine: SearchEngine
 }
 
-export const defaultPreferences: Preferences = { theme: 'system', size: 'normal', solidBackground: false, animations: true, documentTheme: 'classic', autoSave: false, remoteImages: false }
+export const defaultPreferences: Preferences = {
+  theme: 'system', size: 'normal', solidBackground: false, animations: true, documentTheme: 'classic',
+  autoSave: false, remoteImages: false, autoCheckUpdates: false, searchEngine: 'google',
+}
 export type Command = 'open-file' | 'new-file' | 'new-drawing' | 'search' | 'save' | 'preferences' | 'close' | 'find'
 
 export interface Desktop {
-  initialize(): Promise<{ library: Entry; project: Entry | null; preferences: Preferences; platform: string; windowsAcrylic: boolean }>
+  initialize(): Promise<{ library: Entry; project: Entry | null; preferences: Preferences; platform: string; windowsAcrylic: boolean; version: string }>
   list(path: string): Promise<Entry[]>
   chooseProjectDirectory(): Promise<Entry | null>
   resetProjectDirectory(): Promise<Entry | null>
@@ -71,6 +89,8 @@ export interface Desktop {
   printDocument(name: string, html: string): Promise<void>
   saveCopy(path: string, text: string): Promise<DocumentFile | null>
   reveal(path: string): Promise<void>
+  openLibraryDirectory(location: 'library' | 'project'): Promise<void>
+  checkForUpdates(): Promise<VersionStatus>
   setPreferences(preferences: Preferences): Promise<Preferences>
   finishClose(): Promise<void>
   onCommand(callback: (command: Command) => void): () => void
