@@ -1,0 +1,19 @@
+appId: com.ymd.editor
+productName: Ymd
+directories:
+  output: release
+files:
+  - dist/**/*
+  - package.json
+mac:
+  category: public.app-category.productivity
+  target:
+    - target: dmg
+      arch: [arm64]
+toolsets:
+  nsis: "1.2.1"
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+artifactName: ${productName}-${version}-${os}-${arch}.${ext}
