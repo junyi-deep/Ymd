@@ -1,6 +1,6 @@
 # Ymd
 
-Ymd 是面向 macOS arm64 和 Windows x64 的本地 Markdown 编辑器。它可以打开应用维护的「我的文档」、用户选择的项目目录和临时打开的本机文件。文件浏览器显示 `.md` 与 `.excalidraw`。同一份 Markdown 可以切换到实时渲染、大纲和思维导图视图。
+Ymd 是面向 macOS arm64 和 Windows x64 的本地 Markdown 编辑器。它可以打开应用维护的「我的文档」、系统文档目录下的「项目空间」和临时打开的本机文件。项目目录可在「设置 → 文档库」调整。文件浏览器显示 `.md` 与 `.excalidraw`。同一份 Markdown 可以切换到实时渲染、大纲和思维导图视图。
 
 ## 开发
 
@@ -13,7 +13,13 @@ npm run build
 
 `npm run dist:mac` 输出 macOS arm64 DMG，`npm run dist:win` 输出 Windows x64 NSIS 安装包。开发机安装 Node.js 22.12 或更新的受支持版本。
 
+## 发布
+
+推送与 `package.json` 版本一致的 `v<版本>` 标签会触发 GitHub Actions，两个平台构建成功后发布 Release。
+
 ## 文档
+
+以下模块规格仅在本地开发工作区提供。
 
 - [架构、数据流和实施顺序](docs/architecture.md)
 - [工作区与文件](docs/modules/workspace.md)

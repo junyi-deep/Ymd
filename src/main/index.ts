@@ -1,11 +1,12 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, net, protocol, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, net, protocol, shell } from 'electron'
 import type { IpcMainInvokeEvent, MenuItemConstructorOptions } from 'electron'
 import { readFile, writeFile, rename } from 'node:fs/promises'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { defaultPreferences } from '../shared/contracts'
-import type { Command, Desktop, Preferences } from '../shared/contracts'
+import type { Command, Desktop, Entry, FileKind, Preferences } from '../shared/contracts'
 import { Files, fileKind } from './files'
+import { searchRoots } from './search'
 
 const files = new Files()
 const dev = !app.isPackaged && process.argv.includes('--dev')
@@ -15,6 +16,8 @@ protocol.registerSchemesAsPrivileged([{ scheme: 'ymd', privileges: { standard: t
 let window: BrowserWindow | null = null
 let preferences = defaultPreferences
 let closing = false
+let searchController: AbortController | undefined
+const windowsAcrylic = process.platform === 'win32' && Number(process.getSystemVersion().split('.')[2]) >= 22621
 let preferenceWrite: Promise<unknown> = Promise.resolve()
 
 function normalizePreferences(value: Partial<Preferences> | null): Preferences {
@@ -22,11 +25,19 @@ function normalizePreferences(value: Partial<Preferences> | null): Preferences {
     theme: value?.theme === 'dark' || value?.theme === 'light' ? value.theme : 'system',
     size: value?.size === 'small' || value?.size === 'large' ? value.size : 'normal',
     solidBackground: value?.solidBackground === true,
+    projectDirectory: typeof value?.projectDirectory === 'string' && path.isAbsolute(value.projectDirectory) ? value.projectDirectory : undefined,
+    animations: value?.animations !== false,
+    documentTheme: value?.documentTheme === 'paper' || value?.documentTheme === 'mono' ? value.documentTheme : 'classic',
+    autoSave: value?.autoSave === true,
   }
 }
 
 function applyBackground() {
-  if (process.platform === 'darwin') window?.setVibrancy(preferences.solidBackground ? null : 'sidebar')
+  nativeTheme.themeSource = preferences.theme
+  const material = !preferences.solidBackground && (process.platform === 'darwin' || windowsAcrylic)
+  if (process.platform === 'darwin') window?.setVibrancy(material ? 'sidebar' : null)
+  if (windowsAcrylic) window?.setBackgroundMaterial(material ? 'acrylic' : 'none')
+  window?.setBackgroundColor(material ? '#00000000' : nativeTheme.shouldUseDarkColors ? '#222323' : '#fdfdfd')
 }
 
 function command(name: Command) {
@@ -46,6 +57,7 @@ function createWindow() {
     vibrancy: process.platform === 'darwin' && !preferences.solidBackground ? 'sidebar' : undefined,
     webPreferences: { preload: path.join(__dirname, '../preload/index.js'), contextIsolation: true, sandbox: true, nodeIntegration: false },
   })
+  applyBackground()
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
   window.webContents.on('will-navigate', (event, url) => { if (url !== rendererUrl) event.preventDefault() })
   window.on('close', event => {
@@ -53,7 +65,7 @@ function createWindow() {
     event.preventDefault()
     command('close')
   })
-  window.on('closed', () => { window = null })
+  window.on('closed', () => { searchController?.abort(); window = null })
   void window.loadURL(rendererUrl)
 }
 
@@ -83,11 +95,55 @@ void app.whenReady().then(async () => {
     preferences = defaultPreferences
   }
   const library = await files.library(data)
-  handle('initialize', () => ({ library, preferences, platform: process.platform }))
+  const defaultProject = app.getPath('documents')
+  const authorizeProject = (directory: string) => files.authorizeDirectory(directory).catch(() => null)
+  let project: Entry | null = preferences.projectDirectory ? await authorizeProject(preferences.projectDirectory) : null
+  project ??= await authorizeProject(defaultProject)
+  files.retainRoots(project ? [library, project] : [library])
+
+  function storePreferences(update: (current: Preferences) => Preferences) {
+    const task = preferenceWrite.catch(() => {}).then(async () => {
+      const next = update(preferences)
+      await writeFile(settings + '.tmp', JSON.stringify(next), { flush: true })
+      await rename(settings + '.tmp', settings)
+      preferences = next
+      return next
+    })
+    preferenceWrite = task
+    return task
+  }
+
+  async function updateProject(directory?: string) {
+    const selected = await files.authorizeDirectory(directory ?? defaultProject)
+    await storePreferences(current => ({ ...current, projectDirectory: directory ? selected.path : undefined }))
+    searchController?.abort()
+    project = selected
+    files.retainRoots([library, selected])
+    return project
+  }
+
+  handle('initialize', () => ({ library, project, preferences, platform: process.platform, windowsAcrylic }))
   handle('list', (directory: string) => files.list(directory))
-  handle('chooseDirectory', async () => {
-    const result = await dialog.showOpenDialog(window!, { properties: ['openDirectory'] })
-    return result.canceled ? null : files.authorizeDirectory(result.filePaths[0])
+  handle('chooseProjectDirectory', async () => {
+    const result = await dialog.showOpenDialog(window!, { defaultPath: project?.path, properties: ['openDirectory'] })
+    return result.canceled ? null : updateProject(result.filePaths[0])
+  })
+  handle('resetProjectDirectory', () => updateProject())
+  handle('cancelSearch', () => { searchController?.abort() })
+  handle('search', async (input: string) => {
+    searchController?.abort()
+    const query = typeof input === 'string' ? input.trim().slice(0, 256) : ''
+    if (!query || /[\r\n\0]/.test(query)) return []
+    const controller = new AbortController()
+    searchController = controller
+    const executable = process.platform === 'win32' ? 'rg.exe' : 'rg'
+    const binary = app.isPackaged ? path.join(process.resourcesPath, 'ripgrep', executable)
+      : path.join(app.getAppPath(), 'node_modules/@vscode/ripgrep-universal/bin', `${process.platform}-${process.arch}`, executable)
+    try {
+      return await searchRoots(binary, project && project.path !== library.path ? [library, project] : [library], query, controller.signal)
+    } finally {
+      if (searchController === controller) searchController = undefined
+    }
   })
   handle('chooseFile', async () => {
     const result = await dialog.showOpenDialog(window!, {
@@ -96,12 +152,35 @@ void app.whenReady().then(async () => {
     })
     return result.canceled ? null : files.authorizeFile(result.filePaths[0])
   })
-  handle('read', (file: string) => files.read(file))
-  handle('create', (directory: string, name: string, kind: Parameters<Desktop['create']>[2]) => files.create(directory, name, kind))
+  handle('read', (file: string) => files.read(file, true))
+  handle('create', (directory: string, kind: FileKind) => files.create(directory, kind))
   handle('save', (file: string, text: string, version: string) => {
     if (typeof text !== 'string' || typeof version !== 'string') throw new Error('文件内容无效。')
     return files.save(file, text, version)
   })
+  handle('duplicate', async (file: string, directory: string, text: string) => {
+    if (typeof text !== 'string') throw new Error('文件内容无效。')
+    return files.duplicate(file, directory, text)
+  })
+  handle('move', async (file: string, version: string) => {
+    const canonical = await files.authorizedFile(file)
+    const result = await dialog.showOpenDialog(window!, { defaultPath: path.dirname(canonical), properties: ['openDirectory'] })
+    return result.canceled ? null : files.move(canonical, result.filePaths[0], version)
+  })
+  handle('trash', async (file: string, version: string) => {
+    const canonical = await files.authorizedFile(file)
+    const current = await files.read(canonical)
+    if (current.version !== version) throw new Error('磁盘上的文件已变化，请重新载入后删除。')
+    await shell.trashItem(canonical)
+  })
+  handle('exportPdf', async (name: string) => {
+    const result = await dialog.showSaveDialog(window!, { defaultPath: path.parse(name).name + '.pdf', filters: [{ name: 'PDF', extensions: ['pdf'] }] })
+    if (result.canceled || !result.filePath || !window) return false
+    const data = await window.webContents.printToPDF({ printBackground: true })
+    await writeFile(result.filePath, data)
+    return true
+  })
+  handle('printDocument', () => { window?.webContents.print({ printBackground: true }) })
   handle('saveCopy', async (file: string, text: string) => {
     const kind = fileKind(file)
     if (!kind || typeof text !== 'string') throw new Error('文件内容无效。')
@@ -115,18 +194,11 @@ void app.whenReady().then(async () => {
     await writeFile(destination, text, { flag: 'wx', flush: true })
     return files.authorizeFile(destination)
   })
-  handle('reveal', async (file: string) => shell.showItemInFolder((await files.read(file)).path))
-  handle('setPreferences', (value: Preferences) => {
-    const next = normalizePreferences(value)
-    const task = preferenceWrite.catch(() => {}).then(async () => {
-      await writeFile(settings + '.tmp', JSON.stringify(next), { flush: true })
-      await rename(settings + '.tmp', settings)
-      preferences = next
-      applyBackground()
-      return preferences
-    })
-    preferenceWrite = task
-    return task
+  handle('reveal', async (file: string) => shell.showItemInFolder(await files.authorizedFile(file)))
+  handle('setPreferences', async (value: Preferences) => {
+    const updated = await storePreferences(current => normalizePreferences({ ...value, projectDirectory: current.projectDirectory }))
+    applyBackground()
+    return updated
   })
   handle('finishClose', () => { closing = true; window?.close() })
   const items: MenuItemConstructorOptions[] = [
@@ -134,17 +206,18 @@ void app.whenReady().then(async () => {
     { label: '文件', submenu: [
       { label: '新建', accelerator: 'CmdOrCtrl+N', click: () => command('new-file') },
       { label: '打开文件…', accelerator: 'CmdOrCtrl+O', click: () => command('open-file') },
-      { label: '打开目录…', accelerator: 'CmdOrCtrl+Shift+O', click: () => command('open-directory') },
+      { label: '新建绘图', accelerator: 'CmdOrCtrl+Shift+N', click: () => command('new-drawing') },
       { label: '保存', accelerator: 'CmdOrCtrl+S', click: () => command('save') },
       { type: 'separator' },
       { label: '设置', accelerator: 'CmdOrCtrl+,', click: () => command('preferences') },
       { role: 'close' },
     ] },
-    { label: '编辑', submenu: [{ role: 'undo' }, { role: 'redo' }, { type: 'separator' }, { role: 'cut' }, { role: 'copy' }, { role: 'paste' }, { role: 'selectAll' }, { label: '查找', accelerator: 'CmdOrCtrl+F', click: () => command('find') }] },
+    { label: '编辑', submenu: [{ role: 'undo' }, { role: 'redo' }, { type: 'separator' }, { role: 'cut' }, { role: 'copy' }, { role: 'paste' }, { role: 'selectAll' }, { label: '查找和替换', accelerator: 'CmdOrCtrl+F', click: () => command('find') }, { label: '搜索文档', accelerator: 'CmdOrCtrl+J', click: () => command('search') }] },
     { role: 'windowMenu' },
   ]
   Menu.setApplicationMenu(Menu.buildFromTemplate(items))
   createWindow()
+  nativeTheme.on('updated', applyBackground)
   app.on('activate', () => { if (!window) createWindow() })
 })
 

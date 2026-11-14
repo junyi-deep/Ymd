@@ -6,6 +6,7 @@ export interface Session extends DocumentFile {
   scope: Scope
   mode: EditorMode
   reload: number
+  opened: number
   conflict?: boolean
 }
 
@@ -25,9 +26,10 @@ export function useDocuments() {
   }
 
   function open(file: DocumentFile, scope: Scope) {
+    const opened = Date.now()
     if (!latest.current.some(session => session.path === file.path)) {
-      update(sessions => [...sessions, { ...file, saved: file.text, scope, mode: 'markdown', reload: 0 }])
-    }
+      update(sessions => [...sessions, { ...file, saved: file.text, scope, mode: 'markdown', reload: 0, opened }])
+    } else patch(file.path, { opened })
     setActive(file.path)
   }
 
@@ -42,7 +44,7 @@ export function useDocuments() {
           patch(path, { conflict: true })
           return false
         }
-        patch(path, { saved: session.text, version: result.version, conflict: false })
+        patch(path, { saved: session.text, version: result.version, modified: result.modified, conflict: false })
         return true
       } finally {
         saving.current.delete(path)

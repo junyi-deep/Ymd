@@ -1,8 +1,10 @@
-import { lazy, Suspense, useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
-import { ArrowLeft, Check, ChevronRight, CircleAlert, FilePlus2, FileText, Folder, FolderOpen, Home, ListTree, Network, PanelLeft, LocateFixed, Plus, Save, Search, Settings2, X } from 'lucide-react'
-import { defaultPreferences, type Command, type EditorMode, type Entry, type FileKind, type Preferences, type Scope } from '../shared/contracts'
+import { lazy, Suspense, useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
+import { ArrowLeft, Check, ChevronRight, CircleAlert, FilePlus2, FileText, Home, ListTree, Network, PanelLeft, LocateFixed, Pin, Plus, Save, Search, Settings2, Shapes, Star, X } from 'lucide-react'
+import { defaultPreferences, type Command, type EditorMode, type Entry, type FileKind, type Preferences, type Scope, type SearchHit } from '../shared/contracts'
 import { DocumentIcon, FilesTree } from './FilesTree'
+import { SearchDialog } from './SearchDialog'
 import { Settings } from './Settings'
+import { useFileMarks } from './useFileMarks'
 import { useDocuments, type Session } from './documents'
 import { MarkdownEditor } from './editors/Markdown'
 import { OutlineEditor } from './editors/Outline'
@@ -20,23 +22,25 @@ function IconButton({ label, children, click, disabled }: { label: string; child
 }
 
 type Prompt =
-  | { type: 'create'; directory?: Entry }
   | { type: 'close'; path?: string }
-  | { type: 'reload'; session: Session }
+  | { type: 'reload' | 'trash'; session: Session }
 
 export function App() {
   const sessions = useDocuments()
+  const marks = useFileMarks()
   const active = sessions.active
   const [library, setLibrary] = useState<Entry>()
-  const [projects, setProjects] = useState<Entry[]>([])
+  const [project, setProject] = useState<Entry | null>(null)
+  const [windowsAcrylic, setWindowsAcrylic] = useState(false)
   const [platform, setPlatform] = useState('')
   const [preferences, setPreferences] = useState(defaultPreferences)
   const lastPreferences = useRef(preferences)
   const [systemDark, setSystemDark] = useState(() => matchMedia('(prefers-color-scheme: dark)').matches)
   const [sidebar, setSidebar] = useState(true)
   const [settings, setSettings] = useState(false)
-  const [filterOpen, setFilterOpen] = useState(false)
-  const [filterText, setFilterText] = useState('')
+  const [settingsPage, setSettingsPage] = useState<'外观' | '文档库' | '快捷键'>('外观')
+  const [searchOpen, setSearchOpen] = useState(false)
+  const [jump, setJump] = useState<{ path: string; line: number; id: number }>()
   const [revision, setRevision] = useState(0)
   const [find, setFind] = useState(0)
   const [prompt, setPrompt] = useState<Prompt>()
@@ -47,7 +51,6 @@ export function App() {
   const modal = useRef<HTMLDialogElement>(null)
   const commandRef = useRef<(command: Command) => void>(() => {})
   const openIntent = useRef(0)
-  const filter = filterText.trim().toLocaleLowerCase()
   const dark = preferences.theme === 'dark' || (preferences.theme === 'system' && systemDark)
 
   const message = (error: unknown) => String(error instanceof Error ? error.message : error).replace(/^Error invoking remote method '[^']+': Error: /, '')
@@ -60,6 +63,8 @@ export function App() {
     run(async () => {
       const result = await window.desktop.initialize()
       setLibrary(result.library)
+      setProject(result.project)
+      setWindowsAcrylic(result.windowsAcrylic)
       setPlatform(result.platform)
       setPreferences(result.preferences)
       lastPreferences.current = result.preferences
@@ -80,18 +85,35 @@ export function App() {
   useEffect(() => {
     document.documentElement.dataset.theme = dark ? 'dark' : 'light'
     document.documentElement.dataset.size = preferences.size
-    document.documentElement.dataset.vibrant = String(platform === 'darwin' && !preferences.solidBackground)
-  }, [dark, platform, preferences])
+    document.documentElement.dataset.vibrant = String((platform === 'darwin' || windowsAcrylic) && !preferences.solidBackground)
+    document.documentElement.dataset.animation = preferences.animations ? 'full' : 'reduced'
+    document.documentElement.dataset.documentTheme = preferences.documentTheme
+  }, [dark, platform, preferences, windowsAcrylic])
+
+  useEffect(() => {
+    if (!settings || prompt || searchOpen) return
+    const escape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !event.isComposing && !event.defaultPrevented) setSettings(false)
+    }
+    window.addEventListener('keydown', escape)
+    return () => window.removeEventListener('keydown', escape)
+  }, [settings, prompt, searchOpen])
 
   useEffect(() => {
     if (prompt && modal.current && !modal.current.open) modal.current.showModal()
     if (!prompt && modal.current?.open) modal.current.close()
   }, [prompt])
 
+  useEffect(() => {
+    if (!preferences.autoSave || !active || active.conflict || active.text === active.saved) return
+    const timer = window.setTimeout(() => run(() => sessions.save(active.path)), 900)
+    return () => window.clearTimeout(timer)
+  }, [preferences.autoSave, active?.path, active?.version, active?.text, active?.conflict])
+
   function scopeOf(path: string): Scope {
     const inside = (directory: Entry) => path.startsWith(directory.path.replace(/[\\/]$/, '') + (platform === 'win32' ? '\\' : '/'))
     if (library && inside(library)) return 'library'
-    return projects.some(inside) ? 'project' : 'local'
+    return project && inside(project) ? 'project' : 'local'
   }
 
   function showFile(file: Parameters<typeof sessions.open>[0], scope = scopeOf(file.path)) {
@@ -108,14 +130,29 @@ export function App() {
     })
   }
 
-  function openDirectory() {
+  function changeProject(reset = false) {
     run(async () => {
-      const directory = await window.desktop.chooseDirectory()
-      if (!directory) return
-      setProjects(current => [directory, ...current.filter(entry => entry.path !== directory.path)])
+      const entry = await (reset ? window.desktop.resetProjectDirectory() : window.desktop.chooseProjectDirectory())
+      if (!entry) return
+      lastPreferences.current = { ...lastPreferences.current, projectDirectory: reset ? undefined : entry.path }
+      setPreferences(lastPreferences.current)
+      setProject(entry)
       setSidebar(true)
       setRevision(value => value + 1)
-      setSettings(false)
+    })
+  }
+
+  function openFromSearch(hit: SearchHit) {
+    setSearchOpen(false)
+    const intent = ++openIntent.current
+    run(async () => {
+      const file = sessions.latest.current.find(document => document.path === hit.path) ?? await window.desktop.read(hit.path)
+      if (intent !== openIntent.current) return
+      showFile(file)
+      if (hit.line && file.kind === 'markdown') {
+        sessions.patch(file.path, { mode: 'markdown' })
+        setJump({ path: file.path, line: hit.line, id: Date.now() })
+      }
     })
   }
 
@@ -158,44 +195,64 @@ export function App() {
   commandRef.current = command => {
     if (command === 'close') requestClose()
     if (prompt) return
-    if (command === 'open-directory') openDirectory()
+    if (command === 'search') setSearchOpen(value => !value)
+    if (searchOpen) return
     if (command === 'open-file') openFile()
-    if (command === 'new-file' && library) setPrompt({ type: 'create' })
-    if (command === 'preferences') { flushEditor.current?.(); setSettings(value => !value) }
+    if (command === 'new-file' || command === 'new-drawing') create(command === 'new-drawing' ? 'drawing' : 'markdown')
+    if (command === 'preferences') { flushEditor.current?.(); setSettingsPage('外观'); setSettings(value => !value) }
     if (command === 'save' && active) { flushEditor.current?.(); run(() => sessions.save(active.path)) }
     if (command === 'find') {
       if (!settings && active?.kind === 'markdown' && active.mode === 'markdown') setFind(value => value + 1)
-      else { setSidebar(true); setFilterOpen(value => !value) }
+      else setSearchOpen(true)
     }
   }
 
-  function create(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    const form = new FormData(event.currentTarget)
+  function create(kind: FileKind = 'markdown', directory = active && scopeOf(active.path) === 'project' ? project ?? library : library) {
+    if (!directory) return
+    const intent = ++openIntent.current
+    flushEditor.current?.()
     run(async () => {
-      setBusy(true)
-      try {
-        const file = await window.desktop.create(String(form.get('directory')), String(form.get('name')).trim(), form.get('kind') as FileKind)
-        showFile(file)
-        setRevision(value => value + 1)
-        setPrompt(undefined)
-      } finally {
-        setBusy(false)
-      }
+      const file = await window.desktop.create(directory.path, kind)
+      setRevision(value => value + 1)
+      if (intent === openIntent.current) showFile(file)
+    })
+  }
+
+  function openPath(path: string, scope?: Scope) {
+    const intent = ++openIntent.current
+    run(async () => {
+      const existing = sessions.latest.current.find(session => session.path === path)
+      const document = existing ?? await window.desktop.read(path)
+      if (intent === openIntent.current) showFile(document, scope)
+    })
+  }
+
+  function markedSection(title: string, paths: string[], Icon: typeof Pin) {
+    if (!paths.length) return null
+    return <section><div className="section-heading"><h2>{title}</h2></div>
+      {paths.map(path => <button className="tree-row" key={path} title={path} onClick={() => openPath(path)}
+        data-selected={active?.path === path}><Icon size={15} /><span>{path.split(/[\\/]/).at(-1)}</span></button>)}
+    </section>
+  }
+
+  function moveFile(session: Session) {
+    run(async () => {
+      if (!await sessions.save(session.path)) return
+      const saved = sessions.latest.current.find(document => document.path === session.path)
+      if (!saved) return
+      const file = await window.desktop.move(saved.path, saved.version)
+      if (!file || file.path === saved.path) return
+      marks.relocate(saved.path, file.path)
+      sessions.close(saved.path)
+      showFile(file)
+      setRevision(value => value + 1)
     })
   }
 
   function tree(entry: Entry, scope: Scope, expanded: boolean) {
-    return <FilesTree key={entry.path} directory={entry} active={settings ? undefined : active?.path} {...{ revision, filter, expanded }}
-      onOpen={file => {
-        const intent = ++openIntent.current
-        run(async () => {
-          const existing = sessions.latest.current.find(session => session.path === file.path)
-          const document = existing ?? await window.desktop.read(file.path)
-          if (intent === openIntent.current) showFile(document, scope)
-        })
-      }}
-      onCreate={directory => setPrompt({ type: 'create', directory })} />
+    return <FilesTree key={entry.path} directory={entry} active={settings ? undefined : active?.path} {...{ revision, expanded }}
+      onOpen={file => openPath(file.path, scope)}
+      onCreate={directory => create('markdown', directory)} />
   }
 
   if (!library) return <div className="startup">{notice || '正在打开文档库…'}</div>
@@ -228,13 +285,14 @@ export function App() {
             {dirty ? <Save size={17} /> : <Check size={17} />}
           </IconButton>}
           {active && <IconButton label="在文件管理器中显示" click={() => run(() => window.desktop.reveal(active.path))}><LocateFixed size={16} /></IconButton>}
-          <IconButton label="查找" click={() => commandRef.current('find')}><Search size={18} /></IconButton>
-          <IconButton label="新建文档" click={() => setPrompt({ type: 'create' })}><Plus size={19} /></IconButton>
+          <IconButton label="搜索文档" click={() => commandRef.current('search')}><Search size={18} /></IconButton>
+          <IconButton label="新建文档" click={() => create()}><Plus size={19} /></IconButton>
+          <IconButton label="新建绘图" click={() => create('drawing')}><Shapes size={17} /></IconButton>
         </>}
       </div>
     </header>
     <div className="window-body">
-      {settings ? <Settings {...{ preferences, platform, library }} onReturn={() => setSettings(false)}
+      {settings ? <Settings initialPage={settingsPage} {...{ preferences, platform, library, project, windowsAcrylic }} onProjectChange={changeProject} onReturn={() => setSettings(false)}
         onChange={patch => {
           const next = { ...lastPreferences.current, ...patch }
           lastPreferences.current = next
@@ -244,22 +302,23 @@ export function App() {
         {sidebar && <aside className="sidebar">
           <div className="sidebar-scroll">
             <button className="tree-row home-link" onClick={home}><Home size={18} /><span>主页</span></button>
-            {filterOpen && <div className="sidebar-search"><Search size={15} /><input autoFocus aria-label="筛选文件" placeholder="筛选文件"
-              value={filterText} onChange={event => setFilterText(event.target.value)} /><IconButton label="清除筛选" click={() => { setFilterText(''); setFilterOpen(false) }}><X size={14} /></IconButton></div>}
+            {markedSection('置顶', marks.pinned, Pin)}
+            {markedSection('收藏', marks.starred, Star)}
             <section>
               <div className="section-heading"><h2>我的文档</h2>
-                <IconButton label="在我的文档新建" click={() => setPrompt({ type: 'create', directory: library })}><Plus size={17} /></IconButton>
+                <IconButton label="在我的文档新建" click={() => create('markdown', library)}><Plus size={17} /></IconButton>
               </div>
               {tree(library, 'library', true)}
             </section>
             <section>
-              <div className="section-heading"><h2>项目空间</h2><IconButton label="打开目录" click={openDirectory}><FolderOpen size={16} /></IconButton></div>
-              {projects.length ? projects.map(entry => tree(entry, 'project', false))
-                : <button className="tree-row subtle" onClick={openDirectory}><Folder size={17} /><span>打开目录…</span></button>}
+              <div className="section-heading"><h2>项目空间</h2>
+                {project && <IconButton label="在项目空间新建" click={() => create('markdown', project)}><Plus size={17} /></IconButton>}
+              </div>
+              {project ? tree(project, 'project', false) : <button className="tree-row subtle" onClick={() => { setSettingsPage('文档库'); setSettings(true) }}>配置文档库</button>}
             </section>
             <section>
               <div className="section-heading"><h2>本机文件</h2><IconButton label="打开文件" click={openFile}><Plus size={17} /></IconButton></div>
-              {local.length ? local.filter(file => file.name.toLocaleLowerCase().includes(filter)).map(file => (
+              {local.length ? local.map(file => (
                 <div key={file.path} className="local-file" data-selected={active?.path === file.path}>
                   <button className="tree-row" title={file.path} onClick={() => showFile(file, 'local')}><DocumentIcon kind={file.kind} /><span>{file.name}</span></button>
                   <IconButton label={`关闭 ${file.name}`} click={() => requestClose(file.path)}><X size={14} /></IconButton>
@@ -278,42 +337,69 @@ export function App() {
           </div>}
           {!active ? <div className="home">
             <h1>我的文档</h1>
-            <p>打开本地工作区，或创建一份新文档。</p>
+            <p>创建文档或打开已有的本机文件。</p>
             <div className="home-actions">
-              <button onClick={() => setPrompt({ type: 'create' })}><FilePlus2 size={21} /><span>新建文档</span><kbd>{platform === 'darwin' ? '⌘' : 'Ctrl'} N</kbd></button>
-              <button onClick={openDirectory}><FolderOpen size={21} /><span>打开项目目录</span><ChevronRight size={16} /></button>
+              <button onClick={() => create()}><FilePlus2 size={21} /><span>新建文档</span><kbd>{platform === 'darwin' ? '⌘' : 'Ctrl'} N</kbd></button>
+              <button onClick={() => create('drawing')}><Shapes size={21} /><span>新建绘图</span><ChevronRight size={16} /></button>
               <button onClick={openFile}><FileText size={21} /><span>打开本机文件</span><ChevronRight size={16} /></button>
             </div>
           </div> : <Suspense fallback={<div className="startup">正在加载编辑器…</div>}>
             {active.kind === 'drawing'
               ? <DrawingEditor key={active.path + ':' + active.reload} text={active.text} dark={dark} onChange={edit} />
               : active.mode === 'markdown'
-                ? <MarkdownEditor key={active.path + ':' + active.reload} text={active.text} find={find} onChange={edit} />
+                ? <MarkdownEditor key={active.path + ':' + active.reload} text={active.text} name={active.name} path={active.path} modified={active.modified} platform={platform}
+                  find={find} jump={jump?.path === active.path ? jump : undefined} onChange={edit}
+                  report={error => setNotice(message(error))}
+                  pinned={marks.pinned.includes(active.path)} starred={marks.starred.includes(active.path)}
+                  togglePin={() => marks.toggle('pinned', active.path)} toggleStar={() => marks.toggle('starred', active.path)}
+                  move={() => moveFile(active)} trash={() => setPrompt({ type: 'trash', session: active })}
+                  shortcuts={() => { setSettingsPage('快捷键'); setSettings(true) }}
+                  printDocument={() => run(() => window.desktop.printDocument())}
+                  exportPdf={() => run(() => window.desktop.exportPdf(active.name))}
+                  duplicate={() => run(async () => {
+                    const file = await window.desktop.duplicate(active.path, activeScope === 'project' && project ? project.path : library.path, active.text)
+                    setRevision(value => value + 1)
+                    showFile(file)
+                  })}
+                  reveal={() => run(() => window.desktop.reveal(active.path))}
+                  saveCopy={() => run(async () => {
+                    const file = await window.desktop.saveCopy(active.path, active.text)
+                    if (file) { setRevision(value => value + 1); showFile(file) }
+                  })} />
                 : active.mode === 'outline'
                   ? <OutlineEditor key={active.path + ':' + active.reload} text={active.text} platform={platform} onChange={edit} />
-                  : <MindMapEditor key={active.path + ':' + active.reload} text={active.text} name={active.name} dark={dark} onChange={edit} registerFlush={registerFlush} />}
+                  : <MindMapEditor key={active.path + ':' + active.reload} text={active.text} name={active.name} path={active.path} dark={dark} onChange={edit} registerFlush={registerFlush} />}
           </Suspense>}
         </main>
       </>}
     </div>
     {!prompt && notice && <div className="notice" role="alert"><CircleAlert size={17} />{notice}<IconButton label="关闭通知" click={() => setNotice('')}><X size={15} /></IconButton></div>}
+    {searchOpen && <SearchDialog documents={sessions.documents} onOpen={openFromSearch} onClose={() => setSearchOpen(false)} />}
     <dialog ref={modal} onCancel={event => { event.preventDefault(); if (!busy) setPrompt(undefined) }} onClose={() => setNotice('')}>
-      {prompt?.type === 'create' && <form onSubmit={create}>
-        <h2>新建文档</h2>
-        <label>文件名<input name="name" placeholder="未命名" required autoFocus /></label>
-        <label>文件类型<select name="kind"><option value="markdown">Markdown</option><option value="drawing">Excalidraw</option></select></label>
-        <label>保存位置<select name="directory" defaultValue={prompt.directory?.path ?? library.path}>
-          {[...new Map([library, ...projects, ...(prompt.directory ? [prompt.directory] : [])].map(entry => [entry.path, entry])).values()]
-            .map(entry => <option value={entry.path} key={entry.path}>{entry.path === library.path ? '我的文档' : entry.name}</option>)}
-        </select></label>
-        {notice && <p className="form-error" role="alert">{notice}</p>}
-        <footer><button type="button" onClick={() => setPrompt(undefined)} disabled={busy}>取消</button><button className="primary" disabled={busy}>创建</button></footer>
-      </form>}
       {prompt?.type === 'close' && <div>
         <h2>保留更改</h2><p>还有未保存的文档。关闭前需要保存吗？</p>
         {notice && <p className="form-error" role="alert">{notice}</p>}
         <footer><button onClick={() => setPrompt(undefined)} disabled={busy}>取消</button><button onClick={() => finishClose(prompt.path)} disabled={busy}>舍弃</button>
           <button className="primary" onClick={() => saveAndClose(prompt.path)} disabled={busy}>保存</button></footer>
+      </div>}
+      {prompt?.type === 'trash' && <div>
+        <h2>移到回收站</h2><p>将「{prompt.session.name}」移到系统回收站。</p>
+        {prompt.session.text !== prompt.session.saved && <p>当前草稿有未保存的更改。</p>}
+        {notice && <p className="form-error" role="alert">{notice}</p>}
+        <footer><button onClick={() => setPrompt(undefined)} disabled={busy}>取消</button>
+          <button className="primary" disabled={busy} onClick={() => run(async () => {
+            setBusy(true)
+            try {
+              if (!await sessions.save(prompt.session.path)) { setPrompt(undefined); return }
+              const saved = sessions.latest.current.find(document => document.path === prompt.session.path)
+              if (!saved) return
+              await window.desktop.trash(saved.path, saved.version)
+              marks.relocate(saved.path)
+              sessions.close(saved.path)
+              setRevision(value => value + 1)
+              setPrompt(undefined)
+            } finally { setBusy(false) }
+          })}>移到回收站</button></footer>
       </div>}
       {prompt?.type === 'reload' && <div><h2>重新载入文件</h2><p>载入磁盘上的版本会替换当前草稿。</p>
         {notice && <p className="form-error" role="alert">{notice}</p>}

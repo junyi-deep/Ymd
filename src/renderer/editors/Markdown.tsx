@@ -1,8 +1,13 @@
 import { useEffect, useRef, useState } from 'react'
-import { Code2 } from 'lucide-react'
+import { BetweenHorizontalStart, Check, ChevronsLeft, ChevronsRight, Code2, Copy, Eye, FileDown, FileText, FolderInput, Info, Keyboard, ListTree, LocateFixed, MoreHorizontal, Pin, Printer, Search, Star, Trash2 } from 'lucide-react'
+import { MarkdownMenu, type MenuItem } from './MarkdownMenu'
+import { contextItems, insertMermaid, typographyKeys } from './markdownCommands'
+import { markdownPlainText } from './markdownHtml'
+import { renderedBlocks } from './renderedBlocks'
+import { typoraMarkdown } from './markdownExtras'
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands'
 import { markdown, markdownKeymap } from '@codemirror/lang-markdown'
-import { syntaxTree } from '@codemirror/language'
+import { ensureSyntaxTree, syntaxTree } from '@codemirror/language'
 import { openSearchPanel, search, searchKeymap } from '@codemirror/search'
 import { Compartment, EditorState, Prec, type Range } from '@codemirror/state'
 import { Decoration, drawSelection, EditorView, highlightSpecialChars, keymap, ViewPlugin, WidgetType, type DecorationSet, type ViewUpdate } from '@codemirror/view'
@@ -10,19 +15,20 @@ import { GFM } from '@lezer/markdown'
 
 const inlineStyles: Record<string, string> = {
   StrongEmphasis: 'md-bold', Emphasis: 'md-italic', Strikethrough: 'md-strike',
-  InlineCode: 'md-inline-code', Link: 'md-link', Autolink: 'md-link', TableCell: 'md-cell',
+  InlineCode: 'md-inline-code', Highlight: 'md-highlight', Underline: 'md-underline', Link: 'md-link', Autolink: 'md-link', TableCell: 'md-cell',
 }
-const markers = new Set(['HeaderMark', 'EmphasisMark', 'StrikethroughMark', 'CodeMark', 'QuoteMark'])
+const markers = new Set(['HeaderMark', 'EmphasisMark', 'StrikethroughMark', 'CodeMark', 'QuoteMark', 'HighlightMark', 'UnderlineMark'])
 
 class TaskBox extends WidgetType {
-  constructor(readonly position: number, readonly checked: boolean) { super() }
+  constructor(readonly position: number, readonly checked: boolean, readonly readOnly: boolean) { super() }
 
-  eq(other: TaskBox) { return this.position === other.position && this.checked === other.checked }
+  eq(other: TaskBox) { return this.position === other.position && this.checked === other.checked && this.readOnly === other.readOnly }
 
   toDOM(view: EditorView) {
     const box = document.createElement('input')
     box.type = 'checkbox'
     box.checked = this.checked
+    box.disabled = this.readOnly
     box.setAttribute('aria-label', '切换任务状态')
     box.addEventListener('change', () => view.dispatch({ changes: {
       from: this.position + 1, to: this.position + 2, insert: box.checked ? 'x' : ' ',
@@ -34,7 +40,7 @@ class TaskBox extends WidgetType {
 function liveMarkdown(view: EditorView) {
   const ranges: Range<Decoration>[] = []
   const state = view.state
-  const visible = (from: number, to: number) => state.selection.ranges.some(range => range.from <= to && range.to >= from)
+  const visible = (from: number, to: number) => state.selection.ranges.some(range => !state.readOnly && range.from <= to && range.to >= from)
   const activeLine = (from: number) => {
     const line = state.doc.lineAt(from)
     return visible(line.from, line.to)
@@ -74,7 +80,7 @@ function liveMarkdown(view: EditorView) {
         ranges.push(Decoration.replace({ widget: new Bullet() }).range(from, to))
       }
       if (name === 'TaskMarker' && !activeLine(from)) {
-        ranges.push(Decoration.replace({ widget: new TaskBox(from, /x/i.test(state.sliceDoc(from, to))) }).range(from, to))
+        ranges.push(Decoration.replace({ widget: new TaskBox(from, /x/i.test(state.sliceDoc(from, to)), state.readOnly) }).range(from, to))
       }
       if (name === 'Link' && !visible(from, to)) {
         const labelEnd = node.node.getChildren('LinkMark')[1]
@@ -84,7 +90,7 @@ function liveMarkdown(view: EditorView) {
         }
       }
       if (markers.has(name) && parent && parent.name !== 'FencedCode') {
-        const inline = ['StrongEmphasis', 'Emphasis', 'Strikethrough', 'InlineCode'].includes(parent.name)
+        const inline = ['StrongEmphasis', 'Emphasis', 'Strikethrough', 'InlineCode', 'Highlight', 'Underline'].includes(parent.name)
         if (inline ? visible(parent.from, parent.to) : activeLine(from)) return
         const end = name === 'HeaderMark' || name === 'QuoteMark'
           ? to + (state.sliceDoc(to, Math.min(state.doc.length, to + 1)) === ' ' ? 1 : 0) : to
@@ -110,30 +116,56 @@ const live = ViewPlugin.fromClass(class {
   constructor(view: EditorView) { this.decorations = liveMarkdown(view) }
 
   update(update: ViewUpdate) {
-    if (update.docChanged || update.selectionSet || update.viewportChanged || syntaxTree(update.startState) !== syntaxTree(update.state)) {
+    if (update.startState.readOnly !== update.state.readOnly || update.docChanged || update.selectionSet || update.viewportChanged || syntaxTree(update.startState) !== syntaxTree(update.state)) {
       this.decorations = liveMarkdown(update.view)
     }
   }
 }, { decorations: plugin => plugin.decorations })
 
-const inserts = [
-  ['标题', '# 标题', '标题'], ['链接', '[链接文字](https://example.com)', '链接文字'],
-  ['图片', '![图片说明](图片路径)', '图片路径'], ['引用', '> 引用文字', '引用文字'],
-  ['无序列表', '- 列表项', '列表项'], ['有序列表', '1. 列表项', '列表项'],
-  ['任务列表', '- [ ] 待办事项', '待办事项'], ['代码块', '```text\n代码\n```', '代码\n'],
-  ['表格', '| 列一 | 列二 |\n| --- | --- |\n| 内容 | 内容 |', '列一'],
-  ['分隔线', '---', ''], ['公式块', '$$\n公式\n$$', '公式'], ['脚注', '[^1]\n\n[^1]: 注释', '注释'],
-] as const
+type OutlinePosition = 'left' | 'right'
+type StatusKind = 'words' | 'lines' | 'modified'
+type Width = 'narrow' | 'normal' | 'wide'
+type OpenMenu = 'outline' | 'more' | 'status' | { x: number; y: number }
 
-export function MarkdownEditor({ text, onChange, find }: { text: string; onChange: (text: string) => void; find: number }) {
+interface Props {
+  text: string
+  name: string
+  path: string
+  modified: number
+  platform: string
+  onChange: (text: string) => void
+  find: number
+  jump?: { line: number; id: number }
+  reveal: () => void
+  saveCopy: () => void
+  duplicate: () => void
+  move: () => void
+  trash: () => void
+  shortcuts: () => void
+  exportPdf: () => void
+  printDocument: () => void
+  pinned: boolean
+  starred: boolean
+  togglePin: () => void
+  toggleStar: () => void
+  report: (error: unknown) => void
+}
+
+export function MarkdownEditor({ text, name, path, modified, platform, onChange, find, jump, reveal, saveCopy, duplicate, move, trash, shortcuts, exportPdf, printDocument, pinned, starred, togglePin, toggleStar, report }: Props) {
   const host = useRef<HTMLDivElement>(null)
   const view = useRef<EditorView>(null)
   const change = useRef(onChange)
   const initial = useRef(text)
   const previousFind = useRef(find)
   const [source, setSource] = useState(false)
-  const [menu, setMenu] = useState<{ x: number; y: number }>()
-  const menuRef = useRef<HTMLDivElement>(null)
+  const [menu, setMenu] = useState<OpenMenu>()
+  const [outline, setOutline] = useState<OutlinePosition>()
+  const [status, setStatus] = useState<StatusKind>('words')
+  const [width, setWidth] = useState<Width>('normal')
+  const [reading, setReading] = useState(false)
+  const [info, setInfo] = useState(false)
+  const infoDialog = useRef<HTMLDialogElement>(null)
+  const readMode = useRef(new Compartment())
   const renderMode = useRef(new Compartment())
   change.current = onChange
 
@@ -146,10 +178,11 @@ export function MarkdownEditor({ text, onChange, find }: { text: string; onChang
       state: EditorState.create({
         doc: raw.slice(bom.length).replace(/\r\n|\r/g, '\n'),
         extensions: [
-          highlightSpecialChars(), history(), drawSelection(), keymap.of([...defaultKeymap, ...historyKeymap]), EditorView.lineWrapping, markdown({ extensions: [GFM], addKeymap: false }),
-          search({ top: true }), Prec.high(keymap.of([...markdownKeymap, ...searchKeymap])),
+          highlightSpecialChars(), history(), drawSelection(), keymap.of([...defaultKeymap, ...historyKeymap]), EditorView.lineWrapping, markdown({ extensions: [GFM, typoraMarkdown], addKeymap: false }),
+          search({ top: true }), Prec.high(keymap.of([...typographyKeys, ...markdownKeymap, ...searchKeymap])),
           EditorView.contentAttributes.of({ 'aria-label': 'Markdown 编辑器', spellcheck: 'false' }),
-          renderMode.current.of(live),
+          renderMode.current.of([live, renderedBlocks]),
+          readMode.current.of([]),
           EditorView.updateListener.of(update => {
             if (update.docChanged) change.current(bom + update.state.doc.toString().replaceAll('\n', newline))
           }),
@@ -161,72 +194,137 @@ export function MarkdownEditor({ text, onChange, find }: { text: string; onChang
   }, [])
 
   useEffect(() => {
-    view.current?.dispatch({ effects: renderMode.current.reconfigure(source ? [] : live) })
+    view.current?.dispatch({ effects: renderMode.current.reconfigure(source ? [] : [live, renderedBlocks]) })
   }, [source])
+  useEffect(() => {
+    view.current?.dispatch({ effects: readMode.current.reconfigure([
+      EditorState.readOnly.of(reading), EditorView.editable.of(!reading),
+    ]) })
+  }, [reading])
+  useEffect(() => {
+    if (info) infoDialog.current?.showModal()
+    else if (infoDialog.current?.open) infoDialog.current.close()
+  }, [info])
+  useEffect(() => {
+    const editor = view.current
+    if (!editor || !jump) return
+    const line = editor.state.doc.line(Math.min(jump.line, editor.state.doc.lines))
+    editor.dispatch({ selection: { anchor: line.from }, effects: EditorView.scrollIntoView(line.from, { y: 'center' }) })
+    editor.focus()
+  }, [jump])
   useEffect(() => {
     if (find !== previousFind.current && view.current) {
       openSearchPanel(view.current)
       previousFind.current = find
     }
   }, [find])
-  useEffect(() => {
-    if (!menu) return
-    menuRef.current?.querySelector('button')?.focus()
-    const close = (event: PointerEvent) => {
-      if (!menuRef.current?.contains(event.target as Node)) setMenu(undefined)
-    }
-    window.addEventListener('pointerdown', close)
-    return () => window.removeEventListener('pointerdown', close)
-  }, [menu])
-
-  function insert(label: string, snippet: string, selected: string) {
-    const editor = view.current!
-    const selection = editor.state.selection.main
-    const inline = label === '链接' || label === '图片' || label === '脚注'
-    const current = editor.state.sliceDoc(selection.from, selection.to)
-    let from = selection.from
-    let to = selection.to
-    let value = snippet
-    if (inline && current && label === '链接') value = snippet.replace('链接文字', () => current)
-    if (!inline) {
-      const line = editor.state.doc.lineAt(selection.to)
-      if (line.length && !current) {
-        from = line.to
-        to = line.to
-        value = (label === '分隔线' || label === '表格' || label === '代码块' || label === '公式块' ? '\n\n' : '\n') + value
-      }
-    }
-    const start = selected ? value.indexOf(selected) : -1
-    editor.dispatch({ changes: { from, to, insert: value }, selection: start < 0
-      ? { anchor: from + value.length } : { anchor: from + start, head: from + start + selected.trimEnd().length }, scrollIntoView: true })
-    setMenu(undefined)
-    editor.focus()
+  const close = () => setMenu(undefined)
+  const toggleMenu = (value: OpenMenu) => setMenu(current => current === value ? undefined : value)
+  const characters = markdownPlainText(text).replace(/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/gu, ' $& ').match(/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]|[\p{L}\p{N}]+(?:[.'’_-][\p{L}\p{N}]+)*|[^\u0000-\u007f\s]/gu)?.length ?? 0
+  const lineCount = text.split(/\r\n|\n|\r/).length
+  const updateTime = new Intl.DateTimeFormat('zh-CN', { dateStyle: 'short', timeStyle: 'short' }).format(modified)
+  const statusText = status === 'words' ? `${characters} 字` : status === 'lines' ? `${lineCount} 行` : updateTime
+  const headings: { pos: number; level: number; title: string }[] = []
+  const state = view.current?.state
+  if (outline && state) {
+    const tree = ensureSyntaxTree(state, state.doc.length, 30) ?? syntaxTree(state)
+    tree.iterate({ enter(node) {
+      const match = /^(?:ATX|Setext)Heading([1-6])$/.exec(node.name)
+      if (!match) return
+      const title = state.sliceDoc(node.from, node.to).split('\n')[0].replace(/^#{1,6}\s+|\s+#+\s*$/g, '').trim()
+      if (title) headings.push({ pos: node.from, level: Number(match[1]), title })
+    } })
   }
 
-  return <div className="markdown-editor" data-source={source}>
-    <div className="editor-tools"><button className="tool-button" aria-pressed={source} title="切换 Markdown 源码"
-      onClick={() => { setSource(!source); view.current?.focus() }}><Code2 size={15} />源码</button></div>
-    <div className="markdown-surface" ref={host} onContextMenu={event => {
-      const editor = view.current
-      if (!editor) return
-      event.preventDefault()
-      const pos = editor.posAtCoords({ x: event.clientX, y: event.clientY })
-      const selection = editor.state.selection.main
-      if (pos !== null && (pos < selection.from || pos > selection.to)) editor.dispatch({ selection: { anchor: pos } })
-      setMenu({ x: Math.min(event.clientX, window.innerWidth - 168), y: Math.min(event.clientY, window.innerHeight - 420) })
-    }} />
-    {menu && <div className="context-menu" role="menu" ref={menuRef} style={{ left: menu.x, top: Math.max(6, menu.y) }}
-      onKeyDown={event => {
-        if (event.key === 'Escape') { setMenu(undefined); view.current?.focus() }
-        if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
-          const items = [...event.currentTarget.querySelectorAll('button')]
-          const index = items.indexOf(document.activeElement as HTMLButtonElement)
-          items[(index + items.length + (event.key === 'ArrowDown' ? 1 : -1)) % items.length]?.focus()
-          event.preventDefault()
-        }
-      }}>
-      <div className="menu-label">插入</div>
-      {inserts.map(([label, snippet, selected]) => <button key={label} role="menuitem" onClick={() => insert(label, snippet, selected)}>{label}</button>)}
-    </div>}
+  const outlineItems: MenuItem[] = [
+    { label: '在左侧显示', icon: <ChevronsLeft size={16} />, selected: outline === 'left', run: () => setOutline('left') },
+    { label: '在右侧显示', icon: <ChevronsRight size={16} />, selected: outline === 'right', run: () => setOutline('right') },
+    ...(outline ? [{ label: '收起目录', run: () => setOutline(undefined) }] : []),
+  ]
+  const docItems: MenuItem[] = [
+    { label: '页宽设置', icon: <BetweenHorizontalStart size={16} />, children: [
+      { label: '窄', selected: width === 'narrow', run: () => setWidth('narrow') },
+      { label: '标准', selected: width === 'normal', run: () => setWidth('normal') },
+      { label: '宽', selected: width === 'wide', run: () => setWidth('wide') },
+    ] },
+    { label: '查找和替换', icon: <Search size={16} />, separator: true, run: () => { if (view.current) openSearchPanel(view.current) } },
+    { label: '移动到', icon: <FolderInput size={16} />, separator: true, run: move },
+    { label: pinned ? '从“置顶”移除' : '添加到“置顶”', icon: <Pin size={16} />, run: togglePin },
+    { label: starred ? '取消收藏' : '添加到收藏', icon: <Star size={16} />, run: toggleStar },
+    { label: '创建副本', icon: <Copy size={16} />, separator: true, run: duplicate },
+    { label: '下载为', icon: <FileDown size={16} />, children: [
+      { label: 'Markdown', icon: <FileText size={16} />, run: saveCopy },
+      { label: 'PDF', icon: <FileDown size={16} />, run: exportPdf },
+    ] },
+    { label: '打印', icon: <Printer size={16} />, separator: true, run: printDocument },
+    { label: '文档信息', icon: <Info size={16} />, separator: true, run: () => setInfo(true) },
+    { label: '源码模式', icon: <Code2 size={16} />, separator: true, selected: source, run: () => { setSource(!source); view.current?.focus() } },
+    { label: '更多', icon: <MoreHorizontal size={16} />, children: [
+      { label: reading ? '编辑模式' : '阅读模式', icon: <Eye size={16} />, run: () => setReading(!reading) },
+      { label: '插入 Mermaid 图', icon: <ListTree size={16} />, disabled: reading, run: () => { if (view.current) { insertMermaid(view.current); view.current.focus() } } },
+      { label: '在文件管理器中显示', icon: <LocateFixed size={16} />, run: reveal },
+      { label: '拷贝文件路径', icon: <Copy size={16} />, run: () => { void navigator.clipboard.writeText(path).catch(report) } },
+    ] },
+    { label: '删除', icon: <Trash2 size={16} />, run: trash },
+    { label: '快捷键', icon: <Keyboard size={16} />, separator: true, run: shortcuts },
+  ]
+  const statusItems: MenuItem[] = ([
+    ['words', '字数'], ['lines', '行数'], ['modified', '更新时间'],
+  ] as const).map(([value, label]) => ({ label, selected: status === value, run: () => setStatus(value) }))
+
+  return <div className="markdown-editor" data-source={source} data-width={width}>
+    <div className="editor-tools">
+      <div className="menu-anchor">
+        <button className="icon-button" title="文档目录" aria-label="文档目录" aria-haspopup="menu" aria-expanded={menu === 'outline'}
+          onClick={() => toggleMenu('outline')}><ListTree size={17} /></button>
+        {menu === 'outline' && <MarkdownMenu items={outlineItems} close={close} />}
+      </div>
+      <div className="menu-anchor">
+        <button className="icon-button" title="更多操作" aria-label="更多操作" aria-haspopup="menu" aria-expanded={menu === 'more'}
+          onClick={() => toggleMenu('more')}><MoreHorizontal size={20} /></button>
+        {menu === 'more' && <MarkdownMenu items={docItems} close={close} />}
+      </div>
+    </div>
+    <div className="document-editing" data-outline={outline}>
+      {outline && <aside className="document-outline" aria-label="Markdown 标题目录">
+        <header><strong>目录</strong><button className="icon-button" title="收起目录" aria-label="收起目录" onClick={() => setOutline(undefined)}>
+          {outline === 'left' ? <ChevronsLeft size={16} /> : <ChevronsRight size={16} />}</button></header>
+        <nav>{headings.map(heading => <button type="button" key={heading.pos}
+          style={{ paddingLeft: 8 + (heading.level - 1) * 11 }} title={heading.title} onClick={() => {
+            const editor = view.current
+            if (!editor) return
+            editor.dispatch({ selection: { anchor: heading.pos }, effects: EditorView.scrollIntoView(heading.pos, { y: 'start', yMargin: 20 }) })
+            if (!reading) editor.focus()
+          }}>{heading.title}</button>)}</nav>
+        {!headings.length && <p>还没有标题</p>}
+      </aside>}
+      <div className="markdown-surface" ref={host} onContextMenu={event => {
+        const editor = view.current
+        if (!editor) return
+        event.preventDefault()
+        const pos = editor.posAtCoords({ x: event.clientX, y: event.clientY })
+        const selection = editor.state.selection.main
+        if (pos !== null && (pos < selection.from || pos > selection.to)) editor.dispatch({ selection: { anchor: pos } })
+        setMenu({ x: event.clientX, y: event.clientY })
+      }} />
+    </div>
+    {typeof menu === 'object' && view.current && <MarkdownMenu point={menu} nativeStyle
+      items={contextItems(view.current, platform, report, reading)} close={() => { close(); view.current?.focus() }} />}
+    <footer className="document-status">
+      <div className="menu-anchor">
+        <button className="tool-button" aria-haspopup="menu" aria-expanded={menu === 'status'} title="切换文档统计" onClick={() => toggleMenu('status')}>{statusText}</button>
+        {menu === 'status' && <MarkdownMenu items={statusItems} close={close} upward />}
+      </div>
+    </footer>
+    <dialog ref={infoDialog} onCancel={event => { event.preventDefault(); setInfo(false) }}>
+      <h2>文档信息</h2>
+      <dl className="document-info">
+        <dt>名称</dt><dd>{name}</dd>
+        <dt>位置</dt><dd>{path}</dd>
+        <dt>统计</dt><dd>{characters} 字 · {lineCount} 行</dd>
+        <dt>更新</dt><dd>{updateTime}</dd>
+      </dl>
+      <footer><button type="button" onClick={() => setInfo(false)}><Check size={14} />完成</button></footer>
+    </dialog>
   </div>
 }

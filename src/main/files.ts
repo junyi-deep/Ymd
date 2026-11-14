@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { lstat, mkdir, readFile, readdir, realpath, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { lstat, mkdir, link, unlink, readFile, readdir, realpath, rename, rm, stat, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import type { DocumentFile, Entry, FileKind } from '../shared/contracts'
 
@@ -37,6 +37,10 @@ export class Files {
     return this.read(canonical)
   }
 
+  retainRoots(entries: Entry[]) {
+    this.roots = new Set(entries.map(entry => entry.path))
+  }
+
   private async resolve(file: string, directory = false) {
     if (typeof file !== 'string' || !path.isAbsolute(file)) throw new Error('路径无效。')
     const canonical = await realpath(file)
@@ -62,7 +66,7 @@ export class Files {
     return entries.sort((a, b) => Number(b.kind === 'directory') - Number(a.kind === 'directory') || a.name.localeCompare(b.name, undefined, { numeric: true }))
   }
 
-  async read(file: string): Promise<DocumentFile> {
+  async read(file: string, keepAccess = false): Promise<DocumentFile> {
     const canonical = await this.resolve(file)
     const kind = fileKind(canonical)
     if (!kind) throw new Error('文件类型不受支持。')
@@ -73,24 +77,66 @@ export class Files {
     } catch {
       throw new Error('文件不是有效的 UTF-8 文本。')
     }
-    return { path: canonical, name: path.basename(canonical), kind, text, version: versionOf(data) }
+    if (keepAccess) this.singles.add(canonical)
+    return { path: canonical, name: path.basename(canonical), kind, text, version: versionOf(data), modified: (await stat(canonical)).mtimeMs }
   }
 
-  async create(directory: string, name: string, kind: FileKind) {
+  async create(directory: string, kind: FileKind) {
     const root = await this.resolve(directory, true)
     if (kind !== 'markdown' && kind !== 'drawing') throw new Error('文件类型不受支持。')
-    if (typeof name !== 'string' || !name.trim() || name.startsWith('.') || /[<>:"/\\|?*\x00-\x1f]|[. ]$/.test(name) ||
-      /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(name)) throw new Error('请输入有效的文件名。')
     const extension = kind === 'markdown' ? '.md' : '.excalidraw'
-    const file = path.join(root, name.toLowerCase().endsWith(extension) ? name : name + extension)
+    const label = kind === 'markdown' ? '未命名' : '未命名绘图'
     const contents = kind === 'markdown' ? '' : JSON.stringify({ type: 'excalidraw', version: 2, elements: [], appState: {}, files: {} }, null, 2)
+    return this.writeNew(root, label, extension, contents)
+  }
+
+  private async writeNew(directory: string, label: string, extension: string, text: string) {
+    for (let count = 1; ; count++) {
+      const file = path.join(directory, label + (count === 1 ? '' : ` ${count}`) + extension)
+      try {
+        await writeFile(file, text, { flag: 'wx', flush: true })
+        return this.read(file, true)
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+      }
+    }
+  }
+
+  async duplicate(file: string, directory: string, text: string) {
+    const original = await this.resolve(file)
+    const target = await this.resolve(directory, true)
+    const extension = path.extname(original)
+    return this.writeNew(target, path.basename(original, extension) + ' 副本', extension, text)
+  }
+
+  async move(file: string, directory: string, version: string) {
+    const original = await this.resolve(file)
+    const target = await this.resolve(directory, true)
+    const destination = path.join(target, path.basename(original))
+    if (original === destination) return this.read(original, true)
+    if (versionOf(await readFile(original)) !== version) throw new Error('磁盘上的文件已变化，请重新载入后移动。')
     try {
-      await writeFile(file, contents, { flag: 'wx' })
+      await link(original, destination)
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'EEXIST') throw new Error('该名称已存在，请换一个文件名。')
+      const code = (error as NodeJS.ErrnoException).code
+      if (code === 'EEXIST') throw new Error('目标目录中已有同名文件。')
+      if (code === 'EXDEV' || code === 'ENOTSUP') throw new Error('该目录位于其他磁盘或卷，无法直接移动。')
       throw error
     }
-    return this.read(file)
+    try {
+      await unlink(original)
+    } catch (error) {
+      await unlink(destination).catch(() => {})
+      throw error
+    }
+    this.singles.delete(original)
+    return this.read(destination, true)
+  }
+
+  async authorizedFile(file: string) {
+    const canonical = await this.resolve(file)
+    if (!fileKind(canonical)) throw new Error('文件类型不受支持。')
+    return canonical
   }
 
   save(file: string, text: string, version: string) {
@@ -121,7 +167,10 @@ export class Files {
         await writeFile(temp, data, { flag: 'wx', mode, flush: true })
         if (!await check() || await this.resolve(file) !== canonical) return { conflict: true } as const
         await rename(temp, canonical)
-        return { version: versionOf(data) }
+        return {
+          version: versionOf(data),
+          modified: await stat(canonical).then(info => info.mtimeMs, () => Date.now()),
+        }
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { conflict: true } as const
         throw error

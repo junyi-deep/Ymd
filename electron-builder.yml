@@ -6,6 +6,10 @@ files:
   - dist/**/*
   - package.json
 mac:
+  icon: build/icon.icns
+  extraResources:
+    - from: node_modules/@vscode/ripgrep-universal/bin/darwin-arm64/rg
+      to: ripgrep/rg
   category: public.app-category.productivity
   target:
     - target: dmg
@@ -13,7 +17,14 @@ mac:
 toolsets:
   nsis: "1.2.1"
 win:
+  icon: build/icon.ico
+  extraResources:
+    - from: node_modules/@vscode/ripgrep-universal/bin/win32-x64/rg.exe
+      to: ripgrep/rg.exe
   target:
     - target: nsis
       arch: [x64]
 artifactName: ${productName}-${version}-${os}-${arch}.${ext}
+extraResources:
+  - from: node_modules/@vscode/ripgrep-universal/LICENSE
+    to: ripgrep/LICENSE

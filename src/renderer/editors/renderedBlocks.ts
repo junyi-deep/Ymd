@@ -1,0 +1,84 @@
+import { EditorState, StateField, type Range } from '@codemirror/state'
+import { syntaxTree } from '@codemirror/language'
+import { Decoration, EditorView, WidgetType, type DecorationSet } from '@codemirror/view'
+import DOMPurify from 'dompurify'
+
+class RenderedBlock extends WidgetType {
+  constructor(readonly code: string, readonly kind: 'mermaid' | 'math', readonly readOnly: boolean) { super() }
+
+  eq(other: RenderedBlock) { return this.code === other.code && this.kind === other.kind && this.readOnly === other.readOnly }
+
+  toDOM(view: EditorView) {
+    const figure = document.createElement('figure')
+    figure.className = 'mermaid-preview'
+    const diagram = this.kind === 'mermaid'
+    figure.setAttribute('aria-label', diagram ? 'Mermaid 图' : '公式块')
+    const edit = document.createElement('button')
+    edit.type = 'button'
+    edit.hidden = this.readOnly
+    edit.className = 'tool-button mermaid-edit'
+    edit.textContent = diagram ? '编辑图表' : '编辑公式'
+    const content = document.createElement('div')
+    content.className = 'mermaid-content'
+    content.textContent = diagram ? '正在绘制 Mermaid 图…' : '正在渲染公式…'
+    figure.append(edit, content)
+    edit.addEventListener('click', () => {
+      const position = view.posAtDOM(figure)
+      const line = view.state.doc.lineAt(position)
+      const next = view.state.doc.line(Math.min(line.number + 1, view.state.doc.lines))
+      view.dispatch({ selection: { anchor: next.from }, scrollIntoView: true })
+      view.focus()
+    })
+
+    const render = diagram ? import('pele/lazy').then(({ renderAsync }) => renderAsync(this.code, {
+      responsive: true, links: false, images: false, idPrefix: 'ymd-' + crypto.randomUUID().replaceAll('-', ''),
+    })).then(({ svg }) => {
+      content.innerHTML = DOMPurify.sanitize(svg, {
+        USE_PROFILES: { svg: true, svgFilters: true },
+        FORBID_TAGS: ['style', 'foreignObject', 'a', 'image'],
+      })
+    }) : Promise.all([import('katex'), import('katex/dist/katex.min.css')]).then(([katex]) => {
+      katex.default.render(this.code, content, { displayMode: true, trust: false, maxExpand: 1000 })
+    })
+    void render.catch(error => {
+      content.classList.add('mermaid-error')
+      content.textContent = (diagram ? 'Mermaid 无法渲染。' : '公式无法渲染。') + (error instanceof Error ? error.message : '')
+    }).finally(() => { if (figure.isConnected) view.requestMeasure() })
+    return figure
+  }
+}
+
+function previews(state: EditorState): DecorationSet {
+  const ranges: Range<Decoration>[] = []
+  syntaxTree(state).iterate({ enter(node) {
+    if (node.name === 'Paragraph') {
+      const raw = state.sliceDoc(node.from, node.to)
+      const math = /^\$\$[ \t]*\n([\s\S]+)\n\$\$[ \t]*$/.exec(raw)
+      if (!math || state.selection.ranges.some(range => !state.readOnly && range.from <= node.to && range.to >= node.from)) return
+      ranges.push(Decoration.replace({ block: true, widget: new RenderedBlock(math[1], 'math', state.readOnly) }).range(node.from, node.to))
+      return false
+    }
+    if (node.name !== 'FencedCode') return
+    const info = node.node.getChild('CodeInfo')
+    const end = node.node.lastChild
+    if (!info || end?.name !== 'CodeMark' || end.from <= info.to ||
+      state.sliceDoc(info.from, info.to).trim().toLowerCase() !== 'mermaid') return false
+    if (state.selection.ranges.some(range => !state.readOnly && range.from <= node.to && range.to >= node.from)) return false
+    const start = state.doc.lineAt(node.from)
+    const closing = state.doc.lineAt(end.from)
+    if (start.from !== node.from || state.sliceDoc(end.to, closing.to).trim()) return false
+    const code = state.sliceDoc(start.to + 1, closing.from).trim()
+    if (code) ranges.push(Decoration.replace({ block: true, widget: new RenderedBlock(code, 'mermaid', state.readOnly) }).range(start.from, closing.to))
+    return false
+  } })
+  return Decoration.set(ranges)
+}
+
+export const renderedBlocks = StateField.define({
+  create: previews,
+  update(value, transaction) {
+    return transaction.startState.readOnly !== transaction.state.readOnly || transaction.docChanged || transaction.selection || syntaxTree(transaction.startState) !== syntaxTree(transaction.state)
+      ? previews(transaction.state) : value
+  },
+  provide: field => EditorView.decorations.from(field),
+})
