@@ -86,6 +86,7 @@ export interface Desktop {
   readMarkdownImage(path: string, source: string): Promise<string | null>
   markdownContextMenu(x: number, y: number, items: ContextMenuItem[]): Promise<number | null>
   exportPdf(name: string, html: string): Promise<boolean>
+  saveXmind(name: string, data: ArrayBuffer): Promise<boolean>
   printDocument(name: string, html: string): Promise<void>
   saveCopy(path: string, text: string): Promise<DocumentFile | null>
   reveal(path: string): Promise<void>

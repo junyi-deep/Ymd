@@ -234,6 +234,16 @@ void app.whenReady().then(async () => {
     await writeFile(result.filePath, data)
     return true
   })
+  handle('saveXmind', async (name: string, data: ArrayBuffer) => {
+    if (typeof name !== 'string' || !(data instanceof ArrayBuffer) || data.byteLength < 4 ||
+        new DataView(data).getUint32(0) !== 0x504b0304) throw new Error('Xmind 文件内容无效。')
+    const title = name.replace(/[<>:"/\\|?*\u0000-\u001f]/g, '_').replace(/[. ]+$/, '').slice(0, 120) || '思维导图'
+    const result = await dialog.showSaveDialog(window!, { defaultPath: title + '.xmind', filters: [{ name: 'Xmind', extensions: ['xmind'] }] })
+    if (result.canceled || !result.filePath) return false
+    const destination = /\.xmind$/i.test(result.filePath) ? result.filePath : result.filePath + '.xmind'
+    await writeFile(destination, Buffer.from(data), { flush: true })
+    return true
+  })
   handle('printDocument', (name: string, html: string) => printView(name, html, view => new Promise<void>((resolve, reject) => {
     view.webContents.print({ printBackground: true }, (printed, reason) => {
       if (printed || reason === 'Print job canceled') resolve()

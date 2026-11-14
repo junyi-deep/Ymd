@@ -18,6 +18,9 @@ declare module 'simple-mind-map' {
     data_change: [data: NodeData]
     afterExecCommand: [command: string]
     node_active: [node: MapNode | null, active: MapNode[]]
+    node_click: [node: MapNode]
+    draw_click: []
+    contextmenu: []
     node_contextmenu: [event: MouseEvent, node: MapNode]
     scale: [scale: number]
     search_info_change: [info: { total: number; currentIndex: number }]
@@ -42,7 +45,7 @@ declare module 'simple-mind-map' {
       onViewBoxMousemove(event: { clientX: number; clientY: number }): void
       onMouseup(): void
     }
-    associativeLine: { createLineFromActiveNode(): void; cancelCreateLine(): void }
+    associativeLine: { isCreatingLine: boolean; createLineFromActiveNode(): void; cancelCreateLine(): void }
     search: { search(text: string): void; endSearch(): void; searchNext(): void; replace(text: string, jumpNext?: boolean): void; replaceAll(text: string): void }
     constructor(options: {
       el: HTMLElement
@@ -73,6 +76,15 @@ declare module 'simple-mind-map' {
     execCommand(command: string, ...args: unknown[]): void
     export(format: string, download: boolean, name: string): Promise<unknown>
     destroy(): void
+  }
+}
+
+declare module 'simple-mind-map/src/plugins/AssociativeLine.js' {
+  export default class AssociativeLine {
+    protected isCreatingLine: boolean
+    protected creatingStartNode: object | null
+    protected checkOverlapNode(x: number, y: number): void
+    cancelCreateLine(): void
   }
 }
 
