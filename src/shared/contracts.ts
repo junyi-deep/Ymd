@@ -43,6 +43,7 @@ export interface ContextMenuItem {
   id?: number
   shortcut?: string
   disabled?: boolean
+  selected?: boolean
   separator?: boolean
   children?: ContextMenuItem[]
 }

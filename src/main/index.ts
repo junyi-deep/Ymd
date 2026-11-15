@@ -239,6 +239,7 @@ void app.whenReady().then(async () => {
       return [
         ...(item.separator ? [{ type: 'separator' } as const] : []),
         { label, submenu, enabled: item.disabled !== true, accelerator, registerAccelerator: false,
+          ...(!submenu && typeof item.selected === 'boolean' ? { type: 'checkbox' as const, checked: item.selected } : {}),
           click: () => resolve(Number.isSafeInteger(item.id) ? item.id! : null) },
       ]
     })

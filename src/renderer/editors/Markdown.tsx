@@ -3,7 +3,8 @@ import { BetweenHorizontalStart, Check, ChevronsLeft, ChevronsRight, Code2, Copy
 import { MarkdownMenu, type MenuItem } from './MarkdownMenu'
 import { contextItems, insertMermaid, typographyKeys } from './markdownCommands'
 import { markdownPlainText } from './markdownHtml'
-import { editImageReference, imageContextItems, markdownImageIntake } from './markdownImages'
+import { editImageReference, imageContextItems, isImageNode, MarkdownImage, markdownImageIntake, readImageReference, type ImageResizeRequest } from './markdownImages'
+import { MarkdownImageSize } from './MarkdownImageSize'
 import { renderedBlocks } from './renderedBlocks'
 import { insertTable, markdownTable } from './markdownTable'
 import { expandMetadata, FootnoteReference, footnotes, insertFootnote, insertMetadata, markdownNotes, markdownWithMetadata, referenceNote } from './markdownNotes'
@@ -36,47 +37,6 @@ class TaskBox extends WidgetType {
       from: this.position + 1, to: this.position + 2, insert: box.checked ? 'x' : ' ',
     } }))
     return box
-  }
-}
-
-class MarkdownImage extends WidgetType {
-  constructor(readonly file: string, readonly source: string, readonly label: string, readonly loadRemote: boolean) { super() }
-
-  eq(other: MarkdownImage) {
-    return this.file === other.file && this.source === other.source && this.label === other.label && this.loadRemote === other.loadRemote
-  }
-
-  toDOM(view: EditorView) {
-    const wrapper = document.createElement('span')
-    wrapper.className = 'md-image'
-    const label = this.label || '图像'
-    const display = (source: string) => {
-      const image = document.createElement('img')
-      image.alt = label
-      image.referrerPolicy = 'no-referrer'
-      image.addEventListener('load', () => view.requestMeasure(), { once: true })
-      image.addEventListener('error', () => { wrapper.textContent = label + ' · 无法读取图像' }, { once: true })
-      wrapper.replaceChildren(image)
-      image.src = source
-    }
-    if (/^https?:\/\//i.test(this.source)) {
-      if (this.loadRemote) display(this.source)
-      else {
-        const button = document.createElement('button')
-        button.type = 'button'
-        button.textContent = label + ' · 加载网络图像'
-        button.addEventListener('click', () => display(this.source))
-        wrapper.append(button)
-      }
-    } else if (/^data:image\/(png|jpeg|gif|webp|avif|bmp);base64,/i.test(this.source)) display(this.source)
-    else {
-      wrapper.textContent = label
-      void window.desktop.readMarkdownImage(this.file, this.source).then(source => {
-        if (source) display(source)
-        else wrapper.textContent = label + ' · 找不到图像'
-      }, () => { wrapper.textContent = label + ' · 无法读取图像' })
-    }
-    return wrapper
   }
 }
 
@@ -131,13 +91,12 @@ function liveMarkdown(view: EditorView, path: string, loadRemote: boolean) {
       if (name === 'TaskMarker' && !activeLine(from)) {
         ranges.push(Decoration.replace({ widget: new TaskBox(from, /x/i.test(state.sliceDoc(from, to)), state.readOnly) }).range(from, to))
       }
-      if (name === 'Image' && (state.readOnly || !state.selection.ranges.some(range => range.from < to && range.to > from))) {
-        const url = node.node.getChild('URL')
-        const end = node.node.getChildren('LinkMark')[1]
-        if (url && end) {
-          const src = state.sliceDoc(url.from, url.to).replace(/^<|>$/g, '')
-          const label = state.sliceDoc(from + 2, end.from).replace(/\\([\\[\]])/g, '$1')
-          if (sourceLine.to >= to) ranges.push(Decoration.replace({ widget: new MarkdownImage(path, src, label, loadRemote) }).range(from, to))
+      if (isImageNode(name)) {
+        const editing = !state.readOnly && state.selection.ranges.some(range => range.from < to && range.to > from)
+        const reference = !editing && sourceLine.to >= to ? readImageReference(state, node.node) : undefined
+        if (reference) {
+          const standalone = sourceLine.text.trim() === reference.markdown
+          ranges.push(Decoration.replace({ widget: new MarkdownImage(path, reference, loadRemote, standalone) }).range(from, to))
         }
         return false
       }
@@ -226,6 +185,7 @@ export function MarkdownEditor({ text, name, path, modified, platform, remoteIma
   const [width, setWidth] = useState<Width>('normal')
   const [reading, setReading] = useState(false)
   const [info, setInfo] = useState(false)
+  const [imageResize, setImageResize] = useState<ImageResizeRequest>()
   const infoDialog = useRef<HTMLDialogElement>(null)
   const tableDialog = useRef<HTMLDialogElement>(null)
   const readMode = useRef(new Compartment())
@@ -356,6 +316,7 @@ export function MarkdownEditor({ text, name, path, modified, platform, remoteIma
         id: item.run ? mapping.push(item.run) - 1 : undefined,
         shortcut: item.shortcut,
         disabled: item.disabled,
+        selected: item.selected,
         separator: item.separator,
         children: item.children ? serialize(item.children) : undefined,
       }
@@ -415,7 +376,7 @@ export function MarkdownEditor({ text, name, path, modified, platform, remoteIma
         if (!editor) return
         event.preventDefault()
         close()
-        const imageItems = event.target instanceof Element ? imageContextItems(editor, event.target, report) : undefined
+        const imageItems = event.target instanceof Element ? imageContextItems(editor, event.target, report, setImageResize) : undefined
         if (imageItems) {
           openContextMenu(editor, event.clientX, event.clientY, imageItems)
           return
@@ -433,6 +394,7 @@ export function MarkdownEditor({ text, name, path, modified, platform, remoteIma
         {menu === 'status' && <MarkdownMenu items={statusItems} close={close} upward />}
       </div>
     </footer>
+    {imageResize && <MarkdownImageSize request={imageResize} close={() => setImageResize(undefined)} />}
     <dialog ref={tableDialog} aria-label="插入表格">
       <form onSubmit={event => {
         event.preventDefault()

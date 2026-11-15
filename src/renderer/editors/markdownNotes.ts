@@ -8,8 +8,9 @@ import { Parser, type Input, type TreeFragment } from '@lezer/common'
 import { GFM } from '@lezer/markdown'
 import { footnoteDefinition, metadataClosing as closing, metadataOpening as opening, typoraMarkdown } from './markdownExtras'
 import { markdownInlineHtml } from './markdownHtml'
+import { markdownImageTags } from './markdownImageSyntax'
 
-const markdownLanguage = markdown({ extensions: [GFM, typoraMarkdown], addKeymap: false })
+const markdownLanguage = markdown({ extensions: [GFM, typoraMarkdown, markdownImageTags], addKeymap: false })
 const mixedLanguage = yamlFrontmatter({ content: markdownLanguage })
 
 class MarkdownWithMetadata extends Parser {

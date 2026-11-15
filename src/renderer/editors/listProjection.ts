@@ -1,5 +1,6 @@
 import { GFM, parser } from '@lezer/markdown'
 import type { SyntaxNode } from '@lezer/common'
+import { markdownImageTags } from './markdownImageSyntax'
 
 export interface Block {
   id: string
@@ -16,7 +17,7 @@ export interface Projection {
   separator?: string
 }
 
-const markdown = parser.configure(GFM)
+const markdown = parser.configure([GFM, markdownImageTags])
 export const newBlock = (text = '', marker = '-'): Block => ({ id: crypto.randomUUID(), text, marker, children: [] })
 
 export function projectList(text: string): Projection | undefined {
@@ -46,12 +47,21 @@ export function projectList(text: string): Projection | undefined {
       if (!mark || !/^[-+*]$/.test(source.slice(mark.from, mark.to))) return
       const indent = mark.from - Math.max(source.lastIndexOf('\n', mark.from - 1), source.lastIndexOf('\r', mark.from - 1)) - 1
       const sublist = item.getChild('BulletList')
-      const body = item.getChild('Task') ?? item.getChild('Paragraph')
-      const expected = 1 + Number(!!body) + Number(!!sublist)
+      const first = mark.nextSibling
+      const body = first && ['Task', 'Paragraph', 'HtmlImageBlock'].includes(first.name) ? first : undefined
+      let bodyEnd = body?.to ?? mark.to
+      let bodyParts = Number(!!body)
+      if (body?.name === 'HtmlImageBlock') {
+        // A sized image is a block token but can share the list item's text with following lines.
+        let part = body.nextSibling
+        while (part?.name === 'HtmlImageBlock') { bodyEnd = part.to; bodyParts++; part = part.nextSibling }
+        if (part?.name === 'Paragraph') { bodyEnd = part.to; bodyParts++ }
+      }
+      const expected = 1 + bodyParts + Number(!!sublist)
       let count = 0
       for (let part = item.firstChild; part; part = part.nextSibling) count++
-      if (count !== expected || (body && sublist && body.to > sublist.from)) return
-      const limit = body?.to ?? mark.to
+      if (count !== expected || (sublist && bodyEnd > sublist.from)) return
+      const limit = bodyEnd
       const bodyLines = source.slice(mark.to, limit).split(/\r\n|\n|\r/)
       if (bodyLines[0] && !bodyLines[0].startsWith(' ')) return
       if (bodyLines.slice(1).some(line => !line.startsWith(' '.repeat(indent + 2)) || !line.trim())) return

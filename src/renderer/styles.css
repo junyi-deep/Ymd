@@ -420,9 +420,12 @@ dialog button.primary { background: var(--accent); color: var(--accent-ink); }
 :root[data-theme="dark"] .md-highlight { background: #7d6230; color: #fff0bd; }
 .md-underline { text-decoration: underline; text-underline-offset: .14em; }
 
-.md-image { display: inline-block; max-width: 100%; vertical-align: middle; }
-.md-image img { display: block; max-width: min(660px, 100%); max-height: 55vh; object-fit: contain; border-radius: 5px; }
+.markdown-surface .cm-line:has(> .md-image[data-standalone]) { text-align: center; }
+.md-image img { display: inline-block; vertical-align: middle; max-width: min(660px, 100%); max-height: 55vh; height: auto; object-fit: contain; border-radius: 5px; }
+.md-image[data-sized] img { max-width: 100%; max-height: none; object-fit: fill; }
 .md-image button { color: var(--link); text-decoration: underline; text-underline-offset: .15em; }
+.image-size-help { margin-top: 7px; color: var(--muted); font-size: .9em; }
+#image-size-title ~ footer button:disabled { opacity: .5; cursor: default; }
 .map-canvas:focus { outline: none; }
 .map-task-dialog { width: min(460px, calc(100vw - 32px)); }
 .map-link-dialog { width: min(440px, calc(100vw - 32px)); }
