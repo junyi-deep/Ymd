@@ -15,6 +15,7 @@ import SearchPlugin from 'simple-mind-map/src/plugins/Search.js'
 import Select from 'simple-mind-map/src/plugins/Select.js'
 import { UnsupportedList } from './Outline'
 import { projectList, writeList, type Block } from './listProjection'
+import type { DocumentFile, Entry } from '../../shared/contracts'
 import { MindMapFormat } from './MindMapFormat'
 import { MindMapTask, taskBadge, taskTopics, todoBadge } from './MindMapTask'
 import { MindMapGantt } from './MindMapGantt'
@@ -28,9 +29,10 @@ import { MindMapLink, type LinkSheet, type LinkType } from './MindMapLink'
 import { addTopicImage, applyArt, imagePlacements, installTopicImageGestures, isTopicImage, placeTopicImage, removeTopicImage, resetTopicImage, topicAcceptsArt } from './mapTopicImages'
 import { audioButton, audioTitle, createAudioPlayer, forgetAudio, loadAudio, readAudioNote, storeAudio, type AudioNote } from './mapAudio'
 import { MarkdownMenu, type MenuItem } from './MarkdownMenu'
-import { branchStructure, decodeImportedTopic, defaultMapSettings, encodeImportedTopic, loadMapAppearance, mapTheme, palettes, rememberImportedSheet, restoreFloating, restoreMapStyles, saveMapAppearance, saveMapSheets, type MapAppearance, type MapData, type MapSettings, type MapSheet } from './mapAppearance'
+import { branchStructure, defaultMapSettings, encodeImportedTopic, loadMapAppearance, mapTheme, palettes, rememberImportedSheet, saveMapAppearance, saveMapSheets, type MapData, type MapSettings, type MapSheet } from './mapAppearance'
 import { installBranchLayouts } from './mixedMapLayout'
 import { findTopic, listBacklinks, listMapTopics, mainSheetId, readTopicLink, remapCopiedLinks, type TopicLink } from './mapTopicLinks'
+import { documentBacklinks, documentTopics, mainMap, mapDocumentPath, mapTitle, primaryMapSheet } from './mapDocumentLinks'
 import { installCallouts } from './calloutLayer'
 import { MindMapCalloutFormat, MindMapCalloutText } from './MindMapCallout'
 import { calloutById, calloutTopicId, readCallouts, type Callout, type CalloutTarget } from './mapCallouts'
@@ -51,7 +53,6 @@ MindMap.extendNodeDataNoStylePropList(['ymdMarker', 'ymdFloating', 'ymdTask', 'y
 
 type MapNode = NonNullable<MindMap['renderer']['root']>
 type TopicField = '备注' | '标签'
-const mapTitle = (name: string) => name.replace(/\.(?:md|markdown)$/i, '')
 
 function downloadAttachment(source: unknown, name: unknown) {
   if (typeof source !== 'string' || !source.startsWith('data:application/octet-stream;base64,')) return
@@ -59,23 +60,6 @@ function downloadAttachment(source: unknown, name: unknown) {
   anchor.href = source
   anchor.download = typeof name === 'string' ? name : '附件'
   anchor.click()
-}
-
-function markdownTopicId(block: Block) {
-  // A different topic at the same Markdown offset must not inherit links to the old one.
-  let hash = 2166136261
-  for (let index = 0; index < block.text.length; index++) {
-    hash = Math.imul(hash ^ block.text.charCodeAt(index), 16777619)
-  }
-  return 'md-' + block.id + '-' + (hash >>> 0).toString(36)
-}
-
-const toMap = (blocks: Block[]): MapData[] => blocks.map(block => ({
-  data: { text: block.text, uid: markdownTopicId(block), ymdMarker: block.marker }, children: toMap(block.children),
-}))
-
-function documentTopics(nodes: MapData[]): MapData[] {
-  return nodes.flatMap(node => node.data.ymdFloating === true ? [] : readAudioNote(node.data.ymdAudio) ? documentTopics(node.children ?? []) : [node])
 }
 
 function fromMap(nodes: MapData[], imported = false): Block[] {
@@ -87,22 +71,6 @@ function fromMap(nodes: MapData[], imported = false): Block[] {
   }))
 }
 
-function mainMap(name: string, blocks: Block[], appearance: MapAppearance) {
-  const root: MapData = { data: { text: appearance.imported?.root ?? mapTitle(name), uid: mainSheetId }, children: toMap(blocks) }
-  restoreMapStyles(root, appearance.styles)
-  if (appearance.imported) {
-    function decode(nodes: MapData[]) {
-      for (const node of documentTopics(nodes)) {
-        node.data.text = decodeImportedTopic(node.data.text ?? '')
-        decode(node.children ?? [])
-      }
-    }
-    decode(root.children ?? [])
-  }
-  restoreFloating(root, appearance.floating ?? [])
-  return root
-}
-
 function hasAudio(tree: MapData, id: string): boolean {
   return readAudioNote(tree.data.ymdAudio)?.id === id || !!tree.children?.some(child => hasAudio(child, id))
 }
@@ -112,20 +80,27 @@ interface MapEditorProps {
   registerFlush: (flush?: () => void) => void
   importWorkbook: () => void
   importing: boolean
+  readMapDocument: (path: string) => Promise<DocumentFile>
+  followMapDocument: (target: TopicLink) => Promise<boolean>
+  linkDocuments: Pick<Entry, 'path' | 'name'>[]
+  entryJump?: TopicLink
+  consumedMapJump: (target: TopicLink) => void
 }
 
 export default function MindMapEditor(props: MapEditorProps) {
   const { path } = props
   const [initial] = useState(() => loadMapAppearance(path))
   const [sheets, setSheets] = useState(initial.sheets ?? [])
-  const [active, setActive] = useState(() => (initial.sheets ?? []).some(sheet => sheet.id === initial.imported?.active)
-    ? initial.imported?.active : undefined)
+  const [active, setActive] = useState(() => {
+    if (props.entryJump) return props.entryJump.sheet === mainSheetId ? undefined : props.entryJump.sheet
+    return (initial.sheets ?? []).some(sheet => sheet.id === initial.imported?.active) ? initial.imported?.active : undefined
+  })
   const [renaming, setRenaming] = useState<string>()
   const [newTitle, setNewTitle] = useState('')
   const [remove, setRemove] = useState<MapSheet>()
   const [sheetMenu, setSheetMenu] = useState<{ id: string; x: number; y: number }>()
   const [storageError, setStorageError] = useState(false)
-  const [jump, setJump] = useState<TopicLink>()
+  const [jump, setJump] = useState<TopicLink | undefined>(props.entryJump)
   const sheetsRef = useRef(sheets)
   const removeDialog = useRef<HTMLDialogElement>(null)
   const flush = useRef<(() => void) | undefined>(undefined)
@@ -142,6 +117,13 @@ export default function MindMapEditor(props: MapEditorProps) {
     if (remove) removeDialog.current?.showModal()
     else if (removeDialog.current?.open) removeDialog.current.close()
   }, [remove])
+
+  useEffect(() => {
+    if (!props.entryJump) return
+    try { rememberImportedSheet(path, props.entryJump.sheet === mainSheetId ? undefined : props.entryJump.sheet) }
+    catch { setStorageError(true) }
+    props.consumedMapJump(props.entryJump)
+  }, [path, props.entryJump, props.consumedMapJump])
 
   function updateSheets(change: (current: MapSheet[]) => MapSheet[]) {
     const next = change(sheetsRef.current)
@@ -221,10 +203,7 @@ export default function MindMapEditor(props: MapEditorProps) {
   }
 
   function primarySheet(): MapSheet | undefined {
-    const projection = projectList(props.text)
-    if (!projection) return
-    const appearance = loadMapAppearance(path)
-    return { id: mainSheetId, title: mainTitle, settings: appearance.settings, tree: mainMap(props.name, projection.blocks, appearance) }
+    return primaryMapSheet(props)
   }
 
   function linkWorkbook(tree: MapData) {
@@ -233,6 +212,7 @@ export default function MindMapEditor(props: MapEditorProps) {
   }
 
   function followTopicLink(target: TopicLink) {
+    if (target.document && mapDocumentPath(target.document) !== path) return props.followMapDocument(target)
     const destination = target.sheet === mainSheetId ? undefined : target.sheet
     if (destination !== active) {
       const targetSheet = destination ? sheetsRef.current.find(item => item.id === destination) : primarySheet()
@@ -316,7 +296,7 @@ export default function MindMapEditor(props: MapEditorProps) {
 }
 
 function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, updateSheet, multipleSheets, saveXmind, createSheet,
-  linkWorkbook, jump, followTopicLink }: MapEditorProps & {
+  linkWorkbook, jump, followTopicLink, readMapDocument, linkDocuments }: MapEditorProps & {
   sheet?: MapSheet
   updateSheet: (id: string, settings: MapSettings, tree: MapData) => void
   multipleSheets: boolean
@@ -324,7 +304,7 @@ function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, upd
   createSheet: (title: string, settings: MapSettings, tree: MapData, copy?: { source: string; wholeSheet: boolean }) => void
   linkWorkbook: (tree: MapData) => Pick<MapSheet, 'id' | 'title' | 'tree'>[]
   jump?: TopicLink
-  followTopicLink: (link: TopicLink) => boolean
+  followTopicLink: (link: TopicLink) => boolean | Promise<boolean>
 }) {
   const [projection] = useState(() => projectList(text))
   const [appearance] = useState(() => loadMapAppearance(path))
@@ -376,12 +356,15 @@ function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, upd
   followLink.current = followTopicLink
   currentSettings.current = settings
 
+  const backlinkTopic = selectedCallout ? calloutTopicId(selectedCallout.owner, selectedCallout.id)
+    : selected.length === 1 ? selected[0].uid : undefined
+  const externalBacklinks = useMemo(() => backlinkTopic ? documentBacklinks(path, { sheet: sheetId, topic: backlinkTopic }) : [],
+    [path, sheetId, backlinkTopic])
   const backlinks = useMemo(() => {
     const map = engine.current
-    const topic = selectedCallout ? calloutTopicId(selectedCallout.owner, selectedCallout.id)
-      : selected.length === 1 ? selected[0].uid : undefined
-    return map && topic ? listBacklinks(linkWorkbook(map.getData()), { sheet: sheetId, topic }) : []
-  }, [selected, selectedCallout, linkWorkbook, sheetId, version])
+    if (!map || !backlinkTopic) return []
+    return [...listBacklinks(linkWorkbook(map.getData()), { sheet: sheetId, topic: backlinkTopic }), ...externalBacklinks]
+  }, [backlinkTopic, externalBacklinks, linkWorkbook, sheetId, version])
 
   const ganttRows = useMemo(() => gantt ? scheduledTopics(engine.current?.getData()) : [], [gantt, version])
   const days = useMemo(() => calendarDays(calendar), [calendar])
@@ -495,11 +478,17 @@ function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, upd
     setTaskTopic(id)
   }
 
+  async function followLinkWithNotice(target: TopicLink, message: string) {
+    try {
+      if (await followLink.current(target)) return
+    } catch {}
+    setNotice(target.document ? '无法定位链接文档或主题。请先打开该文档，或在链接设置中选择新目标。' : message)
+  }
+
   function openHyperlink(url: string) {
     const target = readTopicLink(url)
-    if (target) {
-      if (!followLink.current(target)) setNotice('链接指向的画布或主题已删除，或无法定位。')
-    } else void window.desktop.openExternal(url).catch(() => setNotice('无法打开链接。'))
+    if (target) void followLinkWithNotice(target, '链接指向的画布或主题已删除，或无法定位。')
+    else void window.desktop.openExternal(url).catch(() => setNotice('无法打开链接。'))
   }
 
   useEffect(() => {
@@ -635,7 +624,8 @@ function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, upd
     const map = engine.current
     if (!jump || !map) return
     let canceled = false
-    map.render(() => {
+    // Expanding a folded branch enqueues another render. Wait for the first render to clear its callbacks.
+    map.render(() => queueMicrotask(() => {
       if (canceled || engine.current !== map) return
       const tree = map.getData()
       const callout = jump.topic ? calloutById(tree, jump.topic) : undefined
@@ -656,7 +646,7 @@ function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, upd
           } else map.renderer.moveNodeToCenter(target, false)
         }
       })
-    })
+    }))
     return () => { canceled = true }
   }, [jump])
 
@@ -1011,9 +1001,7 @@ function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, upd
     { label: '移除链接', icon: <Trash2 size={16} />, disabled: !canLink, run: () => setNodeLink(node, '') },
   ] : []
   const backlinkItems: MenuItem[] = backlinks.map(({ label, target }) => ({
-    label, run: () => {
-      if (!followLink.current(target)) setNotice('反向链接的来源已删除，或无法定位。')
-    },
+    label, run: () => { void followLinkWithNotice(target, '反向链接的来源已删除，或无法定位。') },
   }))
   const contextItems: MenuItem[] = contextCallout && menuCallout ? [
     { label: '编辑标注', run: () => editCallout(contextCallout) },
@@ -1193,6 +1181,7 @@ function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, upd
     {linkEditor && <MindMapLink
       initial={String((linkEditor.callout ? dialogCallout?.note.data.hyperlink : linkEditor.node.getData('hyperlink')) ?? '')} kind={linkEditor.kind}
       current={sheetId} source={linkEditor.callout ? calloutTopicId(linkEditor.callout.owner, linkEditor.callout.id) : linkEditor.node.uid}
+      currentPath={path} documents={linkDocuments} readDocument={readMapDocument}
       sheets={linkEditor.kind === 'topic' ? availableLinkSheets() : []}
       close={() => setLinkEditor(undefined)} save={value => {
         if (linkEditor.callout) changeCallout(linkEditor.callout, { hyperlink: value })

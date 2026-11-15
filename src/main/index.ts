@@ -173,12 +173,18 @@ void app.whenReady().then(async () => {
       if (searchController === controller) searchController = undefined
     }
   })
-  handle('chooseFile', async () => {
+  handle('chooseFile', async (kind?: FileKind) => {
+    const filters = kind === 'markdown' ? [{ name: 'Markdown', extensions: ['md'] }]
+      : kind === 'drawing' ? [{ name: 'Excalidraw', extensions: ['excalidraw'] }]
+      : [{ name: 'Markdown 与 Excalidraw', extensions: ['md', 'excalidraw'] }]
     const result = await dialog.showOpenDialog(window!, {
       properties: ['openFile'],
-      filters: [{ name: 'Markdown 与 Excalidraw', extensions: ['md', 'excalidraw'] }],
+      filters,
     })
-    return result.canceled ? null : files.authorizeFile(result.filePaths[0])
+    if (result.canceled) return null
+    const file = result.filePaths[0]
+    if (kind && fileKind(file) !== kind) throw new Error('所选文件类型与请求不符。')
+    return files.authorizeFile(file)
   })
   handle('read', (file: string) => files.read(file, true))
   handle('create', (directory: string, kind: FileKind) => files.create(directory, kind))

@@ -1,6 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { ArrowLeft, Check, ChevronRight, CircleAlert, FilePlus2, FileText, FolderInput, Home, ListTree, Network, PanelLeft, LocateFixed, Pin, Plus, Save, Search, Settings2, Shapes, Star, X } from 'lucide-react'
-import { defaultPreferences, type Command, type EditorMode, type Entry, type FileKind, type Preferences, type Scope, type SearchHit, type VersionStatus } from '../shared/contracts'
+import { defaultPreferences, type Command, type DocumentFile, type EditorMode, type Entry, type FileKind, type Preferences, type Scope, type SearchHit, type VersionStatus } from '../shared/contracts'
 import { DocumentIcon, FilesTree } from './FilesTree'
 import { SearchDialog } from './SearchDialog'
 import { Settings } from './Settings'
@@ -11,6 +11,8 @@ import { OutlineEditor } from './editors/Outline'
 import type { OutlineSession } from './editors/outlineEditing'
 import { discardInterruptedMapImports, loadMapAppearance, relocateMapAppearance, saveImportedMap } from './editors/mapAppearance'
 import { forgetAudio, storeAudio } from './editors/mapAudio'
+import { mapDocumentPath, mapDocumentSheets, registerMapDocument, relocateMapDocument, removeMapDocument } from './editors/mapDocumentLinks'
+import { findTopic, type TopicLink } from './editors/mapTopicLinks'
 
 const MindMapEditor = lazy(() => import('./editors/MindMap'))
 const DrawingEditor = lazy(() => import('./editors/Drawing'))
@@ -49,6 +51,7 @@ export function App() {
   const [settingsPage, setSettingsPage] = useState<'外观' | '文档库' | '快捷键' | '关于'>('外观')
   const [searchOpen, setSearchOpen] = useState(false)
   const [jump, setJump] = useState<{ path: string; line: number; id: number }>()
+  const [mapJump, setMapJump] = useState<{ path: string; target: TopicLink }>()
   const [revision, setRevision] = useState(0)
   const [find, setFind] = useState(0)
   const [prompt, setPrompt] = useState<Prompt>()
@@ -159,6 +162,32 @@ export function App() {
     setSettings(false)
   }
 
+  async function readMapDocument(path: string): Promise<DocumentFile> {
+    const file = sessions.latest.current.find(document => document.path === path) ?? await window.desktop.read(path)
+    if (file.kind !== 'markdown') throw new Error('请选择 Markdown 文档。')
+    return file
+  }
+
+  async function followMapDocument(target: TopicLink) {
+    const path = target.document && mapDocumentPath(target.document)
+    if (!path) return false
+    const intent = ++openIntent.current
+    try {
+      const file = await readMapDocument(path)
+      if (intent !== openIntent.current) return true
+      const sheet = mapDocumentSheets(file).find(item => item.id === target.sheet)
+      if (!sheet || target.topic && !findTopic(sheet.tree, target.topic)) return false
+      showFile(file)
+      sessions.patch(file.path, { mode: 'map' })
+      setMapJump({ path: file.path, target: { sheet: target.sheet, topic: target.topic } })
+      return true
+    } catch { return intent !== openIntent.current }
+  }
+
+  const consumedMapJump = useCallback((target: TopicLink) => {
+    setMapJump(current => current?.target === target ? undefined : current)
+  }, [])
+
   function openFile() {
     const intent = ++openIntent.current
     run(async () => {
@@ -181,7 +210,7 @@ export function App() {
         const source = await window.desktop.chooseXmind()
         if (!source || intent !== openIntent.current) return
         const { importXmind } = await import('./editors/importXmind')
-        const { text, appearance, audios, unconverted } = await importXmind(source.data)
+        const { text, appearance, audios, crossDocumentLinks, unconverted } = await importXmind(source.data)
         if (intent !== openIntent.current) return
         const settings = JSON.stringify(appearance)
         // Reserve space for the appearance before writing a new Markdown file.
@@ -196,6 +225,9 @@ export function App() {
         localStorage.removeItem(reservation)
         saveImportedMap(file.path, settings)
         saved = true
+        if (crossDocumentLinks) {
+          try { registerMapDocument(file.path) } catch { unconverted.push('跨文档反向链接') }
+        }
         setRevision(value => value + 1)
         if (intent !== openIntent.current) return
         showFile(file)
@@ -332,6 +364,8 @@ export function App() {
       sessions.close(saved.path)
       showFile(file)
       setRevision(value => value + 1)
+      try { relocateMapDocument(saved.path, file.path) }
+      catch { setNotice('文件位置已更新，无法更新指向它的主题链接。') }
     })
   }
 
@@ -494,7 +528,10 @@ export function App() {
                   ? <OutlineEditor key={active.path + ':' + active.reload} text={active.text} name={active.name} path={active.path}
                     platform={platform} remoteImages={preferences.remoteImages} sessions={outlineSessions.current} onChange={edit} />
                   : <MindMapEditor key={active.path + ':' + active.reload} text={active.text} name={active.name} path={active.path} dark={dark} onChange={edit}
-                    registerFlush={registerFlush} importWorkbook={importWorkbook} importing={importing} />}
+                    registerFlush={registerFlush} importWorkbook={importWorkbook} importing={importing}
+                    readMapDocument={readMapDocument} followMapDocument={followMapDocument} consumedMapJump={consumedMapJump}
+                    entryJump={mapJump?.path === active.path ? mapJump.target : undefined}
+                    linkDocuments={sessions.documents.filter(document => document.kind === 'markdown' && document.path !== active.path)} />}
           </Suspense>}
         </main>
       </>}
@@ -524,6 +561,7 @@ export function App() {
               sessions.close(saved.path)
               setRevision(value => value + 1)
               setPrompt(undefined)
+              removeMapDocument(saved.path)
             } finally { setBusy(false) }
           })}>移到回收站</button></footer>
       </div>}

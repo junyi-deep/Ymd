@@ -2,7 +2,7 @@ import JSZip from 'jszip'
 import { branchStructure, mapTheme, palettes, type MapData, type MapSheet } from './mapAppearance'
 import { loadAudio, readAudioNote } from './mapAudio'
 import { calloutShapeClasses, progressMarkers, shapes, structures, styleKeys, topicLinkExtension } from './xmindFormat'
-import { isExternalMapLink, readTopicLink, type TopicLink } from './mapTopicLinks'
+import { isExternalMapLink, readTopicLink, topicLinkUrl, type TopicLink } from './mapTopicLinks'
 import { calloutDefaults, calloutTopicId, readCallouts } from './mapCallouts'
 import { readTask, readTodo, type MapTask } from './mapTasks'
 import { exportTaskContent, taskExtension } from './xmindTasks'
@@ -198,6 +198,12 @@ export async function exportXmind(sheets: Sheet[], active: string, dark: boolean
   })
   const reverse: { sourceId: string; destination: Topic }[] = []
   for (const { output, target } of links) {
+    if (target.document) {
+      output.extensions = [...(output.extensions ?? []), {
+        provider: topicLinkExtension, content: [{ href: topicLinkUrl(target) }], resourceRefs: [],
+      }]
+      continue
+    }
     const destination = documentIds.get(target.sheet)
     const targetId = target.topic ? destination?.topics.get(target.topic) : destination?.id
     if (!targetId) continue

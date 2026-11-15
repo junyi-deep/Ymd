@@ -90,7 +90,7 @@ export interface Desktop {
   resetProjectDirectory(): Promise<Entry | null>
   search(query: string): Promise<SearchHit[]>
   cancelSearch(): Promise<void>
-  chooseFile(): Promise<DocumentFile | null>
+  chooseFile(kind?: FileKind): Promise<DocumentFile | null>
   chooseXmind(): Promise<{ name: string; data: ArrayBuffer } | null>
   createImportedMarkdown(directory: string, name: string, text: string): Promise<DocumentFile>
   read(path: string): Promise<DocumentFile>

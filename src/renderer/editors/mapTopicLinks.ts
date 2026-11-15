@@ -2,17 +2,18 @@ import type { MapData } from './mapAppearance'
 import { calloutTopicId, readCallouts } from './mapCallouts'
 
 export const mainSheetId = 'ymd-root'
-export interface TopicLink { sheet: string; topic?: string; bidirectional?: boolean }
+export interface TopicLink { document?: string; sheet: string; topic?: string; bidirectional?: boolean }
 
 const prefix = 'ymd-topic:'
 const returnSuffix = '?return=1'
+const documentId = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/
 
 export function isExternalMapLink(value: unknown): value is string {
   return typeof value === 'string' && /^(https?:\/\/|mailto:)/i.test(value)
 }
 
 export function topicLinkUrl(link: TopicLink) {
-  return prefix + encodeURIComponent(link.sheet) + (link.topic
+  return prefix + (link.document ? link.document + '/' : '') + encodeURIComponent(link.sheet) + (link.topic
     ? '#' + encodeURIComponent(link.topic) + (link.bidirectional ? returnSuffix : '') : '')
 }
 
@@ -20,10 +21,13 @@ export function readTopicLink(value: unknown): TopicLink | undefined {
   if (typeof value !== 'string' || !value.startsWith(prefix)) return
   const bidirectional = value.endsWith(returnSuffix)
   const address = bidirectional ? value.slice(prefix.length, -returnSuffix.length) : value.slice(prefix.length)
-  const [sheet, topic, ...extra] = address.split('#')
-  if (!sheet || extra.length) return
+  const [location, topic, ...extra] = address.split('#')
+  const [first, last, ...parts] = location.split('/')
+  const document = last === undefined ? undefined : first
+  const sheet = last ?? first
+  if (!sheet || extra.length || parts.length || document !== undefined && !documentId.test(document)) return
   try {
-    return { sheet: decodeURIComponent(sheet), ...(topic ? { topic: decodeURIComponent(topic), ...(bidirectional ? { bidirectional } : {}) } : {}) }
+    return { document, sheet: decodeURIComponent(sheet), ...(topic ? { topic: decodeURIComponent(topic), ...(bidirectional ? { bidirectional } : {}) } : {}) }
   } catch {}
 }
 
@@ -58,7 +62,7 @@ export function remapCopiedLinks(tree: MapData, source: string, destination: str
   const copied = new Set(listMapTopics(tree).map(topic => topic.id))
   function visit(node: MapData) {
     const link = readTopicLink(node.data.hyperlink)
-    if (link?.sheet === source && (link.topic ? copied.has(link.topic) : wholeSheet)) {
+    if (link && !link.document && link.sheet === source && (link.topic ? copied.has(link.topic) : wholeSheet)) {
       node.data.hyperlink = topicLinkUrl({ ...link, sheet: destination })
     }
     readCallouts(node.data.ymdCallouts).forEach(visit)
@@ -72,7 +76,7 @@ export function listBacklinks(sheets: { id: string; title: string; tree: MapData
   for (const sheet of sheets) {
     function add(data: MapData['data'], uid: string) {
       const link = readTopicLink(data.hyperlink)
-      if (link?.bidirectional && link.sheet === target.sheet && link.topic === target.topic) {
+      if (link?.bidirectional && link.document === target.document && link.sheet === target.sheet && link.topic === target.topic) {
         links.push({ label: sheet.title + ' · ' + (data.text?.replace(/\s+/g, ' ').trim() || '未命名主题'),
           target: { sheet: sheet.id, topic: uid } })
       }

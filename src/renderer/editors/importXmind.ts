@@ -4,7 +4,7 @@ import { writeList, projectList, type Block } from './listProjection'
 import { audioTitle, readAudioNote } from './mapAudio'
 import { branchStructure, collectMapAppearance, defaultMapSettings, encodeImportedTopic, type MapData, type MapSheet } from './mapAppearance'
 import { calloutShapeClasses, progressMarkers, shapes, structures, styleKeys, topicLinkExtension } from './xmindFormat'
-import { isExternalMapLink, mainSheetId, topicLinkUrl, type TopicLink } from './mapTopicLinks'
+import { isExternalMapLink, mainSheetId, readTopicLink, topicLinkUrl, type TopicLink } from './mapTopicLinks'
 import { readLegacyXmind } from './xmindXml'
 import { calloutTopicId } from './mapCallouts'
 import { importTaskExtension, legacyTaskExtension, taskExtension } from './xmindTasks'
@@ -126,6 +126,7 @@ export async function importXmind(data: ArrayBuffer) {
       bidirectional: boolean; generated: boolean }[] = []
     let resourceBytes = 0
     let topicCount = 0
+    let crossDocumentLinks = false
 
     async function resource(path: string) {
       const cached = resources.get(path)
@@ -284,6 +285,12 @@ export async function importXmind(data: ArrayBuffer) {
             generated: supplemental?.generated === true && supplemental.href === topicHref })
         }
         if (!href.startsWith('xmind:#')) await addAttachments(node, href)
+        const documentLink = readTopicLink(supplemental?.href)
+        if (!href.startsWith('xmind:#') && documentLink?.document) {
+          node.data.hyperlink = topicLinkUrl(documentLink)
+          node.data.hyperlinkTitle = '主题链接'
+          crossDocumentLinks = true
+        }
         if (kind === 'callout' && node.data.attachmentUrl && isExternalMapLink(supplemental?.href)) node.data.hyperlink = supplemental.href
         const children = asRecord(raw.children)
         const attached: MapData[] = []
@@ -367,7 +374,7 @@ export async function importXmind(data: ArrayBuffer) {
     const appearance = collectMapAppearance(main.settings, main.tree, {
       settings: main.settings, styles: [], sheets: other, imported: { title: main.title, root: main.tree.data.text ?? '', active },
     })
-    return { text, appearance, audios, unconverted: [...unconverted] }
+    return { text, appearance, audios, crossDocumentLinks, unconverted: [...unconverted] }
   } finally {
     await reader.close()
   }
