@@ -23,16 +23,20 @@ let preferences = defaultPreferences
 let closing = false
 let searchController: AbortController | undefined
 const windowsAcrylic = process.platform === 'win32' && Number(process.getSystemVersion().split('.')[2]) >= 22621
+const macVibrancy = 'popover'
 let preferenceWrite: Promise<unknown> = Promise.resolve()
 let recordingShortcut = false
 const appKeySequence = new ShortcutSequence()
 let appBindings = shortcutsFor('app', preferences.shortcuts, process.platform)
 
 function normalizePreferences(value: Partial<Preferences> | null): Preferences {
+  const transparency = value?.windowTransparency
   return {
     theme: value?.theme === 'dark' || value?.theme === 'light' ? value.theme : 'system',
     size: value?.size === 'small' || value?.size === 'large' ? value.size : 'normal',
     solidBackground: value?.solidBackground === true,
+    windowTransparency: typeof transparency === 'number' && Number.isFinite(transparency)
+      ? Math.min(100, Math.max(0, Math.round(transparency / 5) * 5)) : defaultPreferences.windowTransparency,
     projectDirectory: typeof value?.projectDirectory === 'string' && path.isAbsolute(value.projectDirectory) ? value.projectDirectory : undefined,
     animations: value?.animations !== false,
     documentTheme: value?.documentTheme === 'paper' || value?.documentTheme === 'mono' ? value.documentTheme : 'classic',
@@ -44,14 +48,15 @@ function normalizePreferences(value: Partial<Preferences> | null): Preferences {
   }
 }
 
-const glassEnabled = () => !preferences.solidBackground && (process.platform === 'darwin' || windowsAcrylic)
+const glassEnabled = () => !preferences.solidBackground &&
+  (process.platform === 'darwin' ? !nativeTheme.prefersReducedTransparency : windowsAcrylic)
 const windowColor = () => nativeTheme.shouldUseDarkColors ? '#222323' : '#fdfdfd'
 const overlayColors = () => ({ color: windowColor(), symbolColor: nativeTheme.shouldUseDarkColors ? '#ededee' : '#222528' })
 
 function applyBackground() {
   nativeTheme.themeSource = preferences.theme
   const glass = glassEnabled()
-  if (process.platform === 'darwin') window?.setVibrancy(glass ? 'sidebar' : null)
+  if (process.platform === 'darwin') window?.setVibrancy(glass ? macVibrancy : null)
   if (windowsAcrylic) {
     window?.setBackgroundMaterial(glass ? 'acrylic' : 'none')
     window?.setTitleBarOverlay(overlayColors())
@@ -102,7 +107,8 @@ function createWindow() {
     titleBarOverlay: windowsAcrylic ? { ...overlayColors(), height: 49 } : undefined,
     autoHideMenuBar: windowsAcrylic,
     backgroundMaterial: windowsAcrylic && glass ? 'acrylic' : undefined,
-    vibrancy: process.platform === 'darwin' && glass ? 'sidebar' : undefined,
+    vibrancy: process.platform === 'darwin' && glass ? macVibrancy : undefined,
+    visualEffectState: process.platform === 'darwin' ? 'active' : undefined,
     webPreferences: { preload: path.join(__dirname, '../preload/index.js'), contextIsolation: true, sandbox: true, nodeIntegration: false },
   })
   applyBackground()
@@ -385,13 +391,15 @@ void app.whenReady().then(async () => {
   handle('reveal', async (file: string) => shell.showItemInFolder(await files.authorizedFile(file)))
   handle('setPreferences', async (value: Preferences) => {
     let changedShortcuts = false
+    let changedBackground = false
     const updated = await storePreferences(current => {
       const next = normalizePreferences({ ...value, projectDirectory: current.projectDirectory })
       changedShortcuts = JSON.stringify(current.shortcuts) !== JSON.stringify(next.shortcuts)
+      changedBackground = current.theme !== next.theme || current.solidBackground !== next.solidBackground
       return next
     })
     if (changedShortcuts) installMenu()
-    applyBackground()
+    if (changedBackground) applyBackground()
     return updated
   })
   handle('setShortcutRecording', (active: boolean) => setShortcutRecording(active === true))

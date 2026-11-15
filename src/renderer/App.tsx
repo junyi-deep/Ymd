@@ -42,6 +42,7 @@ export function App() {
   const [preferences, setPreferences] = useState(defaultPreferences)
   const lastPreferences = useRef(preferences)
   const [systemDark, setSystemDark] = useState(() => matchMedia('(prefers-color-scheme: dark)').matches)
+  const [reducedTransparency, setReducedTransparency] = useState(() => matchMedia('(prefers-reduced-transparency: reduce)').matches)
   const [sidebar, setSidebar] = useState(true)
   const [settings, setSettings] = useState(false)
   const [version, setVersion] = useState('')
@@ -68,6 +69,7 @@ export function App() {
   const commandRef = useRef<(command: Command) => void>(() => {})
   const openIntent = useRef(0)
   const dark = preferences.theme === 'dark' || (preferences.theme === 'system' && systemDark)
+  const macReducesTransparency = platform === 'darwin' && reducedTransparency
 
   const message = (error: unknown) => String(error instanceof Error ? error.message : error).replace(/^Error invoking remote method '[^']+': Error: /, '')
   function run(action: () => Promise<unknown>) {
@@ -102,14 +104,18 @@ export function App() {
       lastPreferences.current = result.preferences
     })
     const query = matchMedia('(prefers-color-scheme: dark)')
+    const transparency = matchMedia('(prefers-reduced-transparency: reduce)')
     const onTheme = () => setSystemDark(query.matches)
+    const onTransparency = () => setReducedTransparency(transparency.matches)
     const onFocus = () => setRevision(value => value + 1)
     query.addEventListener('change', onTheme)
+    transparency.addEventListener('change', onTransparency)
     window.addEventListener('focus', onFocus)
     const unsubscribe = window.desktop.onCommand(command => commandRef.current(command))
     return () => {
       unsubscribe()
       query.removeEventListener('change', onTheme)
+      transparency.removeEventListener('change', onTransparency)
       window.removeEventListener('focus', onFocus)
     }
   }, [])
@@ -123,11 +129,12 @@ export function App() {
   useEffect(() => {
     document.documentElement.dataset.theme = dark ? 'dark' : 'light'
     document.documentElement.dataset.size = preferences.size
-    document.documentElement.dataset.windowMaterial = preferences.solidBackground ? 'solid'
+    document.documentElement.dataset.windowMaterial = preferences.solidBackground || macReducesTransparency ? 'solid'
       : platform === 'darwin' ? 'vibrancy' : windowsAcrylic ? 'acrylic' : 'solid'
+    document.documentElement.style.setProperty('--window-transparency', preferences.windowTransparency + '%')
     document.documentElement.dataset.animation = preferences.animations ? 'full' : 'reduced'
     document.documentElement.dataset.documentTheme = preferences.documentTheme
-  }, [dark, platform, preferences, windowsAcrylic])
+  }, [dark, platform, preferences, windowsAcrylic, macReducesTransparency])
 
   useEffect(() => {
     if (!settings || prompt || searchOpen) return
@@ -441,7 +448,7 @@ export function App() {
       </div>
     </header>
     <div className="window-body">
-      {settings ? <Settings initialPage={settingsPage} {...{ preferences, platform, library, project, windowsAcrylic, version, release, checking }}
+      {settings ? <Settings initialPage={settingsPage} {...{ preferences, platform, library, project, windowsAcrylic, macReducesTransparency, version, release, checking }}
         onProjectChange={changeProject} onReturn={() => setSettings(false)}
         onCheckUpdates={() => void checkForUpdates()}
         onOpenRelease={url => run(() => window.desktop.openExternal(url))}

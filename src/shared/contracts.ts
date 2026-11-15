@@ -55,6 +55,7 @@ export interface Preferences {
   theme: Theme
   size: 'small' | 'normal' | 'large'
   solidBackground: boolean
+  windowTransparency: number
   projectDirectory?: string
   animations: boolean
   documentTheme: 'classic' | 'paper' | 'mono'
@@ -66,7 +67,7 @@ export interface Preferences {
 }
 
 export const defaultPreferences: Preferences = {
-  theme: 'system', size: 'normal', solidBackground: false, animations: true, documentTheme: 'classic',
+  theme: 'system', size: 'normal', solidBackground: false, windowTransparency: 80, animations: true, documentTheme: 'classic',
   autoSave: false, remoteImages: false, autoCheckUpdates: false, searchEngine: 'google', shortcuts: {},
 }
 export type Command = AppShortcut | 'close'

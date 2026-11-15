@@ -1,6 +1,7 @@
 const assert = require('node:assert/strict')
 const { execFile } = require('node:child_process')
 const { mkdirSync, mkdtempSync, writeFileSync } = require('node:fs')
+const { readFile } = require('node:fs/promises')
 const os = require('node:os')
 const path = require('node:path')
 const { setTimeout: delay } = require('node:timers/promises')
@@ -80,7 +81,7 @@ async function check(window) {
   assert.match(before.sidebar, /^rgba\(/)
   assert.match(before.page, /^rgb\(/)
   if (windows) assert.equal(await dwmBackdrop(window), 3)
-  else assert.equal(vibrancyCalls.at(-1), 'sidebar')
+  else assert.equal(vibrancyCalls.at(-1), 'popover')
 
   const sample = 'button.tree-row[title="Window check.md"]'
   await waitFor(() => evaluate(`!!document.querySelector('${sample}')`), Boolean, 'Sample listed')
@@ -93,16 +94,37 @@ async function check(window) {
   }
   await evaluate(`document.querySelector('.sidebar-footer').click()`)
   await waitFor(() => evaluate(`!!document.querySelector('button[role="switch"][aria-label="不透明窗口背景"]')`), Boolean, 'Appearance settings visible')
+  const slider = 'input[aria-label="毛玻璃透明度"]'
+  if (!windows) {
+    assert.equal(await evaluate(`document.querySelector('${slider}').value`), '80')
+    await evaluate(`(() => {
+      const input = document.querySelector('${slider}')
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, '50')
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })()`)
+    await waitFor(snapshot, value => /^rgba\(.*0\.5\)$/.test(value.sidebar), 'Slider changes the sidebar tint')
+    const readTransparency = async () => {
+      const saved = await readFile(path.join(profile, 'preferences.json'), 'utf8').catch(() => '{}')
+      return JSON.parse(saved).windowTransparency
+    }
+    await waitFor(readTransparency, value => value === 50, 'Slider setting saved')
+  }
   await toggle()
   const solid = await waitMaterial('solid')
   assert.match(solid.sidebar, /^rgb\(/)
   if (windows) assert.equal(await dwmBackdrop(window), 1)
-  else assert.equal(vibrancyCalls.at(-1), null)
+  else {
+    assert.equal(vibrancyCalls.at(-1), null)
+    assert.equal(await evaluate(`document.querySelector('${slider}').disabled`), true)
+  }
   await toggle()
   await waitMaterial(glass)
   if (windows) assert.equal(await dwmBackdrop(window), 3)
-  else assert.equal(vibrancyCalls.at(-1), 'sidebar')
-  console.log(windows ? 'Windows DWM Acrylic (3 → 1 → 3) and native caption layout verified.' : 'macOS Vibrancy and opaque sidebar switch verified.')
+  else {
+    assert.equal(vibrancyCalls.at(-1), 'popover')
+    assert.equal(await evaluate(`document.querySelector('${slider}').value`), '50')
+  }
+  console.log(windows ? 'Windows DWM Acrylic (3 → 1 → 3) and native caption layout verified.' : 'macOS Vibrancy, opaque mode, live tint and persistence verified.')
 }
 
 const timeout = setTimeout(() => { console.error('Window material check timed out.'); app.exit(1) }, 90000)
