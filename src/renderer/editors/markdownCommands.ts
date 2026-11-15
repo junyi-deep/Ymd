@@ -3,6 +3,7 @@ import { EditorView, type Command, type KeyBinding } from '@codemirror/view'
 import { indentLess, indentMore } from '@codemirror/commands'
 import { searchEngines, type SearchEngine } from '../../shared/contracts'
 import { markdownHtml, markdownPlainText } from './markdownHtml'
+import { chooseMarkdownImages } from './markdownImages'
 import { insertFootnote, insertMetadata } from './markdownNotes'
 import type { MenuItem } from './MarkdownMenu'
 
@@ -158,17 +159,7 @@ export function contextItems(view: EditorView, platform: string, path: string, r
     .replace(/[a-z]$/, key => key.toUpperCase())
   const toMenu = (item: EditCommand): MenuItem =>
     ({ label: item.label, shortcut: displayKey(item), run: () => { item.command(view); view.focus() } })
-  const chooseImage = () => {
-    void window.desktop.chooseMarkdownImage(path).then(source => {
-      if (!source || !view.dom.isConnected) return
-      const { from, to } = view.state.selection.main
-      const label = (view.state.sliceDoc(from, to) || '图片').replaceAll(']', '\\]').replace(/\s+/g, ' ')
-      const insert = '![' + label + '](' + source + ')'
-      view.dispatch({ changes: { from, to, insert }, selection: { anchor: from + insert.length }, userEvent: 'input' })
-      view.focus()
-    }).catch(report)
-  }
-  const paste = () => navigator.clipboard.readText().then(insert => {
+  const pasteText = () => navigator.clipboard.readText().then(insert => {
     const { from, to } = view.state.selection.main
     view.dispatch({ changes: { from, to, insert }, selection: { anchor: from + insert.length }, annotations: Transaction.userEvent.of('input.paste') })
     view.focus()
@@ -185,7 +176,7 @@ export function contextItems(view: EditorView, platform: string, path: string, r
   return [
     { label: '剪切', shortcut: mod + 'X', disabled: !source || readOnly, run: cut },
     { label: '拷贝', shortcut: mod + 'C', disabled: !source, run: () => { void copy(source) } },
-    { label: '粘贴', shortcut: mod + 'V', disabled: readOnly, run: () => { void paste() } },
+    { label: '粘贴', shortcut: mod + 'V', disabled: readOnly, run: () => { void window.desktop.pasteMarkdownClipboard().catch(report) } },
     { label: '复制／粘贴为…', children: [
       { label: '复制为 Markdown', disabled: !source, run: () => { void copy(source) } },
       { label: '复制为 HTML 代码', disabled: !source, run: () => { void copy(markdownHtml(source)) } },
@@ -195,13 +186,13 @@ export function contextItems(view: EditorView, platform: string, path: string, r
           'text/html': new Blob([html], { type: 'text/html' }) })]).catch(report)
       } },
       { label: '复制为纯文本', disabled: !source, run: () => { void copy(markdownPlainText(source)) } },
-      { label: '粘贴为纯文本', disabled: readOnly, run: () => { void paste() } },
+      { label: '粘贴为纯文本', disabled: readOnly, run: () => { void pasteText() } },
     ] },
     { label: '段落', separator: true, disabled: readOnly, children: paragraphs.map(toMenu) },
     { label: '格式', disabled: readOnly, children: formats.map(toMenu) },
     { label: '插入', disabled: readOnly, children: [
       { label: '表格', shortcut: displayKey(tableKey), run: chooseTable },
-      ...inserts.map(item => item.label === '图像' ? { label: item.label, run: chooseImage } : toMenu(item)),
+      ...inserts.map(item => item.label === '图像' ? { label: item.label, run: () => chooseMarkdownImages(view, path, report) } : toMenu(item)),
     ] },
     { label: '在网页中搜索选中文字', separator: true, disabled: !source.trim(), run: () => {
       const engine = searchEngines[searchEngine]

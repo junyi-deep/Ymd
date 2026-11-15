@@ -3,8 +3,8 @@ import type { IpcMainInvokeEvent, MediaAccessPermissionRequest, MenuItemConstruc
 import { mkdir, readFile, writeFile, rename } from 'node:fs/promises'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { defaultPreferences, searchEngines } from '../shared/contracts'
-import type { Command, ContextMenuItem, Desktop, Entry, FileKind, Preferences } from '../shared/contracts'
+import { defaultPreferences, markdownImageExtensions, searchEngines } from '../shared/contracts'
+import type { Command, ContextMenuItem, Desktop, Entry, FileKind, MarkdownImageUpload, Preferences } from '../shared/contracts'
 import { Files, fileKind } from './files'
 import { searchRoots } from './search'
 import { printView } from './printing'
@@ -214,14 +214,16 @@ void app.whenReady().then(async () => {
     if (!['https:', 'http:', 'mailto:'].includes(url.protocol)) throw new Error('链接类型不受支持。')
     await shell.openExternal(url.href)
   })
-  handle('chooseMarkdownImage', async (file: string) => {
+  handle('chooseMarkdownImages', async (file: string) => {
     const canonical = await files.authorizedFile(file)
     const result = await dialog.showOpenDialog(window!, {
-      defaultPath: path.dirname(canonical), properties: ['openFile'],
-      filters: [{ name: '图片', extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'avif', 'bmp'] }],
+      defaultPath: path.dirname(canonical), properties: ['openFile', 'multiSelections'],
+      filters: [{ name: '图片', extensions: Object.keys(markdownImageExtensions) }],
     })
-    return result.canceled ? null : files.importImage(canonical, result.filePaths[0])
+    return result.canceled ? [] : files.importImageFiles(canonical, result.filePaths)
   })
+  handle('importMarkdownImages', (file: string, images: MarkdownImageUpload[]) => files.importImageBytes(file, images))
+  handle('pasteMarkdownClipboard', () => window?.webContents.paste())
   handle('readMarkdownImage', (file: string, source: string) => {
     if (typeof source !== 'string') throw new Error('图片路径无效。')
     return files.readImage(file, source)

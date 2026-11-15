@@ -1,14 +1,36 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { lstat, mkdir, link, unlink, readFile, readdir, realpath, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { lstat, mkdir, link, open, unlink, readFile, readdir, realpath, rename, rm, stat, writeFile } from 'node:fs/promises'
 import path from 'node:path'
-import type { DocumentFile, Entry, FileKind } from '../shared/contracts'
+import { markdownImageExtension, markdownImageExtensions, markdownImageLimits } from '../shared/contracts'
+import type { DocumentFile, Entry, FileKind, MarkdownImageAttachment, MarkdownImageUpload } from '../shared/contracts'
 
-const imageMime: Record<string, string> = {
-  '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif',
-  '.webp': 'image/webp', '.avif': 'image/avif', '.bmp': 'image/bmp',
+function checkImageSizes(sizes: number[]) {
+  if (sizes.some(size => size <= 0 || size > markdownImageLimits.fileBytes)) throw new Error('单张图片必须小于或等于 15 MB。')
+  if (sizes.reduce((total, size) => total + size, 0) > markdownImageLimits.batchBytes) throw new Error('一次最多导入 60 MB 的图片。')
 }
-const maxImageBytes = 15 * 1024 * 1024
 
+function checkImageCount(images: unknown[]) {
+  if (!Array.isArray(images) || images.length > markdownImageLimits.count) throw new Error('一次最多导入 20 张图片。')
+}
+
+function matchesImageFormat(data: Buffer, type: string) {
+  switch (type) {
+    case 'image/png': return data.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))
+    case 'image/jpeg': return data[0] === 0xff && data[1] === 0xd8 && data[2] === 0xff
+    case 'image/gif': return /^GIF8[79]a$/.test(data.toString('ascii', 0, 6))
+    case 'image/webp': return data.toString('ascii', 0, 4) === 'RIFF' && data.toString('ascii', 8, 12) === 'WEBP'
+    case 'image/bmp': return data.toString('ascii', 0, 2) === 'BM'
+    case 'image/avif': {
+      if (data.length < 16 || data.toString('ascii', 4, 8) !== 'ftyp') return false
+      const end = Math.min(data.readUInt32BE(0), data.length, 128)
+      for (let position = 8; position + 4 <= end; position += 4) {
+        if (position !== 12 && /^avi[fs]$/.test(data.toString('ascii', position, position + 4))) return true
+      }
+      return false
+    }
+    default: return false
+  }
+}
 
 export const fileKind = (name: string): FileKind | undefined => {
   const extension = path.extname(name).toLowerCase()
@@ -109,21 +131,66 @@ export class Files {
     }
   }
 
-  async importImage(file: string, image: string) {
+  async importImageFiles(file: string, images: string[]) {
+    checkImageCount(images)
+    const sizes = await Promise.all(images.map(async image => {
+      if (!markdownImageExtension(image)) throw new Error('请选择受支持的图片。')
+      const info = await stat(image)
+      if (!info.isFile()) throw new Error('请选择图片文件。')
+      return info.size
+    }))
+    checkImageSizes(sizes)
+    const input = await Promise.all(images.map(async image => ({ name: path.basename(image), type: '', data: await readFile(image) })))
+    return this.storeImages(file, input)
+  }
+
+  async importImageBytes(file: string, images: MarkdownImageUpload[]) {
+    checkImageCount(images)
+    if (images.some(image => !image || typeof image.name !== 'string' || image.name.length > 1024 ||
+        typeof image.type !== 'string' || image.type.length > 80 || !(image.data instanceof ArrayBuffer))) {
+      throw new Error('图片数据无效。')
+    }
+    return this.storeImages(file, images.map(image => ({ ...image, data: Buffer.from(image.data) })))
+  }
+
+  private async storeImages(file: string, images: { name: string; type: string; data: Buffer }[]): Promise<MarkdownImageAttachment[]> {
     const original = await this.authorizedFile(file)
-    const extension = path.extname(image).toLowerCase()
-    if (!imageMime[extension]) throw new Error('请选择受支持的图片。')
-    const imageInfo = await stat(image)
-    if (!imageInfo.isFile() || imageInfo.size > maxImageBytes) throw new Error('图片超过 15 MB 或类型无效。')
-    const data = await readFile(image)
-    if (data.length > maxImageBytes) throw new Error('图片超过 15 MB。')
+    if (fileKind(original) !== 'markdown') throw new Error('请先打开 Markdown 文件。')
+    if (!images.length) return []
+    checkImageSizes(images.map(image => image.data.length))
+    const valid = images.map(image => {
+      const extension = markdownImageExtension(image.name, image.type)
+      if (!extension || !matchesImageFormat(image.data, markdownImageExtensions[extension])) {
+        throw new Error('无法读取图片，或图片格式与扩展名不一致。')
+      }
+      return { ...image, extension }
+    })
     const directory = path.join(path.dirname(original), 'assets')
     await mkdir(directory, { recursive: true })
     const info = await lstat(directory)
     if (!info.isDirectory() || info.isSymbolicLink()) throw new Error('附件目录无效。')
-    const name = randomUUID() + extension
-    await writeFile(path.join(directory, name), data, { flag: 'wx', flush: true })
-    return 'assets/' + name
+    const paths: string[] = []
+    const attachments: MarkdownImageAttachment[] = []
+    try {
+      for (const { name, data, extension } of valid) {
+        const basename = randomUUID() + '.' + extension
+        const target = path.join(directory, basename)
+        const handle = await open(target, 'wx')
+        paths.push(target)
+        try {
+          await handle.writeFile(data)
+          await handle.sync()
+        } finally {
+          await handle.close()
+        }
+        const label = path.parse(name).name.slice(0, 140).trim()
+        attachments.push({ label: label || '图像', source: 'assets/' + basename })
+      }
+      return attachments
+    } catch (error) {
+      await Promise.allSettled(paths.map(target => unlink(target)))
+      throw error
+    }
   }
 
   async readImage(file: string, source: string) {
@@ -140,11 +207,12 @@ export class Files {
       const authorized = await this.resolve(canonical).catch(() => null)
       if (!authorized) return null
     }
-    const mime = imageMime[path.extname(canonical).toLowerCase()]
+    const extension = markdownImageExtension(canonical)
+    const mime = extension && markdownImageExtensions[extension]
     const info = mime && await stat(canonical).catch(() => null)
-    if (!info || !info.isFile() || info.size > maxImageBytes) return null
+    if (!info || !info.isFile() || info.size > markdownImageLimits.fileBytes) return null
     const data = await readFile(canonical)
-    return data.length <= maxImageBytes ? `data:${mime};base64,${data.toString('base64')}` : null
+    return data.length <= markdownImageLimits.fileBytes ? `data:${mime};base64,${data.toString('base64')}` : null
   }
 
   async duplicate(file: string, directory: string, text: string) {

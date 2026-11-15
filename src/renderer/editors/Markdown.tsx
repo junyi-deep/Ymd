@@ -3,6 +3,7 @@ import { BetweenHorizontalStart, Check, ChevronsLeft, ChevronsRight, Code2, Copy
 import { MarkdownMenu, type MenuItem } from './MarkdownMenu'
 import { contextItems, insertMermaid, typographyKeys } from './markdownCommands'
 import { markdownPlainText } from './markdownHtml'
+import { editImageReference, imageContextItems, markdownImageIntake } from './markdownImages'
 import { renderedBlocks } from './renderedBlocks'
 import { insertTable, markdownTable } from './markdownTable'
 import { expandMetadata, FootnoteReference, footnotes, insertFootnote, insertMetadata, markdownNotes, markdownWithMetadata, referenceNote } from './markdownNotes'
@@ -130,12 +131,12 @@ function liveMarkdown(view: EditorView, path: string, loadRemote: boolean) {
       if (name === 'TaskMarker' && !activeLine(from)) {
         ranges.push(Decoration.replace({ widget: new TaskBox(from, /x/i.test(state.sliceDoc(from, to)), state.readOnly) }).range(from, to))
       }
-      if (name === 'Image' && !visible(from, to)) {
+      if (name === 'Image' && (state.readOnly || !state.selection.ranges.some(range => range.from < to && range.to > from))) {
         const url = node.node.getChild('URL')
         const end = node.node.getChildren('LinkMark')[1]
         if (url && end) {
           const src = state.sliceDoc(url.from, url.to).replace(/^<|>$/g, '')
-          const label = state.sliceDoc(from + 2, end.from)
+          const label = state.sliceDoc(from + 2, end.from).replace(/\\([\\[\]])/g, '$1')
           if (sourceLine.to >= to) ranges.push(Decoration.replace({ widget: new MarkdownImage(path, src, label, loadRemote) }).range(from, to))
         }
         return false
@@ -244,6 +245,7 @@ export function MarkdownEditor({ text, name, path, modified, platform, remoteIma
           search({ top: true }), Prec.high(keymap.of([{ key: 'Enter', run: expandMetadata },
             ...typographyKeys(() => tableDialog.current?.showModal()), ...markdownKeymap, ...searchKeymap])),
           EditorView.contentAttributes.of({ 'aria-label': 'Markdown 编辑器', spellcheck: 'false' }),
+          markdownImageIntake(path, report),
           renderMode.current.of([live(path, remoteImages), renderedBlocks, markdownTable, markdownNotes]),
           readMode.current.of([]),
           EditorView.updateListener.of(update => {
@@ -346,7 +348,7 @@ export function MarkdownEditor({ text, name, path, modified, platform, remoteIma
     ['words', '字数'], ['lines', '行数'], ['modified', '更新时间'],
   ] as const).map(([value, label]) => ({ label, selected: status === value, run: () => setStatus(value) }))
 
-  function openContextMenu(editor: EditorView, x: number, y: number) {
+  function openContextMenu(editor: EditorView, x: number, y: number, items: MenuItem[]) {
     const mapping: (() => void)[] = []
     const serialize = (items: MenuItem[]): ContextMenuItem[] => items.map(item => {
       return {
@@ -358,7 +360,7 @@ export function MarkdownEditor({ text, name, path, modified, platform, remoteIma
         children: item.children ? serialize(item.children) : undefined,
       }
     })
-    void window.desktop.markdownContextMenu(x, y, serialize(contextItems(editor, platform, path, report, reading, searchEngine, () => tableDialog.current?.showModal())))
+    void window.desktop.markdownContextMenu(x, y, serialize(items))
       .then(index => {
         if (!editor.dom.isConnected) return
         editor.focus()
@@ -405,15 +407,24 @@ export function MarkdownEditor({ text, name, path, modified, platform, remoteIma
           event.preventDefault()
           void window.desktop.openExternal(editor.state.sliceDoc(url.from, url.to).replace(/^<|>$/g, '')).catch(report)
         }
+      }} onDoubleClick={event => {
+        const editor = view.current
+        if (editor && event.target instanceof Element && editImageReference(editor, event.target)) event.preventDefault()
       }} onContextMenu={event => {
         const editor = view.current
         if (!editor) return
         event.preventDefault()
+        close()
+        const imageItems = event.target instanceof Element ? imageContextItems(editor, event.target, report) : undefined
+        if (imageItems) {
+          openContextMenu(editor, event.clientX, event.clientY, imageItems)
+          return
+        }
         const pos = editor.posAtCoords({ x: event.clientX, y: event.clientY })
         const selection = editor.state.selection.main
         if (pos !== null && (pos < selection.from || pos > selection.to)) editor.dispatch({ selection: { anchor: pos } })
-        close()
-        openContextMenu(editor, event.clientX, event.clientY)
+        const items = contextItems(editor, platform, path, report, reading, searchEngine, () => tableDialog.current?.showModal())
+        openContextMenu(editor, event.clientX, event.clientY, items)
       }} />
     </div>
     <footer className="document-status">

@@ -66,6 +66,22 @@ export const defaultPreferences: Preferences = {
 }
 export type Command = 'open-file' | 'new-file' | 'new-drawing' | 'search' | 'save' | 'preferences' | 'close' | 'find'
 
+export const markdownImageExtensions = {
+  png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif',
+  webp: 'image/webp', avif: 'image/avif', bmp: 'image/bmp',
+} as const
+export const markdownImageLimits = { count: 20, fileBytes: 15 * 1024 * 1024, batchBytes: 60 * 1024 * 1024 }
+
+export interface MarkdownImageUpload { name: string; type: string; data: ArrayBuffer }
+export interface MarkdownImageAttachment { label: string; source: string }
+
+export function markdownImageExtension(name: string, type = '') {
+  const extension = /\.([a-z0-9]+)$/i.exec(name)?.[1].toLowerCase()
+  if (extension && Object.hasOwn(markdownImageExtensions, extension)) return extension as keyof typeof markdownImageExtensions
+  return (Object.keys(markdownImageExtensions) as (keyof typeof markdownImageExtensions)[])
+    .find(extension => markdownImageExtensions[extension] === type)
+}
+
 export interface Desktop {
   initialize(): Promise<{ library: Entry; project: Entry | null; preferences: Preferences; platform: string; windowsAcrylic: boolean; version: string }>
   list(path: string): Promise<Entry[]>
@@ -82,7 +98,9 @@ export interface Desktop {
   move(path: string, version: string): Promise<DocumentFile | null>
   trash(path: string, version: string): Promise<void>
   openExternal(url: string): Promise<void>
-  chooseMarkdownImage(path: string): Promise<string | null>
+  chooseMarkdownImages(path: string): Promise<MarkdownImageAttachment[]>
+  importMarkdownImages(path: string, images: MarkdownImageUpload[]): Promise<MarkdownImageAttachment[]>
+  pasteMarkdownClipboard(): Promise<void>
   readMarkdownImage(path: string, source: string): Promise<string | null>
   markdownContextMenu(x: number, y: number, items: ContextMenuItem[]): Promise<number | null>
   exportPdf(name: string, html: string): Promise<boolean>
