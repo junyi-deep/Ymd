@@ -114,6 +114,7 @@ declare module 'simple-mind-map' {
     on<K extends keyof MapEvents>(event: K, callback: (...args: MapEvents[K]) => void): void
     off<K extends keyof MapEvents>(event: K, callback: (...args: MapEvents[K]) => void): void
     getData(): NodeData
+    updateData(data: NodeData): void
     resize(): void
     render(callback?: () => void): void
     setTheme(theme: string): void

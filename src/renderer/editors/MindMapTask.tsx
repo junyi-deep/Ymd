@@ -48,10 +48,11 @@ function taskControl(label: string, text: string, run: () => void) {
   return element
 }
 
-export function MindMapTask({ initial, title, topics, save, close }: {
+export function MindMapTask({ initial, title, topics, notice, save, close }: {
   initial?: MapTask
   title: string
   topics: ReturnType<typeof taskTopics>
+  notice?: string
   save: (task: MapTask | null) => void
   close: () => void
 }) {
@@ -66,6 +67,7 @@ export function MindMapTask({ initial, title, topics, save, close }: {
     <form onSubmit={event => { event.preventDefault(); save({ ...task, assignee: task.assignee.trim() }) }}>
       <h2 id="map-task-title">主题任务</h2>
       <p title={title}>{title}</p>
+      {notice && <p className="map-task-error" role="alert">{notice}</p>}
       <div className="map-task-fields">
         <label>进度 <output>{task.progress}%</output><input autoFocus type="range" min="0" max="100" step="1"
           value={task.progress} onChange={event => update({ progress: Number(event.target.value), nativeProgress: undefined })} /></label>
