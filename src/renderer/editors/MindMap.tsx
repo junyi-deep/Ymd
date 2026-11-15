@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from 'react'
-import { ChevronDown, ChevronsLeft, ClipboardList, Crosshair, Download, Focus, FolderInput, GitBranch, GitFork, ImagePlus, ListTree, Map, Maximize, Mic, Minus, Paperclip, Plus, Redo2, Search, SlidersHorizontal, Square, Star, Sticker, StickyNote, Tag, Trash2, Undo2, X } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { ChevronDown, ChevronsLeft, ClipboardList, CornerUpLeft, Crosshair, Download, Focus, FolderInput, GitBranch, GitFork, ImagePlus, ListTree, Map, Maximize, Mic, Minus, Paperclip, Plus, Redo2, Search, SlidersHorizontal, Square, Star, Sticker, StickyNote, Tag, Trash2, Undo2, X } from 'lucide-react'
 import DOMPurify from 'dompurify'
 import MindMap from 'simple-mind-map'
 import AssociativeLine from 'simple-mind-map/src/plugins/AssociativeLine.js'
@@ -19,11 +19,13 @@ import { MindMapFormat } from './MindMapFormat'
 import { MindMapTask, readTask, taskBadge, taskTopics } from './MindMapTask'
 import { MindMapRecorder } from './MindMapRecorder'
 import { MindMapArt } from './MindMapArt'
+import { MindMapLink, type LinkSheet, type LinkType } from './MindMapLink'
 import { addTopicImage, applyArt, imagePlacements, installTopicImageGestures, isTopicImage, placeTopicImage, removeTopicImage, resetTopicImage, topicAcceptsArt } from './mapTopicImages'
 import { audioButton, audioTitle, createAudioPlayer, forgetAudio, loadAudio, readAudioNote, storeAudio, type AudioNote } from './mapAudio'
 import { MarkdownMenu, type MenuItem } from './MarkdownMenu'
 import { branchStructure, decodeImportedTopic, defaultMapSettings, encodeImportedTopic, loadMapAppearance, mapTheme, palettes, rememberImportedSheet, restoreFloating, restoreMapStyles, saveMapAppearance, saveMapSheets, type MapAppearance, type MapData, type MapSettings, type MapSheet } from './mapAppearance'
 import { installBranchLayouts } from './mixedMapLayout'
+import { findTopic, listBacklinks, listMapTopics, mainSheetId, readTopicLink, remapCopiedLinks, type TopicLink } from './mapTopicLinks'
 
 class MapAssociativeLine extends AssociativeLine {
   protected checkOverlapNode(x: number, y: number) {
@@ -40,11 +42,20 @@ for (const plugin of [MapAssociativeLine, Drag, Export, ExportPDF, KeyboardNavig
 MindMap.extendNodeDataNoStylePropList(['ymdMarker', 'ymdFloating', 'ymdTask', 'ymdStructure', 'ymdAudio', 'ymdOriginalImageSize'])
 
 type MapNode = NonNullable<MindMap['renderer']['root']>
-type TopicField = '备注' | '标签' | '链接'
-const rootId = 'ymd-root'
+type TopicField = '备注' | '标签'
 const mapTitle = (name: string) => name.replace(/\.(?:md|markdown)$/i, '')
+
+function markdownTopicId(block: Block) {
+  // A different topic at the same Markdown offset must not inherit links to the old one.
+  let hash = 2166136261
+  for (let index = 0; index < block.text.length; index++) {
+    hash = Math.imul(hash ^ block.text.charCodeAt(index), 16777619)
+  }
+  return 'md-' + block.id + '-' + (hash >>> 0).toString(36)
+}
+
 const toMap = (blocks: Block[]): MapData[] => blocks.map(block => ({
-  data: { text: block.text, uid: block.id, ymdMarker: block.marker }, children: toMap(block.children),
+  data: { text: block.text, uid: markdownTopicId(block), ymdMarker: block.marker }, children: toMap(block.children),
 }))
 
 function documentTopics(nodes: MapData[]): MapData[] {
@@ -61,7 +72,7 @@ function fromMap(nodes: MapData[], imported = false): Block[] {
 }
 
 function mainMap(name: string, blocks: Block[], appearance: MapAppearance) {
-  const root: MapData = { data: { text: appearance.imported?.root ?? mapTitle(name), uid: rootId }, children: toMap(blocks) }
+  const root: MapData = { data: { text: appearance.imported?.root ?? mapTitle(name), uid: mainSheetId }, children: toMap(blocks) }
   restoreMapStyles(root, appearance.styles)
   if (appearance.imported) {
     function decode(nodes: MapData[]) {
@@ -74,14 +85,6 @@ function mainMap(name: string, blocks: Block[], appearance: MapAppearance) {
   }
   restoreFloating(root, appearance.floating ?? [])
   return root
-}
-
-function findTopic(tree: MapData, uid: string): MapData | undefined {
-  if (tree.data.uid === uid) return tree
-  for (const child of tree.children ?? []) {
-    const found = findTopic(child, uid)
-    if (found) return found
-  }
 }
 
 function hasAudio(tree: MapData, id: string): boolean {
@@ -106,6 +109,7 @@ export default function MindMapEditor(props: MapEditorProps) {
   const [remove, setRemove] = useState<MapSheet>()
   const [sheetMenu, setSheetMenu] = useState<{ id: string; x: number; y: number }>()
   const [storageError, setStorageError] = useState(false)
+  const [jump, setJump] = useState<TopicLink>()
   const sheetsRef = useRef(sheets)
   const removeDialog = useRef<HTMLDialogElement>(null)
   const flush = useRef<(() => void) | undefined>(undefined)
@@ -116,6 +120,7 @@ export default function MindMapEditor(props: MapEditorProps) {
     register.current(callback)
   }).current
   const sheet = sheets.find(current => current.id === active)
+  const mainTitle = initial.imported?.title ?? '主画布'
 
   useEffect(() => {
     if (remove) removeDialog.current?.showModal()
@@ -143,14 +148,16 @@ export default function MindMapEditor(props: MapEditorProps) {
 
   function select(id?: string) {
     flush.current?.()
+    setJump(undefined)
     activate(id)
   }
 
-  function createSheet(title: string, settings: MapSettings, tree: MapData) {
+  function createSheet(title: string, settings: MapSettings, tree: MapData, copy?: { source: string; wholeSheet: boolean }) {
     flush.current?.()
     const id = crypto.randomUUID()
     const root = structuredClone(tree)
     root.data.isActive = false
+    if (copy) remapCopiedLinks(root, copy.source, id, copy.wholeSheet)
     if (updateSheets(current => [...current, { id, title, settings: { ...settings }, tree: root }])) activate(id)
   }
 
@@ -158,7 +165,7 @@ export default function MindMapEditor(props: MapEditorProps) {
     let index = 2
     while (sheetsRef.current.some(item => item.title === '画布 ' + index)) index++
     const title = '画布 ' + index
-    createSheet(title, defaultMapSettings, { data: { text: title, uid: rootId }, children: [] })
+    createSheet(title, defaultMapSettings, { data: { text: title, uid: mainSheetId }, children: [] })
   }
 
   function renameSheet(item: MapSheet) {
@@ -174,7 +181,7 @@ export default function MindMapEditor(props: MapEditorProps) {
     let title = base
     let suffix = 2
     while (sheetsRef.current.some(sheet => sheet.title === title)) title = base + ' ' + suffix++
-    createSheet(title, item.settings, item.tree)
+    createSheet(title, item.settings, item.tree, { source: id, wholeSheet: true })
   }
 
   function moveSheet(id: string, offset: number) {
@@ -197,19 +204,37 @@ export default function MindMapEditor(props: MapEditorProps) {
     if (renamed) setRenaming(undefined)
   }
 
+  function primarySheet(): MapSheet | undefined {
+    const projection = projectList(props.text)
+    if (!projection) return
+    const appearance = loadMapAppearance(path)
+    return { id: mainSheetId, title: mainTitle, settings: appearance.settings, tree: mainMap(props.name, projection.blocks, appearance) }
+  }
+
+  function linkWorkbook(tree: MapData) {
+    const main = sheet ? primarySheet() : { id: mainSheetId, title: mainTitle, tree }
+    return [...(main ? [main] : []), ...sheetsRef.current.map(item => item.id === sheet?.id ? { ...item, tree } : item)]
+  }
+
+  function followTopicLink(target: TopicLink) {
+    const destination = target.sheet === mainSheetId ? undefined : target.sheet
+    if (destination !== active) {
+      const targetSheet = destination ? sheetsRef.current.find(item => item.id === destination) : primarySheet()
+      if (!targetSheet || target.topic && !findTopic(targetSheet.tree, target.topic)) return false
+      flush.current?.()
+      activate(destination)
+    }
+    setJump({ ...target })
+    return true
+  }
+
   async function saveXmind(all: boolean, tree: MapData, settings: MapSettings) {
     const title = mapTitle(props.name)
-    const mainTitle = initial.imported?.title ?? '主画布'
-    const current = { id: sheet?.id ?? rootId, title: sheet?.title ?? mainTitle, settings, tree }
+    const current = { id: sheet?.id ?? mainSheetId, title: sheet?.title ?? mainTitle, settings, tree }
     let workbook = [current]
     if (all) {
-      let main = current
-      if (sheet) {
-        const projection = projectList(props.text)
-        if (!projection) throw new Error('主画布的 Markdown 结构无法转换。可单独导出当前画布。')
-        const appearance = loadMapAppearance(path)
-        main = { id: rootId, title: mainTitle, settings: appearance.settings, tree: mainMap(props.name, projection.blocks, appearance) }
-      }
+      const main = sheet ? primarySheet() : current
+      if (!main) throw new Error('主画布的 Markdown 结构无法转换。可单独导出当前画布。')
       workbook = [main, ...sheetsRef.current.map(item => item.id === current.id ? current : item)]
     }
     const { exportXmind } = await import('./exportXmind')
@@ -221,15 +246,16 @@ export default function MindMapEditor(props: MapEditorProps) {
   const menuSheet = sheets[menuIndex]
 
   return <div className="map-document">
-    <MapCanvas key={sheet ? sheet.id + ':' + sheet.title : rootId} {...props} sheet={sheet} registerFlush={registerCanvas}
-      multipleSheets={sheets.length > 0} saveXmind={saveXmind} createSheet={createSheet}
+    <MapCanvas key={sheet ? sheet.id + ':' + sheet.title : mainSheetId} {...props} sheet={sheet} registerFlush={registerCanvas}
+      multipleSheets={sheets.length > 0} saveXmind={saveXmind} createSheet={createSheet} linkWorkbook={linkWorkbook}
+      jump={jump?.sheet === (sheet?.id ?? mainSheetId) ? jump : undefined} followTopicLink={followTopicLink}
       updateSheet={(id, settings, tree) => {
         if (!updateSheets(current => current.map(item => item.id === id ? { ...item, settings, tree } : item))) {
           throw new Error('无法保存画布。')
         }
       }} />
     <nav className="map-sheets" aria-label="思维导图画布列表">
-      <button className="map-sheet" data-active={!active} onClick={() => select()}>{initial.imported?.title ?? '主画布'}</button>
+      <button className="map-sheet" data-active={!active} onClick={() => select()}>{mainTitle}</button>
       {sheets.map(item => <div className="map-sheet-item" key={item.id} onContextMenu={event => {
         event.preventDefault()
         setSheetMenu({ id: item.id, x: event.clientX, y: event.clientY })
@@ -273,12 +299,16 @@ export default function MindMapEditor(props: MapEditorProps) {
   </div>
 }
 
-function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, updateSheet, multipleSheets, saveXmind, createSheet }: MapEditorProps & {
+function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, updateSheet, multipleSheets, saveXmind, createSheet,
+  linkWorkbook, jump, followTopicLink }: MapEditorProps & {
   sheet?: MapSheet
   updateSheet: (id: string, settings: MapSettings, tree: MapData) => void
   multipleSheets: boolean
   saveXmind: (all: boolean, tree: MapData, settings: MapSettings) => Promise<void>
-  createSheet: (title: string, settings: MapSettings, tree: MapData) => void
+  createSheet: (title: string, settings: MapSettings, tree: MapData, copy?: { source: string; wholeSheet: boolean }) => void
+  linkWorkbook: (tree: MapData) => Pick<MapSheet, 'id' | 'title' | 'tree'>[]
+  jump?: TopicLink
+  followTopicLink: (link: TopicLink) => boolean
 }) {
   const [projection] = useState(() => projectList(text))
   const [appearance] = useState(() => loadMapAppearance(path))
@@ -291,7 +321,7 @@ function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, upd
   const [version, setVersion] = useState(0)
   const [zen, setZen] = useState(false)
   const [linking, setLinking] = useState(false)
-  const [menu, setMenu] = useState<'export' | 'insert' | { x: number; y: number; image?: boolean }>()
+  const [menu, setMenu] = useState<'export' | 'insert' | 'backlinks' | { x: number; y: number; image?: boolean; link?: boolean }>()
   const [artOpen, setArtOpen] = useState(false)
   const [query, setQuery] = useState('')
   const [replace, setReplace] = useState('')
@@ -300,6 +330,7 @@ function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, upd
   const [miniMap, setMiniMap] = useState<{ markup: string; viewport: Record<string, string> }>()
   const [matches, setMatches] = useState({ total: 0, currentIndex: -1 })
   const [field, setField] = useState<{ key: TopicField; node: MapNode; value: string }>()
+  const [linkEditor, setLinkEditor] = useState<{ node: MapNode; kind: LinkType }>()
   const [taskNode, setTaskNode] = useState<MapNode>()
   const [audioParent, setAudioParent] = useState<MapNode>()
   const [error, setError] = useState('')
@@ -313,10 +344,26 @@ function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, upd
   const fieldDialog = useRef<HTMLDialogElement>(null)
   const change = useRef(onChange)
   const saveSheet = useRef(updateSheet)
+  const followLink = useRef(followTopicLink)
   const currentSettings = useRef(settings)
+  const sheetId = sheet?.id ?? mainSheetId
   change.current = onChange
   saveSheet.current = updateSheet
+  followLink.current = followTopicLink
   currentSettings.current = settings
+
+  const backlinks = useMemo(() => {
+    const map = engine.current
+    if (!map || selected.length !== 1) return []
+    return listBacklinks(linkWorkbook(map.getData()), { sheet: sheetId, topic: selected[0].uid })
+  }, [selected, linkWorkbook, sheetId, version])
+
+  function openHyperlink(url: string) {
+    const target = readTopicLink(url)
+    if (target) {
+      if (!followLink.current(target)) setNotice('链接指向的画布或主题已删除，或无法定位。')
+    } else void window.desktop.openExternal(url).catch(() => setNotice('无法打开链接。'))
+  }
 
   useEffect(() => {
     if ((!projection && !initialSheet) || !host.current) return
@@ -331,7 +378,7 @@ function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, upd
         el: host.current, data: root, theme: 'default', fit: !!appearance.imported,
         layout: initialSettings.layout, themeConfig: mapTheme(initialSettings, dark),
         rainbowLinesConfig: { open: initialSettings.colored, colorsList: palettes[initialSettings.palette].colors },
-        customHyperlinkJump: url => { void window.desktop.openExternal(url).catch(() => setNotice('无法打开链接。')) },
+        customHyperlinkJump: openHyperlink,
         createNodePostfixContent: node => {
           const note = readAudioNote(node.getData('ymdAudio'))
           if (note) {
@@ -385,7 +432,8 @@ function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, upd
     const context = (event: MouseEvent, node: MapNode) => {
       event.preventDefault()
       select(node, map.renderer.activeNodeList)
-      setMenu({ x: event.clientX, y: event.clientY, image: isTopicImage(event.target) })
+      setMenu({ x: event.clientX, y: event.clientY, image: isTopicImage(event.target),
+        link: event.target instanceof Element && !!event.target.closest('a') && !!node.getData('hyperlink') })
     }
     const scale = (value: number) => setZoom(Math.round(value * 100))
     const syncLinkMode = () => setLinking(map.associativeLine.isCreatingLine)
@@ -435,6 +483,30 @@ function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, upd
 
   useEffect(() => {
     const map = engine.current
+    if (!jump || !map) return
+    let canceled = false
+    map.render(() => {
+      if (canceled || engine.current !== map) return
+      const tree = map.getData()
+      const uid = jump.topic ?? tree.data.uid
+      if (!uid || !findTopic(tree, uid)) {
+        setNotice('链接指向的主题已删除或无法定位。')
+        return
+      }
+      map.renderer.expandToNodeUid(uid, () => {
+        if (canceled || engine.current !== map) return
+        const target = map.renderer.findNodeByUid(uid)
+        if (target) {
+          target.active()
+          map.renderer.moveNodeToCenter(target, false)
+        }
+      })
+    })
+    return () => { canceled = true }
+  }, [jump])
+
+  useEffect(() => {
+    const map = engine.current
     if (!map) return
     const palette = palettes[settings.palette]
     map.updateConfig({ rainbowLinesConfig: { open: settings.colored, colorsList: palette.colors } })
@@ -455,7 +527,7 @@ function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, upd
   useEffect(() => {
     if (!zen && !linking && !searchOpen && !formatOpen && !artOpen) return
     const escape = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape' || event.isComposing || event.defaultPrevented || field || taskNode || audioParent ||
+      if (event.key !== 'Escape' || event.isComposing || event.defaultPrevented || field || linkEditor || taskNode || audioParent ||
           event.target instanceof HTMLElement && event.target.closest('.smm-node-edit-wrap, .document-menu')) return
       if (linking) { engine.current?.associativeLine.cancelCreateLine(); setLinking(false) }
       else if (searchOpen) { setQuery(''); setReplace(''); setSearchOpen(false); engine.current?.search.endSearch() }
@@ -469,7 +541,21 @@ function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, upd
     }
     window.addEventListener('keydown', escape)
     return () => window.removeEventListener('keydown', escape)
-  }, [zen, linking, searchOpen, formatOpen, artOpen, field, taskNode, audioParent])
+  }, [zen, linking, searchOpen, formatOpen, artOpen, field, linkEditor, taskNode, audioParent])
+
+  useEffect(() => {
+    const source = selected.length === 1 ? selected[0] : undefined
+    if (!source || source.isGeneralization || readAudioNote(source.getData('ymdAudio')) || linkEditor || field || taskNode || audioParent) return
+    const editLink = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.isComposing || event.altKey || !(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== 'k' ||
+          !(event.target instanceof Element) || event.target.closest('input, textarea, select, [contenteditable], dialog, .document-menu') ||
+          (event.target !== document.body && !host.current?.contains(event.target))) return
+      event.preventDefault()
+      setLinkEditor({ node: source, kind: readTopicLink(source.getData('hyperlink')) ? 'topic' : 'web' })
+    }
+    window.addEventListener('keydown', editLink)
+    return () => window.removeEventListener('keydown', editLink)
+  }, [selected, linkEditor, field, taskNode, audioParent])
 
   useEffect(() => {
     const map = engine.current
@@ -518,6 +604,8 @@ function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, upd
   const node = selected[0]
   const audioNote = readAudioNote(node?.getData('ymdAudio'))
   const canRemove = selected.some(item => !item.isRoot)
+  const canLink = selected.length === 1 && !!node && !node.isGeneralization && !audioNote
+  const currentLink = node?.getData('hyperlink')
 
   function add(sibling: boolean) {
     const map = engine.current
@@ -545,13 +633,35 @@ function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, upd
     if (!topic) return
     const { ymdFloating: _float, customLeft: _left, customTop: _top, ymdStructure, ...data } = topic.data
     const settings = { ...currentSettings.current, layout: branchStructure(ymdStructure) ?? currentSettings.current.layout }
-    createSheet(data.text?.trim() || '新画布', settings, { ...topic, data: { ...data, expand: true } })
+    createSheet(data.text?.trim() || '新画布', settings, { ...topic, data: { ...data, expand: true } }, { source: sheetId, wholeSheet: false })
   }
 
   function fieldFor(key: TopicField) {
     if (!node) return
-    const value = node.getData(key === '备注' ? 'note' : key === '链接' ? 'hyperlink' : 'tag')
+    const value = node.getData(key === '备注' ? 'note' : 'tag')
     setField({ key, node, value: Array.isArray(value) ? value.join(', ') : typeof value === 'string' ? value : '' })
+  }
+
+  function editLink(kind: LinkType) {
+    if (!canLink || !node) return
+    setLinkEditor({ node, kind })
+  }
+
+  function availableLinkSheets(): LinkSheet[] {
+    const map = engine.current
+    if (!map) return []
+    return linkWorkbook(map.getData()).map(item => ({ id: item.id, title: item.title, topics: listMapTopics(item.tree) }))
+  }
+
+  function setNodeLink(source: MapNode, value: string) {
+    const map = engine.current
+    const current = map?.renderer.findNodeByUid(source.uid)
+    if (!map || !current || String(current.getData('hyperlink') ?? '') === value) return
+    const title = readTopicLink(value) ? '主题链接' : '网页链接'
+    // Link editing is a single history step, even before the library's queued snapshot runs.
+    map.command.originAddHistory()
+    map.execCommand('SET_NODE_HYPERLINK', current, value, value ? title : '')
+    map.command.originAddHistory()
   }
 
   async function addRecordedAudio(parent: MapNode, audio: Blob, duration: number) {
@@ -645,7 +755,10 @@ function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, upd
     { label: audioTitle, icon: <Mic size={16} />, disabled: !node || !!audioNote || !!node.isGeneralization || selected.length !== 1,
       run: () => setAudioParent(node) },
     { label: '标签', icon: <Tag size={16} />, disabled: !node, run: () => fieldFor('标签') },
-    { label: '链接', disabled: !node || !!audioNote, run: () => fieldFor('链接') },
+    { label: '链接', disabled: !canLink, children: [
+      { label: '网页链接', run: () => editLink('web') },
+      { label: '主题链接', run: () => editLink('topic') },
+    ] },
     { label: '图片', icon: <ImagePlus size={16} />, disabled: !node, run: () => chooseResource(true) },
     { label: '贴纸与插图', icon: <Sticker size={16} />, run: () => setArtOpen(true) },
     { label: '附件', icon: <Paperclip size={16} />, disabled: !node, run: () => chooseResource(false) },
@@ -687,7 +800,18 @@ function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, upd
     } },
     { label: '删除图片', icon: <Trash2 size={16} />, run: () => { if (engine.current) removeTopicImage(engine.current, node) } },
   ] : []
-  const contextItems: MenuItem[] = typeof menu === 'object' && menu.image && imageItems.length ? imageItems : audioNote ? [
+  const linkItems: MenuItem[] = node && typeof currentLink === 'string' && currentLink ? [
+    { label: '打开链接', run: () => openHyperlink(currentLink) },
+    { label: '编辑链接', disabled: !canLink, run: () => editLink(readTopicLink(currentLink) ? 'topic' : 'web') },
+    { label: '移除链接', icon: <Trash2 size={16} />, disabled: !canLink, run: () => setNodeLink(node, '') },
+  ] : []
+  const backlinkItems: MenuItem[] = backlinks.map(({ label, target }) => ({
+    label, run: () => {
+      if (!followLink.current(target)) setNotice('反向链接的来源已删除，或无法定位。')
+    },
+  }))
+  const contextItems: MenuItem[] = typeof menu === 'object' && menu.image && imageItems.length ? imageItems
+    : typeof menu === 'object' && menu.link && linkItems.length ? linkItems : audioNote ? [
     { label: '另存录音…', icon: <Download size={16} />, run: () => saveAudioToFile(audioNote) },
     { label: '删除录音', icon: <Trash2 size={16} />, run: () => command('REMOVE_NODE') },
   ] : [
@@ -702,6 +826,8 @@ function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, upd
     ] },
     { label: '插入', separator: true, children: insertItems },
     ...(imageItems.length ? [{ label: '图片', children: imageItems }] : []),
+    ...(linkItems.length ? [{ label: '链接', children: linkItems }] : []),
+    ...(backlinks.length ? [{ label: '反向链接', children: backlinkItems }] : []),
     { label: '删除主题', icon: <Trash2 size={16} />, disabled: !canRemove, run: () => command('REMOVE_NODE') },
   ]
   const closeMenu = () => setMenu(undefined)
@@ -741,7 +867,11 @@ function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, upd
     <div className="map-body">
       <div className="map-stage">
         <div className="map-canvas" ref={host} tabIndex={0} aria-label="思维导图画布"
-          onPointerDown={event => { if (event.target instanceof SVGElement) event.currentTarget.focus() }}
+          onPointerDown={event => {
+            if (event.target instanceof Element &&
+                (event.target instanceof SVGElement || event.target.closest('.smm-node')) &&
+                !event.target.closest('button, input, textarea, [contenteditable]')) event.currentTarget.focus()
+          }}
           onContextMenu={event => event.preventDefault()} />
         {linking && <div className="map-action-status" role="status">选择关联线的目标主题 <kbd>Esc 取消</kbd></div>}
         {notice && <div className="map-action-status" role="status">{notice}<button className="icon-button" aria-label="关闭提示" onClick={() => setNotice('')}><X size={14} /></button></div>}
@@ -766,6 +896,11 @@ function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, upd
           <i style={miniMap.viewport} />
         </div>}
         <div className="map-status" role="group" aria-label="画布视图">
+          {!!backlinks.length && <div className="menu-anchor">
+            <button className="tool-button" aria-haspopup="menu" aria-expanded={menu === 'backlinks'}
+              onClick={() => setMenu(menu === 'backlinks' ? undefined : 'backlinks')}><CornerUpLeft size={15} />反向链接</button>
+            {menu === 'backlinks' && <MarkdownMenu items={backlinkItems} close={closeMenu} upward />}
+          </div>}
           {zen && <button className="tool-button" onClick={() => setZen(false)}><ChevronsLeft size={15} />退出专注</button>}
           <button className="icon-button" aria-label="导图概览" aria-pressed={overview} onClick={() => setOverview(!overview)}><Map size={16} /></button>
           <button className="icon-button" aria-label="回到中心主题" title="回到中心主题" onClick={() => {
@@ -812,19 +947,26 @@ function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, upd
         engine.current?.renderer.setNodeDataRender(taskNode, { ymdTask: task })
         setTaskNode(undefined)
       }} />}
+    {linkEditor && <MindMapLink
+      initial={String(linkEditor.node.getData('hyperlink') ?? '')} kind={linkEditor.kind}
+      current={sheetId} source={linkEditor.node.uid}
+      sheets={linkEditor.kind === 'topic' ? availableLinkSheets() : []}
+      close={() => setLinkEditor(undefined)} save={value => {
+        setNodeLink(linkEditor.node, value)
+        setLinkEditor(undefined)
+      }} />}
     <dialog ref={fieldDialog} onCancel={event => { event.preventDefault(); setField(undefined) }}>
       {field && <form onSubmit={event => {
         event.preventDefault()
         if (field.key === '备注') command('SET_NODE_NOTE', field.node, field.value)
         if (field.key === '标签') command('SET_NODE_TAG', field.node, field.value.split(/[,，]/).map(value => value.trim()).filter(Boolean))
-        if (field.key === '链接') command('SET_NODE_HYPERLINK', field.node, field.value)
         setField(undefined)
       }}>
         <h2>{field.key}</h2>
         <label>{field.key}
           {field.key === '备注'
             ? <textarea value={field.value} autoFocus onChange={event => setField({ ...field, value: event.target.value })} />
-            : <input type={field.key === '链接' ? 'url' : 'text'} placeholder={field.key === '标签' ? '用逗号分隔标签' : 'https://'}
+            : <input type="text" placeholder="用逗号分隔标签"
                 value={field.value} autoFocus onChange={event => setField({ ...field, value: event.target.value })} />}
         </label>
         <footer><button type="button" onClick={() => setField(undefined)}>取消</button><button type="submit" className="primary">保存</button></footer>

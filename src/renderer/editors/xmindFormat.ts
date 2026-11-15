@@ -17,3 +17,5 @@ export const shapes: Record<string, string> = {
 
 export const progressMarkers = ['task-start', 'task-oct', 'task-quarter', 'task-3oct', 'task-half',
   'task-5oct', 'task-3quar', 'task-7oct', 'task-done'] as const
+
+export const topicLinkExtension = 'org.ymd.topic-link'

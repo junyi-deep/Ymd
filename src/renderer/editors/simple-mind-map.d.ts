@@ -66,12 +66,14 @@ declare module 'simple-mind-map' {
   export default class MindMap {
     static extendNodeDataNoStylePropList(fields: string[]): void
     static usePlugin(plugin: unknown): typeof MindMap
+    command: { originAddHistory(): void }
     renderer: {
       root: MapNode | null
       layout: MapLayout
       activeNodeList: MapNode[]
       textEdit: { hideEditTextBox(): void }
       findNodeByUid(uid: string): MapNode | undefined
+      expandToNodeUid(uid: string, callback: () => void): void
       moveNodeToCenter(node: MapNode, resetScale?: boolean): void
       setNodeDataRender(node: MapNode, data: Record<string, unknown>): void
     }

@@ -3,7 +3,8 @@ import { markdownImageExtension, markdownImageExtensions } from '../../shared/co
 import { writeList, projectList, type Block } from './listProjection'
 import { audioTitle, readAudioNote } from './mapAudio'
 import { branchStructure, collectMapAppearance, defaultMapSettings, encodeImportedTopic, type MapData, type MapSheet } from './mapAppearance'
-import { progressMarkers, shapes, structures, styleKeys } from './xmindFormat'
+import { progressMarkers, shapes, structures, styleKeys, topicLinkExtension } from './xmindFormat'
+import { isExternalMapLink, mainSheetId, topicLinkUrl, type TopicLink } from './mapTopicLinks'
 import { readLegacyXmind } from './xmindXml'
 
 const MiB = 1024 * 1024
@@ -112,6 +113,10 @@ export async function importXmind(data: ArrayBuffer) {
     const audios: { id: string; blob: Blob }[] = []
     const audioByResource = new Map<string, string>()
     const unconverted = new Set<string>()
+    const sheetTargets = new Map<string, TopicLink>()
+    const topicTargets = new Map<string, TopicLink | null>()
+    const links: { node: MapData; destination: string; localTopics: Map<string, MapData>; sheet: string;
+      bidirectional: boolean; generated: boolean }[] = []
     let resourceBytes = 0
     let topicCount = 0
 
@@ -153,7 +158,7 @@ export async function importXmind(data: ArrayBuffer) {
 
     async function addAttachments(node: MapData, href: unknown) {
       if (typeof href !== 'string' || !href) return
-      if (/^https?:\/\//i.test(href)) { node.data.hyperlink = href; return }
+      if (isExternalMapLink(href)) { node.data.hyperlink = href; return }
       const path = resourcePath(href)
       const bytes = path ? await resource(path) : undefined
       if (!path || !bytes?.length) { unconverted.add('链接或附件'); return }
@@ -193,6 +198,9 @@ export async function importXmind(data: ArrayBuffer) {
     const sheets: MapSheet[] = []
     let active: string | undefined
     for (const rawSheet of source.map(asRecord)) {
+      const sheetId = sheets.length ? crypto.randomUUID() : mainSheetId
+      const originalSheet = string(rawSheet.id)
+      if (originalSheet && !sheetTargets.has(originalSheet)) sheetTargets.set(originalSheet, { sheet: sheetId })
       const ids = new Map<string, MapData>()
       let floating = 0
       async function topic(raw: Record<string, unknown>, depth: number, detached = false): Promise<MapData> {
@@ -202,7 +210,10 @@ export async function importXmind(data: ArrayBuffer) {
         const text = string(raw.title).replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, '')
         const node: MapData = { data: { ...styles(raw.style), text, uid: crypto.randomUUID(), expand: raw.branch !== 'folded' }, children: [] }
         const id = string(raw.id)
-        if (id && !ids.has(id)) ids.set(id, node)
+        if (id && !ids.has(id)) {
+          ids.set(id, node)
+          topicTargets.set(id, topicTargets.has(id) ? null : { sheet: sheetId, topic: node.data.uid })
+        }
         const structure = layout(raw.structureClass)
         if (structure && depth) node.data.ymdStructure = structure
         if (!structure && raw.structureClass) unconverted.add('部分布局')
@@ -232,7 +243,19 @@ export async function importXmind(data: ArrayBuffer) {
         })
         if (icons.length) node.data.icon = icons
         await addImage(node, asRecord(raw.image))
-        await addAttachments(node, raw.href)
+        const href = string(raw.href)
+        const extension = records(raw.extensions).find(extension => extension.provider === topicLinkExtension)
+        const supplemental = records(extension?.content)[0]
+        const topicHref = href.startsWith('xmind:#') ? href : string(supplemental?.href)
+        if (topicHref.startsWith('xmind:#')) {
+          const reference = topicHref.slice('xmind:#'.length)
+          let destination = reference
+          try { destination = decodeURIComponent(reference) } catch {}
+          links.push({ node, destination, localTopics: ids, sheet: sheetId,
+            bidirectional: supplemental?.bidirectional === true && supplemental.href === topicHref,
+            generated: supplemental?.generated === true && supplemental.href === topicHref })
+        }
+        if (!href.startsWith('xmind:#')) await addAttachments(node, href)
         const children = asRecord(raw.children)
         if (records(children.callout).length) unconverted.add('标注')
         const attached: MapData[] = []
@@ -278,9 +301,21 @@ export async function importXmind(data: ArrayBuffer) {
       const settings = { ...defaultMapSettings, layout: layout(rawRoot.structureClass) ?? defaultMapSettings.layout,
         ...(background ? { background } : {}), colored: false }
       const title = string(rawSheet.title) || string(rawSheet.sheetTitle) || tree.data.text || '画布 ' + (sheets.length + 1)
-      const id = crypto.randomUUID()
-      if (sheets.length && activeSheet && string(rawSheet.id) === activeSheet) active = id
-      sheets.push({ id, title, settings, tree })
+      if (sheets.length && activeSheet && originalSheet === activeSheet) active = sheetId
+      sheets.push({ id: sheetId, title, settings, tree })
+    }
+    const resolved = links.flatMap(({ node, destination, localTopics, sheet, bidirectional, generated }) => {
+      const local = localTopics.get(destination)
+      const target = local ? { sheet, topic: local.data.uid } : topicTargets.get(destination) ?? sheetTargets.get(destination)
+      if (target) return [{ node, origin: { sheet, topic: node.data.uid }, target, bidirectional, generated }]
+      unconverted.add('失效的主题链接')
+      return []
+    })
+    const paired = new Map(resolved.filter(item => item.bidirectional)
+      .map(({ origin, target }) => [topicLinkUrl(origin), topicLinkUrl(target)]))
+    for (const { node, origin, target, bidirectional, generated } of resolved) {
+      if (generated && paired.get(topicLinkUrl(target)) === topicLinkUrl(origin)) continue
+      node.data.hyperlink = topicLinkUrl({ ...target, bidirectional })
     }
     const [main, ...other] = sheets
     const text = writeList({ before: '', after: '', newline: '\n', blocks: [] }, editableBranches(main.tree.children ?? []))

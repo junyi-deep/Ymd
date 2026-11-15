@@ -1,7 +1,8 @@
 import JSZip from 'jszip'
 import { branchStructure, mapTheme, palettes, type MapData, type MapSheet } from './mapAppearance'
 import { loadAudio, readAudioNote } from './mapAudio'
-import { progressMarkers, shapes, structures, styleKeys } from './xmindFormat'
+import { progressMarkers, shapes, structures, styleKeys, topicLinkExtension } from './xmindFormat'
+import { isExternalMapLink, readTopicLink, type TopicLink } from './mapTopicLinks'
 
 type Sheet = Pick<MapSheet, 'id' | 'title' | 'settings' | 'tree'>
 type Properties = Record<string, string>
@@ -13,7 +14,8 @@ type Topic = {
   image?: { src: string; width: number; height: number; align?: string }; markers?: { markerId: string }[]
   summaries?: { id: string; class: 'summary'; range: string; topicId: string }[]
   boundaries?: { id: string; class: 'boundary'; title: string; range: string }[]
-  extensions?: { provider: string; content: { duration: number }[]; resourceRefs: string[] }[]
+  extensions?: { provider: string; content: ({ duration: number } | { href: string; bidirectional?: true; generated?: true })[];
+    resourceRefs: string[] }[]
   children?: { attached?: Topic[]; detached?: Topic[]; summary?: Topic[] }
 }
 
@@ -34,9 +36,14 @@ export async function exportXmind(sheets: Sheet[], active: string, dark: boolean
     return 'xap:' + path.split('/').map(encodeURIComponent).join('/')
   }
   const audioResources = new Map<string, string>()
+  const documentIds = new Map<string, { id: string; topics: Map<string, string> }>()
+  const topicsById = new Map<string, Topic>()
+  const links: { output: Topic; target: TopicLink }[] = []
 
   const content = sheets.map(sheet => {
     const ids = new Map<string, string>()
+    const sheetId = id()
+    documentIds.set(sheet.id, { id: sheetId, topics: ids })
     const connections: { source: string; target: string; title: string }[] = []
     const rootPosition = sheet.tree.data
     const theme = mapTheme(sheet.settings, dark)
@@ -45,6 +52,7 @@ export async function exportXmind(sheets: Sheet[], active: string, dark: boolean
     function topic(node: MapData, depth: number, branch: number): Topic {
       const { data } = node
       const output: Topic = { id: id(), class: 'topic', title: data.text ?? '' }
+      topicsById.set(output.id, output)
       const audio = readAudioNote(data.ymdAudio)
       if (audio) {
         let ref = audioResources.get(audio.id)
@@ -76,7 +84,9 @@ export async function exportXmind(sheets: Sheet[], active: string, dark: boolean
       if (attachment) {
         const name = String(data.attachmentName ?? '附件').replace(/[<>:"/\\|?*\u0000-\u001f]/g, '_').slice(0, 160).replace(/^[.]+|[. ]+$/g, '')
         output.href = resource('', attachment[1], name || '附件')
-      } else if (typeof data.hyperlink === 'string' && /^https?:\/\//i.test(data.hyperlink)) output.href = data.hyperlink
+      } else if (isExternalMapLink(data.hyperlink)) output.href = data.hyperlink
+      const target = readTopicLink(data.hyperlink)
+      if (target) links.push({ output, target })
       const labels = list(data.tag).map(item => typeof item === 'string' ? item : record(item).text)
         .filter((item): item is string => typeof item === 'string' && !!item)
       if (labels.length) output.labels = labels
@@ -153,9 +163,34 @@ export async function exportXmind(sheets: Sheet[], active: string, dark: boolean
       const to = ids.get(connection.target)
       return to ? [{ id: id(), class: 'relationship', end1Id: connection.source, end2Id: to, title: connection.title }] : []
     })
-    return { id: id(), class: 'sheet', title: sheet.title, rootTopic, relationships, topicPositioning: 'fixed',
+    return { id: sheetId, class: 'sheet', title: sheet.title, rootTopic, relationships, topicPositioning: 'fixed',
       style: { id: id(), properties: { 'svg:fill': theme.backgroundColor } } }
   })
+  const reverse: { sourceId: string; destination: Topic }[] = []
+  for (const { output, target } of links) {
+    const destination = documentIds.get(target.sheet)
+    const targetId = target.topic ? destination?.topics.get(target.topic) : destination?.id
+    if (!targetId) continue
+    const href = 'xmind:#' + targetId
+    if (output.href || target.bidirectional) {
+      output.extensions = [...(output.extensions ?? []), {
+        provider: topicLinkExtension, content: [{ href, ...(target.bidirectional ? { bidirectional: true } : {}) }],
+        resourceRefs: [],
+      }]
+    }
+    if (!output.href) output.href = href
+    const targetTopic = target.topic ? topicsById.get(targetId) : undefined
+    if (target.bidirectional && targetTopic) reverse.push({ sourceId: output.id, destination: targetTopic })
+  }
+  // Xmind has one native href per topic. Use an unoccupied slot for the return link.
+  for (const { sourceId, destination } of reverse) {
+    if (destination.href) continue
+    const href = 'xmind:#' + sourceId
+    destination.href = href
+    destination.extensions = [...(destination.extensions ?? []), {
+      provider: topicLinkExtension, content: [{ href, generated: true }], resourceRefs: [],
+    }]
+  }
 
   zip.file('content.json', JSON.stringify(content))
   const activeIndex = sheets.findIndex(sheet => sheet.id === active)

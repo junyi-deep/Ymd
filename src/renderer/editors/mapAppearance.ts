@@ -102,7 +102,7 @@ export function collectMapAppearance(settings: MapSettings, tree: MapData, previ
     }
     node.children?.forEach(collectChild)
     const label = previous?.imported && address !== 'root' ? encodeImportedTopic(text) : text
-    if (Object.keys(data).length || audio.length) styles.push({ address, text: label, data: { ...data, uid: node.data.uid },
+    if (node.data.uid || Object.keys(data).length || audio.length) styles.push({ address, text: label, data: { ...data, uid: node.data.uid },
       ...(audio.length ? { audio } : {}) })
   }
   collect(tree, 'root')

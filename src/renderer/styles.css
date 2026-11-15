@@ -425,6 +425,12 @@ dialog button.primary { background: var(--accent); color: var(--accent-ink); }
 .md-image button { color: var(--link); text-decoration: underline; text-underline-offset: .15em; }
 .map-canvas:focus { outline: none; }
 .map-task-dialog { width: min(460px, calc(100vw - 32px)); }
+.map-link-dialog { width: min(440px, calc(100vw - 32px)); }
+.map-link-dialog select[size] { padding-inline: 5px; }
+.map-link-dialog .map-link-choice { display: flex; align-items: center; gap: 8px; }
+.map-link-dialog input[type="checkbox"] { accent-color: var(--accent); }
+.map-link-dialog .map-link-remove { margin-right: auto; }
+.map-link-dialog button:disabled { opacity: .5; cursor: default; }
 .map-task-dialog p { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .map-task-fields { display: grid; gap: 8px; margin-top: 12px; }
 .map-task-fields label { display: grid; grid-template-columns: 92px minmax(0, 1fr); align-items: center; gap: 8px; }
