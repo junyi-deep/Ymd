@@ -39,6 +39,8 @@ import { documentBacklinks, documentTopics, mainMap, mapDocumentPath, mapTitle, 
 import { installCallouts } from './calloutLayer'
 import { MindMapCalloutFormat, MindMapCalloutText } from './MindMapCallout'
 import { calloutById, calloutTopicId, readCallouts, type Callout, type CalloutTarget } from './mapCallouts'
+import { editNumbering, type NumberingEdit } from './mapNumbering'
+import { installNumbering } from './mapNumberingLayer'
 
 class MapAssociativeLine extends AssociativeLine {
   protected checkOverlapNode(x: number, y: number) {
@@ -52,7 +54,7 @@ class MapAssociativeLine extends AssociativeLine {
 }
 
 for (const plugin of [MapAssociativeLine, Drag, Export, ExportPDF, KeyboardNavigation, MiniMap, NodeImgAdjust, OuterFrame, RainbowLines, SearchPlugin, Select]) MindMap.usePlugin(plugin)
-MindMap.extendNodeDataNoStylePropList(['ymdMarker', 'ymdFloating', 'ymdTask', 'ymdTodo', 'ymdStructure', 'ymdAudio', 'ymdOriginalImageSize', 'ymdCallouts', 'ymdWorkCalendar'])
+MindMap.extendNodeDataNoStylePropList(['ymdMarker', 'ymdFloating', 'ymdTask', 'ymdTodo', 'ymdStructure', 'ymdAudio', 'ymdOriginalImageSize', 'ymdCallouts', 'ymdWorkCalendar', 'ymdNumbering'])
 
 type MapNode = NonNullable<MindMap['renderer']['root']>
 type TopicField = '备注' | '标签'
@@ -418,6 +420,17 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, onChange, r
     map.command.originAddHistory()
   }
 
+  function updateNumbering(edit: NumberingEdit) {
+    const map = engine.current
+    if (!map) return
+    map.renderer.textEdit.hideEditTextBox()
+    const selection = new Set(map.renderer.activeNodeList.filter(topic => !topic.isGeneralization).map(topic => topic.uid))
+    map.command.originAddHistory()
+    if (!editNumbering(map.renderer.renderTree, selection, edit)) return
+    map.command.originAddHistory()
+    map.render()
+  }
+
   function updateTasks(edits: Map<string, MapTask | null>, schedule: boolean) {
     const map = engine.current
     if (!map) return false
@@ -546,6 +559,7 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, onChange, r
       return
     }
     engine.current = map
+    const removeNumbering = installNumbering(map)
     const callouts = installCallouts(map, {
       select: target => {
         setSelectedCallout(target)
@@ -606,6 +620,7 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, onChange, r
     resize.observe(host.current)
     return () => {
       resize.disconnect()
+      removeNumbering()
       audio.stop()
       callouts.dispose()
       calloutLayer.current = undefined
@@ -680,10 +695,16 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, onChange, r
   }, [searchOpen, query])
 
   useEffect(() => {
-    if (!gantt && !zen && !linking && !searchOpen && !formatOpen && !artOpen) return
     const escape = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape' || event.isComposing || event.defaultPrevented || calendarOpen || field || linkEditor || taskTopic || audioParent || calloutText ||
-          event.target instanceof HTMLElement && event.target.closest('.smm-node-edit-wrap, .document-menu')) return
+      if (event.key !== 'Escape' || event.isComposing || event.keyCode === 229 || event.defaultPrevented ||
+          calendarOpen || field || linkEditor || taskTopic || audioParent || calloutText) return
+      if (event.target instanceof HTMLElement && event.target.closest('.document-menu')) return
+      if (event.target instanceof HTMLElement && event.target.closest('.smm-node-edit-wrap')) {
+        event.preventDefault()
+        engine.current?.renderer.textEdit.hideEditTextBox()
+        host.current?.focus()
+        return
+      }
       if (gantt) { event.preventDefault(); toggleGantt(false) }
       else if (linking) { engine.current?.associativeLine.cancelCreateLine(); setLinking(false) }
       else if (searchOpen) { setQuery(''); setReplace(''); setSearchOpen(false); engine.current?.search.endSearch() }
@@ -693,7 +714,7 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, onChange, r
         artTrigger.current?.focus()
       }
       else if (zen) setZen(false)
-      else setFormatOpen(false)
+      else if (formatOpen) setFormatOpen(false)
     }
     window.addEventListener('keydown', escape)
     return () => window.removeEventListener('keydown', escape)
@@ -1154,7 +1175,7 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, onChange, r
       {!zen && !artOpen && formatOpen && (activeCallout && selectedCallout ? <MindMapCalloutFormat
         key={selectedCallout.id} note={activeCallout.note} close={() => setFormatOpen(false)}
         edit={() => editCallout(selectedCallout)} change={patch => changeCallout(selectedCallout, patch)} />
-        : <MindMapFormat {...{ tab, settings, node, version }} change={changeSettings} onTab={setTab}
+        : <MindMapFormat {...{ tab, settings, node, selected, version }} change={changeSettings} onTab={setTab} editNumbering={updateNumbering}
         structure={value => {
           if (node?.isRoot && value) changeSettings({ layout: value })
           else if (node && branchStructure(node.getData('ymdStructure')) !== value) {

@@ -7,6 +7,7 @@ import { calloutDefaults, calloutTopicId, readCallouts } from './mapCallouts'
 import { readTask, readTodo, type MapTask } from './mapTasks'
 import { exportTaskContent, taskExtension } from './xmindTasks'
 import { encodeXmindCalendar, readWorkCalendar } from './workCalendar'
+import { numberingExtension, readNumbering } from './mapNumbering'
 
 type Sheet = Pick<MapSheet, 'id' | 'title' | 'settings' | 'tree'>
 type Properties = Record<string, string>
@@ -68,6 +69,8 @@ export async function exportXmind(sheets: Sheet[], active: string, dark: boolean
       }
       const linkId = callout ?? data.uid
       if (linkId) ids.set(linkId, output.id)
+      const numbering = readNumbering(data.ymdNumbering)
+      if (numbering) output.extensions = [...(output.extensions ?? []), { provider: numberingExtension, content: numbering }]
       const task = readTask(data.ymdTask)
       const todo = readTodo(data.ymdTodo)
       if (task) tasks.push({ output, task })

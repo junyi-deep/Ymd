@@ -48,6 +48,7 @@ export function readLegacyXmind(content: string, stylesheet?: string) {
     const image = child(element, 'img')
     const position = child(element, 'position')
     const plain = child(child(element, 'notes'), 'plain') ?? child(child(element, 'notes'), 'html')
+    const numbering = child(element, 'numbering')
     const boundaries = children(child(element, 'boundaries'), 'boundary')
     const summaries = children(child(element, 'summaries'), 'summary')
     const extensions = children(child(element, 'extensions'), 'extension').map(extension => ({
@@ -60,6 +61,11 @@ export function readLegacyXmind(content: string, stylesheet?: string) {
       width: child(element, 'title')?.getAttributeNS(svg, 'width') ?? undefined,
       ...(position ? { position: { x: Number(position.getAttributeNS(svg, 'x')), y: Number(position.getAttributeNS(svg, 'y')) } } : {}),
       notes: { plain: { content: plain?.textContent } },
+      numbering: numbering ? {
+        numberFormat: attribute(numbering, 'number-format'), numberDepth: attribute(numbering, 'number-depth'),
+        prependingNumbers: attribute(numbering, 'prepending-numbers'), numberSeparator: attribute(numbering, 'number-separator'),
+        prefix: child(numbering, 'prefix')?.textContent, suffix: child(numbering, 'suffix')?.textContent,
+      } : undefined,
       labels: children(child(element, 'labels'), 'label').map(label => label.textContent),
       markers: children(child(element, 'marker-refs'), 'marker-ref').map(marker => ({ markerId: attribute(marker, 'marker-id') })),
       image: image ? { src: attribute(image, 'src') ?? linked(image, 'href'),

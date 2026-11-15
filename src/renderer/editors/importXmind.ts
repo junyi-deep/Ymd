@@ -10,6 +10,7 @@ import { calloutTopicId } from './mapCallouts'
 import { importTaskExtension, legacyTaskExtension, taskExtension } from './xmindTasks'
 import type { MapTask } from './mapTasks'
 import { decodeXmindCalendar, workCalendarExtension } from './workCalendar'
+import { legacyNumbering, numberingExtension, readNumbering } from './mapNumbering'
 
 const MiB = 1024 * 1024
 const asRecord = (value: unknown) => value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
@@ -218,7 +219,8 @@ export async function importXmind(data: ArrayBuffer) {
       const tasks: { uid: string; task: MapTask }[] = []
       let floating = 0
       async function topic(raw: Record<string, unknown>, depth: number,
-        kind: 'attached' | 'detached' | 'callout' = 'attached', owner?: string): Promise<MapData> {
+        kind: 'attached' | 'detached' | 'callout' = 'attached', owner?: string,
+        inheritedNumbering?: ReturnType<typeof legacyNumbering>): Promise<MapData> {
         if (++topicCount > 10000 || depth > 80 || !Object.hasOwn(raw, 'title') && !Object.hasOwn(raw, 'id')) {
           throw new Error('Xmind 主题无效，或数量与层级超过导入限制。')
         }
@@ -267,6 +269,21 @@ export async function importXmind(data: ArrayBuffer) {
         })
         if (icons.length) node.data.icon = icons
         const extensions = records(raw.extensions)
+        const numbering = extensions.find(extension => extension.provider === numberingExtension)
+        if (numbering) {
+          const content = asRecord(numbering.content)
+          const config = readNumbering(content)
+          if (config) node.data.ymdNumbering = config
+          if (content.pattern && content.pattern !== 'none' && !config?.pattern) unconverted.add('部分主题编号')
+        } else if (inheritedNumbering && kind === 'attached') {
+          node.data.ymdNumbering = inheritedNumbering.numbering
+        }
+        const legacy = asRecord(raw.numbering)
+        const declaredNumbering = legacyNumbering(legacy)
+        if (legacy.numberFormat && legacy.numberFormat !== 'org.xmind.numbering.none' && !declaredNumbering) unconverted.add('部分主题编号')
+        const childNumbering = declaredNumbering ?? (
+          !legacy.numberFormat && !numbering && inheritedNumbering && inheritedNumbering.depth > 1
+            ? { ...inheritedNumbering, depth: inheritedNumbering.depth - 1 } : undefined)
         const taskData = extensions.find(extension => extension.provider === taskExtension)
           ?? extensions.find(extension => extension.provider === legacyTaskExtension)
         if (taskData) {
@@ -302,7 +319,7 @@ export async function importXmind(data: ArrayBuffer) {
         if (node.data.attachmentUrl) addAddress(node, supplemental?.href)
         const children = asRecord(raw.children)
         const attached: MapData[] = []
-        for (const child of records(children.attached)) attached.push(await topic(child, depth + 1))
+        for (const child of records(children.attached)) attached.push(await topic(child, depth + 1, 'attached', undefined, childNumbering))
         node.children = [...attached]
         for (const child of records(children.detached)) node.children.push(await topic(child, depth + 1, 'detached'))
         const callouts: MapData[] = []

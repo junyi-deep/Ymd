@@ -5,6 +5,8 @@ declare module 'simple-mind-map' {
   }
 
   export interface MapNode {
+    opt: { ymdNumberText?: string }
+    style: { text(node: import('@svgdotjs/svg.js').Text): void }
     isRoot: boolean
     uid: string
     isGeneralization?: boolean
@@ -67,9 +69,16 @@ declare module 'simple-mind-map' {
     static extendNodeDataNoStylePropList(fields: string[]): void
     static usePlugin(plugin: unknown): typeof MindMap
     command: { originAddHistory(): void }
+    nodeInnerPrefixList: {
+      name: string
+      createNodeData: (context: { data: NodeData }) => [string, string | undefined]
+      updateNodeData: (node: MapNode, data: Record<string, string | undefined>) => boolean
+      createContent: (node: MapNode) => { node: import('@svgdotjs/svg.js').Text; width: number; height: number } | undefined
+    }[]
     draw: { node: SVGGElement }
     renderer: {
       root: MapNode | null
+      renderTree: NodeData
       layout: MapLayout
       activeNodeList: MapNode[]
       textEdit: { hideEditTextBox(): void }

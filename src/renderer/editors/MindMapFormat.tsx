@@ -1,6 +1,7 @@
-import { GitBranch, LayoutGrid, Palette as PaletteIcon, SlidersHorizontal, X } from 'lucide-react'
+import { GitBranch, LayoutGrid, ListOrdered, Palette as PaletteIcon, SlidersHorizontal, X } from 'lucide-react'
 import type MindMap from 'simple-mind-map'
 import { branchStructure, mapLayouts, palettes, type MapSettings, type Palette, type Structure } from './mapAppearance'
+import { attachedTopic, numberingPatterns, readNumbering, type NumberingEdit, type NumberingPattern } from './mapNumbering'
 
 type MapNode = NonNullable<MindMap['renderer']['root']>
 const topics = [
@@ -10,18 +11,26 @@ const topics = [
 ]
 const colorValue = (value: unknown, fallback: string) => typeof value === 'string' && /^#[0-9a-f]{6}$/i.test(value) ? value : fallback
 
-export function MindMapFormat({ tab, settings, node, version, change, onTab, close, style, structure }: {
+export function MindMapFormat({ tab, settings, node, selected, version, change, onTab, close, style, structure, editNumbering }: {
   tab: 'map' | 'topic'
   settings: MapSettings
   node?: MapNode
+  selected: MapNode[]
   version: number
   change: (patch: Partial<MapSettings>) => void
   onTab: (tab: 'map' | 'topic') => void
   close: () => void
   style: (key: string, value: unknown) => void
   structure: (value: Structure | undefined) => void
+  editNumbering: (edit: NumberingEdit) => void
 }) {
   const data = node?.getData() ?? {}
+  const numberable = selected.filter(topic => topic.parent && !topic.isGeneralization && attachedTopic(topic.nodeData))
+  const configs = numberable.map(topic => readNumbering(topic.getData('ymdNumbering')))
+  const pattern = configs.every(config => config?.pattern === configs[0]?.pattern) ? configs[0]?.pattern ?? '' : 'mixed'
+  const numbered = configs.filter(config => config?.pattern)
+  const tiered = numbered.filter(config => config?.tiered).length
+  const restarted = numbered.filter(config => config?.fixedIndex === 0).length
   return <aside className="map-format" aria-label={tab === 'topic' && node ? '主题格式 ' + (data.text || '未命名') : '思维导图格式'} data-version={version}>
     <header><strong>格式</strong><button className="icon-button" aria-label="收起格式面板" onClick={close}><X size={16} /></button></header>
     <div className="segments map-format-tabs">
@@ -78,6 +87,24 @@ export function MindMapFormat({ tab, settings, node, version, change, onTab, clo
         <label>下划线<input type="checkbox" checked={data.textDecoration === 'underline'} onChange={event => style('textDecoration', event.target.checked ? 'underline' : 'none')} /></label>
         <label>对齐<select value={String(data.textAlign ?? 'left')} onChange={event => style('textAlign', event.target.value)}><option value="left">左对齐</option><option value="center">居中</option><option value="right">右对齐</option></select></label>
       </section>
+      {!!numberable.length && <section><h3><ListOrdered size={15} />编号</h3>
+        <label>编号样式<select value={pattern} onChange={event => editNumbering({ pattern: (event.target.value || null) as NumberingPattern | null })}>
+          {pattern === 'mixed' && <option value="mixed" disabled>混合</option>}
+          <option value="">无</option>
+          {numberingPatterns.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+        </select></label>
+        {!!numbered.length && <>
+          <label>分层编号<input type="checkbox" checked={tiered === numbered.length}
+            ref={element => { if (element) element.indeterminate = tiered > 0 && tiered < numbered.length }}
+            onChange={event => editNumbering({ tiered: event.target.checked })} /></label>
+          <label>从此处重新编号<input type="checkbox" checked={restarted === numbered.length}
+            ref={element => { if (element) element.indeterminate = restarted > 0 && restarted < numbered.length }}
+            onChange={event => editNumbering({ restart: event.target.checked })} /></label>
+          <button className="tool-button" disabled={!numberable.some(topic =>
+            (topic.parent?.nodeData.children?.filter(attachedTopic).length ?? 0) > 1)}
+            onClick={() => editNumbering({ siblings: true })}>应用到同级主题</button>
+        </>}
+      </section>}
       <section><h3><GitBranch size={15} />分支</h3>
         <label>线条颜色<input type="color" value={colorValue(data.lineColor, '#8c9ab1')} onChange={event => style('lineColor', event.target.value)} /></label>
         <label>线条宽度<input type="range" min="1" max="8" value={Number(data.lineWidth ?? settings.lineWidth)} onChange={event => style('lineWidth', Number(event.target.value))} /></label>
