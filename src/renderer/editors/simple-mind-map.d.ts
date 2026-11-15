@@ -90,6 +90,7 @@ declare module 'simple-mind-map' {
       theme?: string
       themeConfig?: Record<string, unknown>
       layout?: string
+      fit?: boolean
       defaultInsertSecondLevelNodeText?: string
       defaultInsertBelowSecondLevelNodeText?: string
       beforeAssociativeLineConnection?: () => boolean

@@ -1,6 +1,7 @@
 import JSZip from 'jszip'
 import { branchStructure, mapTheme, palettes, type MapData, type MapSheet } from './mapAppearance'
 import { loadAudio, readAudioNote } from './mapAudio'
+import { progressMarkers, shapes, structures, styleKeys } from './xmindFormat'
 
 type Sheet = Pick<MapSheet, 'id' | 'title' | 'settings' | 'tree'>
 type Properties = Record<string, string>
@@ -16,22 +17,6 @@ type Topic = {
   children?: { attached?: Topic[]; detached?: Topic[]; summary?: Topic[] }
 }
 
-const structures: Record<string, string> = {
-  mindMap: 'org.xmind.ui.map', logicalStructure: 'org.xmind.ui.logic.right',
-  logicalStructureLeft: 'org.xmind.ui.logic.left', organizationStructure: 'org.xmind.ui.org-chart.down',
-  catalogOrganization: 'org.xmind.ui.tree.right', timeline: 'org.xmind.ui.timeline.horizontal',
-  verticalTimeline: 'org.xmind.ui.timeline.vertical', fishbone: 'org.xmind.ui.fishbone.rightHeaded',
-}
-const styleKeys: Record<string, string> = {
-  fillColor: 'svg:fill', color: 'fo:color', fontFamily: 'fo:font-family',
-  fontSize: 'fo:font-size', fontWeight: 'fo:font-weight', fontStyle: 'fo:font-style',
-  textDecoration: 'fo:text-decoration', textAlign: 'fo:text-align',
-  borderColor: 'border-line-color', borderWidth: 'border-line-width',
-  lineWidth: 'line-width', lineColor: 'line-color',
-}
-const shapes: Record<string, string> = {
-  rectangle: 'rect', roundedRectangle: 'roundedRect', ellipse: 'ellipse', circle: 'circle', diamond: 'diamond', parallelogram: 'parallelogram',
-}
 const pixels = new Set(['fontSize', 'lineWidth', 'borderWidth'])
 const id = () => crypto.randomUUID().replaceAll('-', '')
 const record = (value: unknown) => value && typeof value === 'object' ? value as Record<string, unknown> : {}
@@ -42,11 +27,11 @@ const range = (from: number, to: number) => '(' + from + ',' + to + ')'
 export async function exportXmind(sheets: Sheet[], active: string, dark: boolean): Promise<ArrayBuffer> {
   const zip = new JSZip()
   const manifest = { 'file-entries': { 'content.json': {}, 'metadata.json': {} } as Record<string, object> }
-  const resource = (extension: string, data: string | Promise<ArrayBuffer>) => {
-    const path = 'resources/' + id() + '.' + extension
+  const resource = (extension: string, data: string | Promise<ArrayBuffer>, name?: string) => {
+    const path = 'resources/' + id() + (name ? '/' + name : '.' + extension)
     zip.file(path, data, { base64: typeof data === 'string' })
     manifest['file-entries'][path] = {}
-    return 'xap:' + path
+    return 'xap:' + path.split('/').map(encodeURIComponent).join('/')
   }
   const audioResources = new Map<string, string>()
 
@@ -87,15 +72,20 @@ export async function exportXmind(sheets: Sheet[], active: string, dark: boolean
       if (typeof data.shape === 'string' && Object.hasOwn(shapes, data.shape)) properties['shape-class'] = 'org.xmind.topicShape.' + shapes[data.shape]
       output.style = { id: id(), properties }
       if (typeof data.note === 'string' && data.note) output.notes = { plain: { content: data.note } }
-      if (typeof data.hyperlink === 'string' && /^https?:\/\//i.test(data.hyperlink)) output.href = data.hyperlink
+      const attachment = typeof data.attachmentUrl === 'string' && /^data:application\/octet-stream;base64,([A-Za-z0-9+/=]+)$/.exec(data.attachmentUrl)
+      if (attachment) {
+        const name = String(data.attachmentName ?? '附件').replace(/[<>:"/\\|?*\u0000-\u001f]/g, '_').slice(0, 160).replace(/^[.]+|[. ]+$/g, '')
+        output.href = resource('', attachment[1], name || '附件')
+      } else if (typeof data.hyperlink === 'string' && /^https?:\/\//i.test(data.hyperlink)) output.href = data.hyperlink
       const labels = list(data.tag).map(item => typeof item === 'string' ? item : record(item).text)
         .filter((item): item is string => typeof item === 'string' && !!item)
       if (labels.length) output.labels = labels
       const markers = list(data.icon).flatMap(item => {
         if (typeof item !== 'string') return []
         const [kind, value] = item.split('_')
-        if (kind === 'priority' && /^[1-6]$/.test(value)) return [{ markerId: 'priority-' + value }]
-        if (kind === 'progress' && value === '8') return [{ markerId: 'task-done' }]
+        if (kind === 'priority' && /^[1-9]$/.test(value)) return [{ markerId: 'priority-' + value }]
+        const markerId = progressMarkers[Number(value)]
+        if (kind === 'progress' && markerId) return [{ markerId }]
         return []
       })
       if (markers.length) output.markers = markers

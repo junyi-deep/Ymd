@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
-import { ArrowLeft, Check, ChevronRight, CircleAlert, FilePlus2, FileText, Home, ListTree, Network, PanelLeft, LocateFixed, Pin, Plus, Save, Search, Settings2, Shapes, Star, X } from 'lucide-react'
+import { ArrowLeft, Check, ChevronRight, CircleAlert, FilePlus2, FileText, FolderInput, Home, ListTree, Network, PanelLeft, LocateFixed, Pin, Plus, Save, Search, Settings2, Shapes, Star, X } from 'lucide-react'
 import { defaultPreferences, type Command, type EditorMode, type Entry, type FileKind, type Preferences, type Scope, type SearchHit, type VersionStatus } from '../shared/contracts'
 import { DocumentIcon, FilesTree } from './FilesTree'
 import { SearchDialog } from './SearchDialog'
@@ -8,7 +8,8 @@ import { useFileMarks } from './useFileMarks'
 import { useDocuments, type Session } from './documents'
 import { MarkdownEditor } from './editors/Markdown'
 import { OutlineEditor } from './editors/Outline'
-import { relocateMapAppearance } from './editors/mapAppearance'
+import { discardInterruptedMapImports, loadMapAppearance, relocateMapAppearance, saveImportedMap } from './editors/mapAppearance'
+import { forgetAudio, storeAudio } from './editors/mapAudio'
 
 const MindMapEditor = lazy(() => import('./editors/MindMap'))
 const DrawingEditor = lazy(() => import('./editors/Drawing'))
@@ -52,6 +53,8 @@ export function App() {
   const [prompt, setPrompt] = useState<Prompt>()
   const [notice, setNotice] = useState('')
   const [busy, setBusy] = useState(false)
+  const [importing, setImporting] = useState(false)
+  const importPending = useRef(false)
   const [rename, setRename] = useState<{ session: Session; name: string }>()
   const flushEditor = useRef<(() => void) | undefined>(undefined)
   const registerFlush = useCallback((flush?: () => void) => { flushEditor.current = flush }, [])
@@ -82,6 +85,7 @@ export function App() {
 
   useEffect(() => {
     run(async () => {
+      discardInterruptedMapImports()
       const result = await window.desktop.initialize()
       setLibrary(result.library)
       setProject(result.project)
@@ -146,7 +150,10 @@ export function App() {
 
   function showFile(file: Parameters<typeof sessions.open>[0], scope = scopeOf(file.path)) {
     if (active?.path !== file.path) flushEditor.current?.()
+    const openMap = file.kind === 'markdown' && !sessions.latest.current.some(document => document.path === file.path) &&
+      !!loadMapAppearance(file.path).imported
     sessions.open(file, scope)
+    if (openMap) sessions.patch(file.path, { mode: 'map' })
     setSettings(false)
   }
 
@@ -155,6 +162,48 @@ export function App() {
     run(async () => {
       const file = await window.desktop.chooseFile()
       if (file && intent === openIntent.current) showFile(file)
+    })
+  }
+
+  function importWorkbook() {
+    const directory = active && scopeOf(active.path) === 'project' ? project ?? library : library
+    if (!directory || importPending.current) return
+    importPending.current = true
+    const intent = ++openIntent.current
+    setImporting(true)
+    run(async () => {
+      const reservation = 'ymd.import:' + crypto.randomUUID() + directory.path + '_'.repeat(120)
+      const recordings: string[] = []
+      let saved = false
+      try {
+        const source = await window.desktop.chooseXmind()
+        if (!source || intent !== openIntent.current) return
+        const { importXmind } = await import('./editors/importXmind')
+        const { text, appearance, audios, unconverted } = await importXmind(source.data)
+        if (intent !== openIntent.current) return
+        const settings = JSON.stringify(appearance)
+        // Reserve space for the appearance before writing a new Markdown file.
+        try { localStorage.setItem(reservation, settings) }
+        catch { throw new Error('导图样式和附件超过当前可用的本机存储空间。') }
+        for (const { id, blob } of audios) {
+          await storeAudio(id, blob)
+          recordings.push(id)
+        }
+        if (intent !== openIntent.current) return
+        const file = await window.desktop.createImportedMarkdown(directory.path, source.name, text)
+        localStorage.removeItem(reservation)
+        saveImportedMap(file.path, settings)
+        saved = true
+        setRevision(value => value + 1)
+        if (intent !== openIntent.current) return
+        showFile(file)
+        if (unconverted.length) setNotice('已导入工作簿。以下内容无法转换：' + unconverted.join('、') + '。')
+      } finally {
+        localStorage.removeItem(reservation)
+        if (!saved) await Promise.allSettled(recordings.map(forgetAudio))
+        importPending.current = false
+        setImporting(false)
+      }
     })
   }
 
@@ -226,6 +275,7 @@ export function App() {
     if (command === 'search') setSearchOpen(value => !value)
     if (searchOpen) return
     if (command === 'open-file') openFile()
+    if (command === 'import-xmind') importWorkbook()
     if (command === 'new-file' || command === 'new-drawing') create(command === 'new-drawing' ? 'drawing' : 'markdown')
     if (command === 'preferences') { flushEditor.current?.(); setSettingsPage('外观'); setSettings(value => !value) }
     if (command === 'save' && active) { flushEditor.current?.(); run(() => sessions.save(active.path)) }
@@ -406,6 +456,7 @@ export function App() {
               <button onClick={() => create()}><FilePlus2 size={21} /><span>新建文档</span><kbd>{platform === 'darwin' ? '⌘' : 'Ctrl'} N</kbd></button>
               <button onClick={() => create('drawing')}><Shapes size={21} /><span>新建绘图</span><ChevronRight size={16} /></button>
               <button onClick={openFile}><FileText size={21} /><span>打开本机文件</span><ChevronRight size={16} /></button>
+              <button onClick={importWorkbook} disabled={importing || !library}><FolderInput size={21} /><span>{importing ? '正在导入 Xmind…' : '导入 Xmind'}</span><ChevronRight size={16} /></button>
             </div>
           </div> : <Suspense fallback={<div className="startup">正在加载编辑器…</div>}>
             {active.kind === 'drawing'
@@ -439,7 +490,8 @@ export function App() {
                   })} />
                 : active.mode === 'outline'
                   ? <OutlineEditor key={active.path + ':' + active.reload} text={active.text} platform={platform} onChange={edit} />
-                  : <MindMapEditor key={active.path + ':' + active.reload} text={active.text} name={active.name} path={active.path} dark={dark} onChange={edit} registerFlush={registerFlush} />}
+                  : <MindMapEditor key={active.path + ':' + active.reload} text={active.text} name={active.name} path={active.path} dark={dark} onChange={edit}
+                    registerFlush={registerFlush} importWorkbook={importWorkbook} importing={importing} />}
           </Suspense>}
         </main>
       </>}

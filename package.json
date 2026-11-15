@@ -30,6 +30,7 @@
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.3.0",
     "@vscode/ripgrep-universal": "^1.18.0",
+    "@zip.js/zip.js": "^2.25.0",
     "concurrently": "^10.0.7",
     "dompurify": "^3.4.18",
     "electron": "^45.3.2",

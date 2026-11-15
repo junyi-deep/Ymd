@@ -64,7 +64,7 @@ export const defaultPreferences: Preferences = {
   theme: 'system', size: 'normal', solidBackground: false, animations: true, documentTheme: 'classic',
   autoSave: false, remoteImages: false, autoCheckUpdates: false, searchEngine: 'google',
 }
-export type Command = 'open-file' | 'new-file' | 'new-drawing' | 'search' | 'save' | 'preferences' | 'close' | 'find'
+export type Command = 'open-file' | 'import-xmind' | 'new-file' | 'new-drawing' | 'search' | 'save' | 'preferences' | 'close' | 'find'
 
 export const markdownImageExtensions = {
   png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif',
@@ -90,6 +90,8 @@ export interface Desktop {
   search(query: string): Promise<SearchHit[]>
   cancelSearch(): Promise<void>
   chooseFile(): Promise<DocumentFile | null>
+  chooseXmind(): Promise<{ name: string; data: ArrayBuffer } | null>
+  createImportedMarkdown(directory: string, name: string, text: string): Promise<DocumentFile>
   read(path: string): Promise<DocumentFile>
   create(directory: string, kind: FileKind): Promise<DocumentFile>
   save(path: string, text: string, version: string): Promise<{ version: string; modified: number } | { conflict: true }>

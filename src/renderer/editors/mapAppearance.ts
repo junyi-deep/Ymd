@@ -47,19 +47,38 @@ export interface MapSheet {
   tree: MapData
 }
 
-export interface MapAppearance { settings: MapSettings; styles: StoredStyle[]; sheets?: MapSheet[]; floating?: MapData[] }
+interface ImportedMainSheet { title: string; root: string; active?: string }
+export interface MapAppearance {
+  settings: MapSettings; styles: StoredStyle[]; sheets?: MapSheet[]; floating?: MapData[]; imported?: ImportedMainSheet
+}
 
 export const defaultMapSettings: MapSettings = { layout: 'mindMap', palette: 'ocean', font: 'system-ui', lineWidth: 2, colored: true }
+const mapKey = (path: string) => 'ymd.map:' + path
+
+// A topic title is plain text. Keep punctuation, tabs and line breaks inside a single list item.
+export function encodeImportedTopic(title: string) {
+  return title.replace(/&/g, '&amp;')
+    .replace(/[\r\n\t]/g, char => '&#' + char.charCodeAt(0) + ';')
+    .replace(/(^ +| +$)/g, spaces => '&#32;'.repeat(spaces.length))
+    .replace(/([*<>[\]_`~|\\])/g, '\\$1')
+    .replace(/^([!#+=\-])/, '\\$1')
+    .replace(/^(\d{1,9})([.)])(?= |$)/, '$1\\$2')
+}
+
+export function decodeImportedTopic(source: string) {
+  return source.replace(/\\([!#*+\-.)<>=[\]_`~|\\])/g, '$1')
+    .replace(/&#(9|10|13|32);|&amp;/g, (entity, code: string | undefined) => code ? String.fromCharCode(Number(code)) : '&')
+}
 
 export function loadMapAppearance(path: string): MapAppearance {
   try {
-    const value = JSON.parse(localStorage.getItem('ymd.map:' + path) ?? 'null')
+    const value = JSON.parse(localStorage.getItem(mapKey(path)) ?? 'null')
     if (value?.settings && Array.isArray(value.styles)) return value
   } catch {}
   return { settings: defaultMapSettings, styles: [] }
 }
 
-export function saveMapAppearance(path: string, settings: MapSettings, tree: MapData) {
+export function collectMapAppearance(settings: MapSettings, tree: MapData, previous?: MapAppearance): MapAppearance {
   const styles: StoredStyle[] = []
   const floating: MapData[] = []
   function collect(node: MapData, address: string) {
@@ -82,12 +101,33 @@ export function saveMapAppearance(path: string, settings: MapSettings, tree: Map
       }
     }
     node.children?.forEach(collectChild)
-    if (Object.keys(data).length || audio.length) styles.push({ address, text, data: { ...data, uid: node.data.uid },
+    const label = previous?.imported && address !== 'root' ? encodeImportedTopic(text) : text
+    if (Object.keys(data).length || audio.length) styles.push({ address, text: label, data: { ...data, uid: node.data.uid },
       ...(audio.length ? { audio } : {}) })
   }
   collect(tree, 'root')
-  const { sheets } = loadMapAppearance(path)
-  localStorage.setItem('ymd.map:' + path, JSON.stringify({ settings, styles, sheets, floating }))
+  const imported = previous?.imported
+  return { ...previous, settings, styles, floating,
+    ...(imported ? { imported: { ...imported, root: tree.data.text ?? imported.root } } : {}) }
+}
+
+export function saveMapAppearance(path: string, settings: MapSettings, tree: MapData) {
+  localStorage.setItem(mapKey(path), JSON.stringify(collectMapAppearance(settings, tree, loadMapAppearance(path))))
+}
+
+export function saveImportedMap(path: string, appearance: string) {
+  localStorage.setItem(mapKey(path), appearance)
+}
+
+export function discardInterruptedMapImports() {
+  for (const key of Object.keys(localStorage)) {
+    if (key.startsWith('ymd.import:')) localStorage.removeItem(key)
+  }
+}
+
+export function rememberImportedSheet(path: string, active?: string) {
+  const value = loadMapAppearance(path)
+  if (value.imported) localStorage.setItem(mapKey(path), JSON.stringify({ ...value, imported: { ...value.imported, active } }))
 }
 
 export function restoreFloating(tree: MapData, floating: MapData[]) {
@@ -97,7 +137,7 @@ export function restoreFloating(tree: MapData, floating: MapData[]) {
 
 export function saveMapSheets(path: string, sheets: MapSheet[]) {
   const appearance = loadMapAppearance(path)
-  localStorage.setItem('ymd.map:' + path, JSON.stringify({ ...appearance, sheets }))
+  localStorage.setItem(mapKey(path), JSON.stringify({ ...appearance, sheets }))
 }
 
 export function restoreMapStyles(tree: MapData, styles: StoredStyle[]) {
@@ -125,13 +165,13 @@ export function restoreMapStyles(tree: MapData, styles: StoredStyle[]) {
 
 export function relocateMapAppearance(oldPath: string, newPath: string, title: string) {
   try {
-    const key = 'ymd.map:' + oldPath
+    const key = mapKey(oldPath)
     const raw = localStorage.getItem(key)
     if (!raw) return
     const value = JSON.parse(raw) as MapAppearance
     const root = value.styles.find(style => style.address === 'root')
-    if (root) root.text = title.replace(/\.md$/i, '')
-    localStorage.setItem('ymd.map:' + newPath, JSON.stringify(value))
+    if (root && !value.imported) root.text = title.replace(/\.md$/i, '')
+    localStorage.setItem(mapKey(newPath), JSON.stringify(value))
     localStorage.removeItem(key)
   } catch {}
 }

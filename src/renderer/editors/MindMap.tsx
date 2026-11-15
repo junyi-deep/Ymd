@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { ChevronDown, ChevronsLeft, ClipboardList, Crosshair, Download, Focus, GitBranch, GitFork, ImagePlus, ListTree, Map, Maximize, Mic, Minus, Paperclip, Plus, Redo2, Search, SlidersHorizontal, Square, Star, Sticker, StickyNote, Tag, Trash2, Undo2, X } from 'lucide-react'
+import { ChevronDown, ChevronsLeft, ClipboardList, Crosshair, Download, Focus, FolderInput, GitBranch, GitFork, ImagePlus, ListTree, Map, Maximize, Mic, Minus, Paperclip, Plus, Redo2, Search, SlidersHorizontal, Square, Star, Sticker, StickyNote, Tag, Trash2, Undo2, X } from 'lucide-react'
 import DOMPurify from 'dompurify'
 import MindMap from 'simple-mind-map'
 import AssociativeLine from 'simple-mind-map/src/plugins/AssociativeLine.js'
@@ -22,7 +22,7 @@ import { MindMapArt } from './MindMapArt'
 import { addTopicImage, applyArt, imagePlacements, installTopicImageGestures, isTopicImage, placeTopicImage, removeTopicImage, resetTopicImage, topicAcceptsArt } from './mapTopicImages'
 import { audioButton, audioTitle, createAudioPlayer, forgetAudio, loadAudio, readAudioNote, storeAudio, type AudioNote } from './mapAudio'
 import { MarkdownMenu, type MenuItem } from './MarkdownMenu'
-import { branchStructure, defaultMapSettings, loadMapAppearance, mapTheme, palettes, restoreFloating, restoreMapStyles, saveMapAppearance, saveMapSheets, type MapAppearance, type MapData, type MapSettings, type MapSheet } from './mapAppearance'
+import { branchStructure, decodeImportedTopic, defaultMapSettings, encodeImportedTopic, loadMapAppearance, mapTheme, palettes, rememberImportedSheet, restoreFloating, restoreMapStyles, saveMapAppearance, saveMapSheets, type MapAppearance, type MapData, type MapSettings, type MapSheet } from './mapAppearance'
 import { installBranchLayouts } from './mixedMapLayout'
 
 class MapAssociativeLine extends AssociativeLine {
@@ -51,18 +51,27 @@ function documentTopics(nodes: MapData[]): MapData[] {
   return nodes.flatMap(node => node.data.ymdFloating === true ? [] : readAudioNote(node.data.ymdAudio) ? documentTopics(node.children ?? []) : [node])
 }
 
-function fromMap(nodes: MapData[]): Block[] {
+function fromMap(nodes: MapData[], imported = false): Block[] {
   const branches = documentTopics(nodes)
   const marker = branches.find(node => /^[-+*]$/.test(String(node.data.ymdMarker)))?.data.ymdMarker ?? '-'
   return branches.map((node, index) => ({
-    id: node.data.uid ?? String(index), text: node.data.text ?? '', marker: String(marker),
-    children: fromMap(node.children ?? []),
+    id: node.data.uid ?? String(index), text: imported ? encodeImportedTopic(node.data.text ?? '') : node.data.text ?? '', marker: String(marker),
+    children: fromMap(node.children ?? [], imported),
   }))
 }
 
 function mainMap(name: string, blocks: Block[], appearance: MapAppearance) {
-  const root: MapData = { data: { text: mapTitle(name), uid: rootId }, children: toMap(blocks) }
+  const root: MapData = { data: { text: appearance.imported?.root ?? mapTitle(name), uid: rootId }, children: toMap(blocks) }
   restoreMapStyles(root, appearance.styles)
+  if (appearance.imported) {
+    function decode(nodes: MapData[]) {
+      for (const node of documentTopics(nodes)) {
+        node.data.text = decodeImportedTopic(node.data.text ?? '')
+        decode(node.children ?? [])
+      }
+    }
+    decode(root.children ?? [])
+  }
   restoreFloating(root, appearance.floating ?? [])
   return root
 }
@@ -82,12 +91,16 @@ function hasAudio(tree: MapData, id: string): boolean {
 interface MapEditorProps {
   text: string; name: string; path: string; dark: boolean; onChange: (text: string) => void
   registerFlush: (flush?: () => void) => void
+  importWorkbook: () => void
+  importing: boolean
 }
 
 export default function MindMapEditor(props: MapEditorProps) {
   const { path } = props
-  const [sheets, setSheets] = useState(() => loadMapAppearance(path).sheets ?? [])
-  const [active, setActive] = useState<string>()
+  const [initial] = useState(() => loadMapAppearance(path))
+  const [sheets, setSheets] = useState(initial.sheets ?? [])
+  const [active, setActive] = useState(() => (initial.sheets ?? []).some(sheet => sheet.id === initial.imported?.active)
+    ? initial.imported?.active : undefined)
   const [renaming, setRenaming] = useState<string>()
   const [newTitle, setNewTitle] = useState('')
   const [remove, setRemove] = useState<MapSheet>()
@@ -123,9 +136,14 @@ export default function MindMapEditor(props: MapEditorProps) {
     return true
   }
 
+  function activate(id?: string) {
+    try { rememberImportedSheet(path, id) } catch { setStorageError(true) }
+    setActive(id)
+  }
+
   function select(id?: string) {
     flush.current?.()
-    setActive(id)
+    activate(id)
   }
 
   function createSheet(title: string, settings: MapSettings, tree: MapData) {
@@ -133,7 +151,7 @@ export default function MindMapEditor(props: MapEditorProps) {
     const id = crypto.randomUUID()
     const root = structuredClone(tree)
     root.data.isActive = false
-    if (updateSheets(current => [...current, { id, title, settings: { ...settings }, tree: root }])) setActive(id)
+    if (updateSheets(current => [...current, { id, title, settings: { ...settings }, tree: root }])) activate(id)
   }
 
   function create() {
@@ -181,7 +199,8 @@ export default function MindMapEditor(props: MapEditorProps) {
 
   async function saveXmind(all: boolean, tree: MapData, settings: MapSettings) {
     const title = mapTitle(props.name)
-    const current = { id: sheet?.id ?? rootId, title: sheet?.title ?? '主画布', settings, tree }
+    const mainTitle = initial.imported?.title ?? '主画布'
+    const current = { id: sheet?.id ?? rootId, title: sheet?.title ?? mainTitle, settings, tree }
     let workbook = [current]
     if (all) {
       let main = current
@@ -189,7 +208,7 @@ export default function MindMapEditor(props: MapEditorProps) {
         const projection = projectList(props.text)
         if (!projection) throw new Error('主画布的 Markdown 结构无法转换。可单独导出当前画布。')
         const appearance = loadMapAppearance(path)
-        main = { id: rootId, title: '主画布', settings: appearance.settings, tree: mainMap(props.name, projection.blocks, appearance) }
+        main = { id: rootId, title: mainTitle, settings: appearance.settings, tree: mainMap(props.name, projection.blocks, appearance) }
       }
       workbook = [main, ...sheetsRef.current.map(item => item.id === current.id ? current : item)]
     }
@@ -210,7 +229,7 @@ export default function MindMapEditor(props: MapEditorProps) {
         }
       }} />
     <nav className="map-sheets" aria-label="思维导图画布列表">
-      <button className="map-sheet" data-active={!active} onClick={() => select()}>主画布</button>
+      <button className="map-sheet" data-active={!active} onClick={() => select()}>{initial.imported?.title ?? '主画布'}</button>
       {sheets.map(item => <div className="map-sheet-item" key={item.id} onContextMenu={event => {
         event.preventDefault()
         setSheetMenu({ id: item.id, x: event.clientX, y: event.clientY })
@@ -232,6 +251,7 @@ export default function MindMapEditor(props: MapEditorProps) {
         }}><ChevronDown size={13} /></button>
       </div>)}
       <button className="icon-button" aria-label="新建画布" title="新建画布" onClick={create}><Plus size={16} /></button>
+      <button className="icon-button" aria-label="导入 Xmind" title="导入 Xmind" disabled={props.importing} onClick={props.importWorkbook}><FolderInput size={16} /></button>
       {storageError && <span className="map-storage-error" role="alert">无法保存画布</span>}
     </nav>
     {sheetMenu && menuSheet && <MarkdownMenu point={sheetMenu} close={() => setSheetMenu(undefined)} items={[
@@ -245,7 +265,7 @@ export default function MindMapEditor(props: MapEditorProps) {
       {remove && <div><h2>删除画布</h2><p>删除「{remove.title}」和它的全部主题？</p>
         <footer><button onClick={() => setRemove(undefined)}>取消</button><button className="primary" onClick={() => {
           if (updateSheets(current => current.filter(item => item.id !== remove.id))) {
-            if (remove.id === active) setActive(undefined)
+            if (remove.id === active) activate()
             setRemove(undefined)
           }
         }}>删除</button></footer></div>}
@@ -308,7 +328,7 @@ function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, upd
     let map: MindMap
     try {
       map = new MindMap({
-        el: host.current, data: root, theme: 'default',
+        el: host.current, data: root, theme: 'default', fit: !!appearance.imported,
         layout: initialSettings.layout, themeConfig: mapTheme(initialSettings, dark),
         rainbowLinesConfig: { open: initialSettings.colored, colorsList: palettes[initialSettings.palette].colors },
         customHyperlinkJump: url => { void window.desktop.openExternal(url).catch(() => setNotice('无法打开链接。')) },
@@ -327,7 +347,7 @@ function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, upd
             (event.key === 'Tab' || (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'v')) &&
           (event.target === document.body || event.target.classList.contains('smm-node-edit-wrap') || !!host.current?.contains(event.target)),
         beforeAssociativeLineConnection: () => { setLinking(false); return false },
-        beforeTextEdit: node => !readAudioNote(node.getData('ymdAudio')) && (!!initialSheet || !node.isRoot),
+        beforeTextEdit: node => !readAudioNote(node.getData('ymdAudio')) && (!!initialSheet || !!appearance.imported || !node.isRoot),
         beforeDragEnd: ({ overlapNodeUid }) => !!readAudioNote(map?.renderer.findNodeByUid(overlapNodeUid)?.getData('ymdAudio')),
         beforeDeleteNodeImg: node => { removeTopicImage(map, node); return true },
         maxImgResizeWidthInheritTheme: false,
@@ -347,7 +367,7 @@ function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, upd
       const audioId = audio.activeId
       if (audioId && !hasAudio(node, audioId)) audio.stop()
       if (!initialSheet && projection) {
-        const next = writeList(projection, fromMap(node.children ?? []))
+        const next = writeList(projection, fromMap(node.children ?? [], !!appearance.imported))
         if (next !== previous) { previous = next; change.current(next) }
       }
       try {

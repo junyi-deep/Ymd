@@ -1,6 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, net, protocol, session, shell } from 'electron'
 import type { IpcMainInvokeEvent, MediaAccessPermissionRequest, MenuItemConstructorOptions } from 'electron'
-import { mkdir, readFile, writeFile, rename } from 'node:fs/promises'
+import { mkdir, readFile, writeFile, rename, open } from 'node:fs/promises'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { defaultPreferences, markdownImageExtensions, searchEngines } from '../shared/contracts'
@@ -251,6 +251,32 @@ void app.whenReady().then(async () => {
     await writeFile(result.filePath, data)
     return true
   })
+  handle('chooseXmind', async () => {
+    const selected = await dialog.showOpenDialog(window!, { properties: ['openFile'], filters: [{ name: 'Xmind', extensions: ['xmind'] }] })
+    if (selected.canceled || !selected.filePaths.length) return null
+    const file = selected.filePaths[0]
+    const handle = await open(file, 'r')
+    try {
+      const info = await handle.stat()
+      const maxSize = 48 * 1024 * 1024
+      if (!info.isFile() || info.size < 4 || info.size > maxSize) throw new Error('请选择小于或等于 48 MB 的 Xmind 文件。')
+      const data = new ArrayBuffer(info.size)
+      const buffer = Buffer.from(data)
+      let offset = 0
+      while (offset < buffer.length) {
+        const { bytesRead } = await handle.read(buffer, offset, buffer.length - offset, offset)
+        if (!bytesRead) break
+        offset += bytesRead
+      }
+      if (offset !== info.size || new DataView(data).getUint32(0) !== 0x504b0304 || (await handle.stat()).size !== info.size) {
+        throw new Error('无法读取 Xmind 工作簿。')
+      }
+      return { name: path.parse(file).name, data }
+    } finally {
+      await handle.close()
+    }
+  })
+  handle('createImportedMarkdown', (directory: string, name: string, text: string) => files.createImportedMarkdown(directory, name, text))
   handle('saveXmind', async (name: string, data: ArrayBuffer) => {
     if (typeof name !== 'string' || !(data instanceof ArrayBuffer) || data.byteLength < 4 ||
         new DataView(data).getUint32(0) !== 0x504b0304) throw new Error('Xmind 文件内容无效。')
@@ -301,6 +327,7 @@ void app.whenReady().then(async () => {
     { label: '文件', submenu: [
       { label: '新建', accelerator: 'CmdOrCtrl+N', click: () => command('new-file') },
       { label: '打开文件…', accelerator: 'CmdOrCtrl+O', click: () => command('open-file') },
+      { label: '导入 Xmind…', click: () => command('import-xmind') },
       { label: '新建绘图', accelerator: 'CmdOrCtrl+Shift+N', click: () => command('new-drawing') },
       { label: '保存', accelerator: 'CmdOrCtrl+S', click: () => command('save') },
       { type: 'separator' },

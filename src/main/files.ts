@@ -119,6 +119,16 @@ export class Files {
     return this.writeNew(root, label, extension, contents)
   }
 
+  async createImportedMarkdown(directory: string, name: string, text: string) {
+    if (typeof name !== 'string' || typeof text !== 'string' || text.length > 4 * 1024 * 1024) {
+      throw new Error('导入的 Markdown 文档无效或过大。')
+    }
+    const root = await this.resolve(directory, true)
+    const cleaned = name.replace(/[<>:"/\\|?*\u0000-\u001f]/g, '_').trim().replace(/^\.+/, '').slice(0, 80).replace(/[. ]+$/, '')
+    const label = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(cleaned) ? '_' + cleaned : cleaned
+    return this.writeNew(root, label || '导入的思维导图', '.md', text)
+  }
+
   private async writeNew(directory: string, label: string, extension: string, text: string) {
     for (let count = 1; ; count++) {
       const file = path.join(directory, label + (count === 1 ? '' : ` ${count}`) + extension)
