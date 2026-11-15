@@ -45,6 +45,7 @@ export function Settings({ preferences, platform, library, project, windowsAcryl
 }) {
   const [page, setPage] = useState(initialPage)
   const material = (platform === 'darwin' && !macReducesTransparency) || windowsAcrylic
+  const transparent = material && !preferences.solidBackground
   const quickNew = (['new-file', 'new-drawing'] as const).flatMap(id => {
     const key = shortcutValue(preferences.shortcuts, id, platform)
     return key ? [appShortcuts[id].label + ' ' + shortcutLabel(key, platform)] : []
@@ -64,19 +65,19 @@ export function Settings({ preferences, platform, library, project, windowsAcryl
           {page === '外观' && <>
             <Row label="外观"><Choices value={preferences.theme} choices={ [['system','跟随系统'], ['light','浅色'], ['dark','深色']] }
               onChange={theme => onChange({ theme })} /></Row>
-            <Row label="不透明窗口背景" detail={macReducesTransparency
+            <Row label="透明窗口背景" detail={macReducesTransparency
               ? 'macOS 已开启「降低透明度」。可在系统设置的「辅助功能 → 显示」中关闭。'
               : material
-              ? (platform === 'darwin' ? '关闭后，侧栏使用 macOS Vibrancy 毛玻璃。' : '关闭后，侧栏使用 Windows Acrylic 毛玻璃。')
+              ? (platform === 'darwin' ? '侧栏和左侧标题栏使用 macOS 毛玻璃。' : '侧栏和左侧标题栏使用 Windows Acrylic。')
               : '当前系统使用实色背景。Windows Acrylic 需要 Windows 11 22H2 或更新版本。'}>
-              <button className="switch" role="switch" aria-label="不透明窗口背景" aria-checked={!material || preferences.solidBackground}
-                disabled={!material} onClick={() => onChange({ solidBackground: !preferences.solidBackground })} />
+              <button className="switch" role="switch" aria-label="透明窗口背景" aria-checked={transparent}
+                disabled={!material} onClick={() => onChange({ solidBackground: transparent })} />
             </Row>
-            {platform === 'darwin' && <Row label="毛玻璃透明度" detail="调整侧栏和左侧标题栏的底色。">
+            {platform === 'darwin' && transparent && <Row label="毛玻璃透明度" detail="100% 时仅保留系统毛玻璃。">
               <div className="transparency-control">
                 <input type="range" aria-label="毛玻璃透明度" aria-valuetext={preferences.windowTransparency + '%'}
                   min={0} max={100} step={5} value={preferences.windowTransparency}
-                  disabled={!material || preferences.solidBackground} onChange={event => onChange({ windowTransparency: event.currentTarget.valueAsNumber })} />
+                  onChange={event => onChange({ windowTransparency: event.currentTarget.valueAsNumber })} />
                 <span aria-hidden="true">{preferences.windowTransparency}%</span>
               </div>
             </Row>}

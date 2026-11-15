@@ -6,7 +6,7 @@ const os = require('node:os')
 const path = require('node:path')
 const { setTimeout: delay } = require('node:timers/promises')
 const { promisify } = require('node:util')
-const { app, BrowserWindow } = require('electron')
+const { app, BrowserWindow, nativeTheme } = require('electron')
 
 const windows = process.platform === 'win32'
 const profile = mkdtempSync(path.join(os.tmpdir(), 'ymd-window-material-'))
@@ -17,7 +17,10 @@ app.setPath('userData', profile)
 app.setPath('documents', documents)
 
 const vibrancyCalls = []
+let reducesTransparency = false
 if (!windows) {
+  // The CI desktop may prefer reduced transparency. Exercise both settings without changing the host.
+  Object.defineProperty(nativeTheme, 'prefersReducedTransparency', { get: () => reducesTransparency })
   const setVibrancy = BrowserWindow.prototype.setVibrancy
   BrowserWindow.prototype.setVibrancy = function (value) {
     vibrancyCalls.push(value)
@@ -58,6 +61,17 @@ async function waitFor(read, matches, label) {
 
 async function check(window) {
   const evaluate = source => window.webContents.executeJavaScript(source)
+  const emulateTransparencyPreference = async reduce => {
+    reducesTransparency = reduce
+    nativeTheme.emit('updated')
+    await window.webContents.debugger.sendCommand('Emulation.setEmulatedMedia', {
+      features: [{ name: 'prefers-reduced-transparency', value: reduce ? 'reduce' : 'no-preference' }],
+    })
+  }
+  if (!windows) {
+    window.webContents.debugger.attach()
+    await emulateTransparencyPreference(false)
+  }
   const snapshot = () => evaluate(`(() => {
     const overlay = navigator.windowControlsOverlay
     const rect = overlay?.getTitlebarAreaRect()
@@ -75,13 +89,14 @@ async function check(window) {
   })()`)
   const waitMaterial = material => waitFor(snapshot, value => value.material === material && value.sidebar && value.page &&
     (!windows || value.overlay) && (window.getBackgroundColor() === '#000000') === (material !== 'solid'), `Expected ${material}`)
-  const toggle = () => evaluate(`document.querySelector('button[role="switch"][aria-label="不透明窗口背景"]').click()`)
+  const switcher = 'button[role="switch"][aria-label="透明窗口背景"]'
+  const toggle = () => evaluate(`document.querySelector('${switcher}').click()`)
   const glass = windows ? 'acrylic' : 'vibrancy'
   const before = await waitMaterial(glass)
   assert.match(before.sidebar, /^rgba\(/)
   assert.match(before.page, /^rgb\(/)
   if (windows) assert.equal(await dwmBackdrop(window), 3)
-  else assert.equal(vibrancyCalls.at(-1), 'popover')
+  else assert.equal(vibrancyCalls.at(-1), 'hud')
 
   const sample = 'button.tree-row[title="Window check.md"]'
   await waitFor(() => evaluate(`!!document.querySelector('${sample}')`), Boolean, 'Sample listed')
@@ -93,7 +108,8 @@ async function check(window) {
       'Window tools stay clear of the caption buttons')
   }
   await evaluate(`document.querySelector('.sidebar-footer').click()`)
-  await waitFor(() => evaluate(`!!document.querySelector('button[role="switch"][aria-label="不透明窗口背景"]')`), Boolean, 'Appearance settings visible')
+  await waitFor(() => evaluate(`!!document.querySelector('${switcher}')`), Boolean, 'Appearance settings visible')
+  assert.equal(await evaluate(`document.querySelector('${switcher}').getAttribute('aria-checked')`), 'true')
   const slider = 'input[aria-label="毛玻璃透明度"]'
   if (!windows) {
     assert.equal(await evaluate(`document.querySelector('${slider}').value`), '80')
@@ -115,14 +131,23 @@ async function check(window) {
   if (windows) assert.equal(await dwmBackdrop(window), 1)
   else {
     assert.equal(vibrancyCalls.at(-1), null)
-    assert.equal(await evaluate(`document.querySelector('${slider}').disabled`), true)
+    assert.equal(await evaluate(`document.querySelector('${slider}') === null`), true)
   }
   await toggle()
   await waitMaterial(glass)
   if (windows) assert.equal(await dwmBackdrop(window), 3)
   else {
-    assert.equal(vibrancyCalls.at(-1), 'popover')
+    assert.equal(vibrancyCalls.at(-1), 'hud')
     assert.equal(await evaluate(`document.querySelector('${slider}').value`), '50')
+    await emulateTransparencyPreference(true)
+    await waitMaterial('solid')
+    assert.equal(vibrancyCalls.at(-1), null)
+    assert.equal(await evaluate(`document.querySelector('${switcher}').disabled && document.querySelector('${slider}') === null`), true)
+    await emulateTransparencyPreference(false)
+    await waitMaterial(glass)
+    assert.equal(vibrancyCalls.at(-1), 'hud')
+    assert.equal(await evaluate(`document.querySelector('${slider}').value`), '50')
+    window.webContents.debugger.detach()
   }
   console.log(windows ? 'Windows DWM Acrylic (3 → 1 → 3) and native caption layout verified.' : 'macOS Vibrancy, opaque mode, live tint and persistence verified.')
 }

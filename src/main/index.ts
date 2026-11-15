@@ -23,7 +23,7 @@ let preferences = defaultPreferences
 let closing = false
 let searchController: AbortController | undefined
 const windowsAcrylic = process.platform === 'win32' && Number(process.getSystemVersion().split('.')[2]) >= 22621
-const macVibrancy = 'popover'
+const macVibrancy = 'hud'
 let preferenceWrite: Promise<unknown> = Promise.resolve()
 let recordingShortcut = false
 const appKeySequence = new ShortcutSequence()
