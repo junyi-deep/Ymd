@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { ChevronDown, ChevronsLeft, ClipboardList, CornerUpLeft, Crosshair, Download, Focus, FolderInput, GitBranch, GitFork, ImagePlus, ListTree, Map, Maximize, MessageSquare, Mic, Minus, Paperclip, Plus, Redo2, Search, SlidersHorizontal, Square, Star, Sticker, StickyNote, Tag, Trash2, Undo2, X } from 'lucide-react'
+import { ChevronDown, ChevronsLeft, ClipboardList, CornerUpLeft, Crosshair, Download, Focus, FolderInput, GitBranch, GitFork, ImagePlus, ListTree, Map, Maximize, MessageSquare, Mic, Minus, Paperclip, Plus, Redo2, Search, SlidersHorizontal, Square, SquareCheck, Star, Sticker, StickyNote, Tag, Trash2, Undo2, X } from 'lucide-react'
 import DOMPurify from 'dompurify'
 import MindMap from 'simple-mind-map'
 import AssociativeLine from 'simple-mind-map/src/plugins/AssociativeLine.js'
@@ -16,7 +16,8 @@ import Select from 'simple-mind-map/src/plugins/Select.js'
 import { UnsupportedList } from './Outline'
 import { projectList, writeList, type Block } from './listProjection'
 import { MindMapFormat } from './MindMapFormat'
-import { MindMapTask, readTask, taskBadge, taskTopics } from './MindMapTask'
+import { MindMapTask, taskBadge, taskTopics, todoBadge } from './MindMapTask'
+import { readTask, readTodo, type MapTask, type MapTodo } from './mapTasks'
 import { MindMapRecorder } from './MindMapRecorder'
 import { MindMapArt } from './MindMapArt'
 import { MindMapLink, type LinkSheet, type LinkType } from './MindMapLink'
@@ -42,7 +43,7 @@ class MapAssociativeLine extends AssociativeLine {
 }
 
 for (const plugin of [MapAssociativeLine, Drag, Export, ExportPDF, KeyboardNavigation, MiniMap, NodeImgAdjust, OuterFrame, RainbowLines, SearchPlugin, Select]) MindMap.usePlugin(plugin)
-MindMap.extendNodeDataNoStylePropList(['ymdMarker', 'ymdFloating', 'ymdTask', 'ymdStructure', 'ymdAudio', 'ymdOriginalImageSize', 'ymdCallouts'])
+MindMap.extendNodeDataNoStylePropList(['ymdMarker', 'ymdFloating', 'ymdTask', 'ymdTodo', 'ymdStructure', 'ymdAudio', 'ymdOriginalImageSize', 'ymdCallouts'])
 
 type MapNode = NonNullable<MindMap['renderer']['root']>
 type TopicField = '备注' | '标签'
@@ -409,6 +410,15 @@ function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, upd
     host.current?.focus()
   }
 
+  function writeTask(node: MapNode, task: MapTask | null, todo: MapTodo | null) {
+    const map = engine.current
+    const current = map?.renderer.findNodeByUid(node.uid)
+    if (!map || !current) return
+    map.command.originAddHistory()
+    map.renderer.setNodeDataRender(current, { ymdTask: task, ymdTodo: todo })
+    map.command.originAddHistory()
+  }
+
   function openHyperlink(url: string) {
     const target = readTopicLink(url)
     if (target) {
@@ -439,6 +449,8 @@ function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, upd
           }
           const task = readTask(node.getData('ymdTask'))
           if (task) return taskBadge(task, () => setTaskNode(node))
+          const todo = readTodo(node.getData('ymdTodo'))
+          if (todo) return todoBadge(todo, () => writeTask(node, null, todo === 'todo' ? 'done' : 'todo'))
         },
         customCheckEnableShortcut: event => !event.defaultPrevented && !event.isComposing && event.target instanceof HTMLElement &&
           !(map?.renderer.activeNodeList.some(node => readAudioNote(node.getData('ymdAudio'))) &&
@@ -678,6 +690,15 @@ function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, upd
   const canRemove = !!node && selected.some(item => !item.isRoot)
   const canLink = selected.length === 1 && !!node && !node.isGeneralization && !audioNote
   const currentLink = node?.getData('hyperlink')
+  const selectedTodo = readTodo(node?.getData('ymdTodo'))
+  const taskItem: MenuItem = { label: selectedTodo ? '转换为任务' : '任务',
+    icon: <ClipboardList size={16} />, disabled: !canLink, separator: true, run: () => setTaskNode(node) }
+  const todoItem: MenuItem = selectedTodo && node ? { label: '待办事项', icon: <SquareCheck size={16} />, children: [
+    { label: selectedTodo === 'todo' ? '标记为完成' : '标记为未完成',
+      run: () => writeTask(node, null, selectedTodo === 'todo' ? 'done' : 'todo') },
+    { label: '移除待办事项', run: () => writeTask(node, null, null) },
+  ] } : { label: readTask(node?.getData('ymdTask')) ? '转换为待办事项' : '待办事项',
+    icon: <SquareCheck size={16} />, disabled: !canLink, run: () => { if (node) writeTask(node, null, 'todo') } }
 
   function addCallout() {
     if (!canLink || !node) return
@@ -843,7 +864,7 @@ function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, upd
     } },
     { label: '边界', icon: <Square size={16} />, disabled: !canRemove, run: () => command('ADD_OUTER_FRAME') },
     { label: '概要', icon: <ListTree size={16} />, disabled: !canRemove, run: () => command('ADD_GENERALIZATION') },
-    { label: '任务', icon: <ClipboardList size={16} />, disabled: !node, separator: true, run: () => setTaskNode(node) },
+    taskItem, todoItem,
     { label: '备注', icon: <StickyNote size={16} />, disabled: !node, separator: true, run: () => fieldFor('备注') },
     { label: '标注', icon: <MessageSquare size={16} />, disabled: !canLink, run: addCallout },
     { label: audioTitle, icon: <Mic size={16} />, disabled: !node || !!audioNote || !!node.isGeneralization || selected.length !== 1,
@@ -945,6 +966,7 @@ function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, upd
       ...[1, 2, 3, 4].map(level => ({ label: '展开至第 ' + level + ' 层', run: () => command('UNEXPAND_TO_LEVEL', level) })),
     ] },
     { label: '插入', separator: true, children: insertItems },
+    taskItem, todoItem,
     ...(imageItems.length ? [{ label: '图片', children: imageItems }] : []),
     ...(linkItems.length ? [{ label: '链接', children: linkItems }] : []),
     ...(backlinks.length ? [{ label: '反向链接', children: backlinkItems }] : []),
@@ -1068,7 +1090,7 @@ function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, upd
     {taskNode && <MindMapTask initial={readTask(taskNode.getData('ymdTask'))}
       title={String(taskNode.getData('text') ?? '')} topics={taskTopics(engine.current?.getData(), taskNode.uid)}
       close={() => setTaskNode(undefined)} save={task => {
-        engine.current?.renderer.setNodeDataRender(taskNode, { ymdTask: task })
+        writeTask(taskNode, task, null)
         setTaskNode(undefined)
       }} />}
     {calloutText && <MindMapCalloutText initial={calloutText.note.data.text} add={calloutText.add}

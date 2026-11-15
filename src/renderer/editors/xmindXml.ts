@@ -50,6 +50,10 @@ export function readLegacyXmind(content: string, stylesheet?: string) {
     const plain = child(child(element, 'notes'), 'plain') ?? child(child(element, 'notes'), 'html')
     const boundaries = children(child(element, 'boundaries'), 'boundary')
     const summaries = children(child(element, 'summaries'), 'summary')
+    const extensions = children(child(element, 'extensions'), 'extension').map(extension => ({
+      provider: attribute(extension, 'provider'),
+      content: [...(child(extension, 'content')?.children ?? [])].map(entry => ({ name: entry.localName, content: entry.textContent })),
+    }))
     return {
       id: attribute(element, 'id'), title: title(element), style: styleFor(element),
       href: linked(element, 'href'), branch: attribute(element, 'branch'), structureClass: attribute(element, 'structure-class'),
@@ -61,6 +65,7 @@ export function readLegacyXmind(content: string, stylesheet?: string) {
       image: image ? { src: attribute(image, 'src') ?? linked(image, 'href'),
         width: image.getAttributeNS(svg, 'width') ?? attribute(image, 'width'), height: image.getAttributeNS(svg, 'height') ?? attribute(image, 'height') } : undefined,
       children: childrenByType,
+      extensions,
       boundaries: boundaries.map(frame => ({ title: title(frame), range: attribute(frame, 'range') })),
       summaries: summaries.map(summary => ({ topicId: attribute(summary, 'topic-id'), range: attribute(summary, 'range') })),
     }

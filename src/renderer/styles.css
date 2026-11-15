@@ -448,7 +448,10 @@ dialog button.primary { background: var(--accent); color: var(--accent-ink); }
 .map-task-fields select { max-width: 100%; background: var(--soft); border-radius: 5px; padding: 5px 8px; }
 .map-task-dependencies { margin-top: 14px; border-top: 1px solid var(--line); }
 .map-task-dependencies legend { margin-bottom: 6px; padding-right: 8px; }
-.map-task-dependencies div { max-height: 110px; overflow: auto; }
+.map-task-dependency-list { max-height: 140px; overflow: auto; }
+.map-task-dependency-row { display: flex; gap: 10px; align-items: center; justify-content: space-between; }
+.map-task-dependency-row label { min-width: 0; }
+.map-task-dependency-row select { flex: none; font-size: 12px; }
 .map-task-dependencies label { display: flex; align-items: center; gap: 8px; padding: 4px 0; }
 .map-task-dependencies label input { flex: none; }
 .map-task-dependencies label span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

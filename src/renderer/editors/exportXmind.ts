@@ -4,6 +4,8 @@ import { loadAudio, readAudioNote } from './mapAudio'
 import { calloutShapeClasses, progressMarkers, shapes, structures, styleKeys, topicLinkExtension } from './xmindFormat'
 import { isExternalMapLink, readTopicLink, type TopicLink } from './mapTopicLinks'
 import { calloutDefaults, calloutTopicId, readCallouts } from './mapCallouts'
+import { readTask, readTodo, type MapTask } from './mapTasks'
+import { exportTaskContent, taskExtension } from './xmindTasks'
 
 type Sheet = Pick<MapSheet, 'id' | 'title' | 'settings' | 'tree'>
 type Properties = Record<string, string>
@@ -15,8 +17,7 @@ type Topic = {
   image?: { src: string; width: number; height: number; align?: string }; markers?: { markerId: string }[]
   summaries?: { id: string; class: 'summary'; range: string; topicId: string }[]
   boundaries?: { id: string; class: 'boundary'; title: string; range: string }[]
-  extensions?: { provider: string; content: ({ duration: number } | { href: string; bidirectional?: true; generated?: true })[];
-    resourceRefs: string[] }[]
+  extensions?: { provider: string; content: unknown; resourceRefs?: string[] }[]
   children?: { attached?: Topic[]; detached?: Topic[]; summary?: Topic[]; callout?: Topic[] }
 }
 
@@ -46,6 +47,7 @@ export async function exportXmind(sheets: Sheet[], active: string, dark: boolean
     const sheetId = id()
     documentIds.set(sheet.id, { id: sheetId, topics: ids })
     const connections: { source: string; target: string; title: string }[] = []
+    const tasks: { output: Topic; task: MapTask }[] = []
     const rootPosition = sheet.tree.data
     const theme = mapTheme(sheet.settings, dark)
     const palette = palettes[sheet.settings.palette] ?? palettes.ocean
@@ -65,6 +67,10 @@ export async function exportXmind(sheets: Sheet[], active: string, dark: boolean
       }
       const linkId = callout ?? data.uid
       if (linkId) ids.set(linkId, output.id)
+      const task = readTask(data.ymdTask)
+      const todo = readTodo(data.ymdTodo)
+      if (task) tasks.push({ output, task })
+      else if (todo) output.extensions = [...(output.extensions ?? []), { provider: taskExtension, content: { status: todo } }]
       const structure = depth === 0 ? branchStructure(sheet.settings.layout) ?? 'mindMap' : branchStructure(data.ymdStructure)
       if (structure) output.structureClass = structures[structure]
       if (data.expand === false && node.children?.length) output.branch = 'folded'
@@ -177,6 +183,9 @@ export async function exportXmind(sheets: Sheet[], active: string, dark: boolean
     }
 
     const rootTopic = topic(sheet.tree, 0, 0)
+    for (const { output, task } of tasks) {
+      output.extensions = [...(output.extensions ?? []), { provider: taskExtension, content: exportTaskContent(task, ids) }]
+    }
     const relationships = connections.flatMap(connection => {
       const to = ids.get(connection.target)
       return to ? [{ id: id(), class: 'relationship', end1Id: connection.source, end2Id: to, title: connection.title }] : []

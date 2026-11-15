@@ -7,6 +7,8 @@ import { calloutShapeClasses, progressMarkers, shapes, structures, styleKeys, to
 import { isExternalMapLink, mainSheetId, topicLinkUrl, type TopicLink } from './mapTopicLinks'
 import { readLegacyXmind } from './xmindXml'
 import { calloutTopicId } from './mapCallouts'
+import { importTaskExtension, legacyTaskExtension, taskExtension } from './xmindTasks'
+import type { MapTask } from './mapTasks'
 
 const MiB = 1024 * 1024
 const asRecord = (value: unknown) => value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
@@ -172,10 +174,7 @@ export async function importXmind(data: ArrayBuffer) {
 
     async function addAudio(node: MapData, raw: unknown) {
       for (const extension of records(raw)) {
-        if (extension.provider !== 'org.xmind.ui.audionotes') {
-          if (/task/i.test(string(extension.provider))) unconverted.add('任务扩展属性')
-          continue
-        }
+        if (extension.provider !== 'org.xmind.ui.audionotes') continue
         const refs = Array.isArray(extension.resourceRefs) ? extension.resourceRefs : []
         const timing = records(extension.content)
         if (!refs.length) unconverted.add('录音')
@@ -206,6 +205,7 @@ export async function importXmind(data: ArrayBuffer) {
       const originalSheet = string(rawSheet.id)
       if (originalSheet && !sheetTargets.has(originalSheet)) sheetTargets.set(originalSheet, { sheet: sheetId })
       const ids = new Map<string, ImportedTopic>()
+      const tasks: { uid: string; task: MapTask }[] = []
       let floating = 0
       async function topic(raw: Record<string, unknown>, depth: number,
         kind: 'attached' | 'detached' | 'callout' = 'attached', owner?: string): Promise<MapData> {
@@ -247,8 +247,8 @@ export async function importXmind(data: ArrayBuffer) {
         const tags = Array.isArray(raw.labels) ? raw.labels : typeof raw.labels === 'string' ? raw.labels.split(',') : []
         const labels = tags.map(string).filter(Boolean)
         if (labels.length) node.data.tag = labels
-        const icons = records(raw.markers).flatMap(marker => {
-          const id = string(marker.markerId)
+        const markers = records(raw.markers).map(marker => string(marker.markerId))
+        const icons = markers.flatMap(id => {
           if (/^priority-[1-9]$/.test(id)) return ['priority_' + id.at(-1)]
           const progress = progressMarkers.findIndex(markerId => markerId === id)
           if (progress > 0) return ['progress_' + progress]
@@ -256,9 +256,22 @@ export async function importXmind(data: ArrayBuffer) {
           return []
         })
         if (icons.length) node.data.icon = icons
+        const extensions = records(raw.extensions)
+        const taskData = extensions.find(extension => extension.provider === taskExtension)
+          ?? extensions.find(extension => extension.provider === legacyTaskExtension)
+        if (taskData) {
+          const converted = importTaskExtension(string(taskData.provider), taskData.content, markers)
+          if (converted?.task) {
+            node.data.ymdTask = converted.task
+            tasks.push({ uid, task: converted.task })
+          } else if (converted?.todo) node.data.ymdTodo = converted.todo
+          else unconverted.add('任务扩展属性')
+        }
+        if (extensions.some(extension => /task/i.test(string(extension.provider)) &&
+          extension.provider !== taskExtension && extension.provider !== legacyTaskExtension)) unconverted.add('任务扩展属性')
         await addImage(node, asRecord(raw.image))
         const href = string(raw.href)
-        const extension = records(raw.extensions).find(extension => extension.provider === topicLinkExtension)
+        const extension = extensions.find(extension => extension.provider === topicLinkExtension)
         const supplemental = records(extension?.content)[0]
         const topicHref = href.startsWith('xmind:#') ? href : string(supplemental?.href)
         if (topicHref.startsWith('xmind:#')) {
@@ -301,6 +314,15 @@ export async function importXmind(data: ArrayBuffer) {
 
       const rawRoot = asRecord(rawSheet.rootTopic)
       const tree = await topic(rawRoot, 0)
+      for (const { uid, task } of tasks) {
+        task.dependencies = task.dependencies.flatMap(item => {
+          const target = ids.get(item.id)
+          const targetId = target?.node.data.uid
+          if (targetId && targetId === target?.linkId && targetId !== uid) return [{ ...item, id: targetId }]
+          unconverted.add('失效的任务依赖')
+          return []
+        })
+      }
       if (floating) {
         tree.data.customLeft = anchor
         tree.data.customTop = anchor
