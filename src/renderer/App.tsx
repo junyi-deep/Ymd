@@ -8,6 +8,7 @@ import { useFileMarks } from './useFileMarks'
 import { useDocuments, type Session } from './documents'
 import { MarkdownEditor } from './editors/Markdown'
 import { OutlineEditor } from './editors/Outline'
+import type { OutlineSession } from './editors/outlineEditing'
 import { discardInterruptedMapImports, loadMapAppearance, relocateMapAppearance, saveImportedMap } from './editors/mapAppearance'
 import { forgetAudio, storeAudio } from './editors/mapAudio'
 
@@ -57,6 +58,7 @@ export function App() {
   const importPending = useRef(false)
   const [rename, setRename] = useState<{ session: Session; name: string }>()
   const flushEditor = useRef<(() => void) | undefined>(undefined)
+  const outlineSessions = useRef(new Map<string, OutlineSession>())
   const registerFlush = useCallback((flush?: () => void) => { flushEditor.current = flush }, [])
   const modal = useRef<HTMLDialogElement>(null)
   const commandRef = useRef<(command: Command) => void>(() => {})
@@ -234,7 +236,7 @@ export function App() {
   }
 
   function finishClose(path?: string) {
-    if (path) sessions.close(path)
+    if (path) { outlineSessions.current.delete(path); sessions.close(path) }
     else run(() => window.desktop.finishClose())
     setPrompt(undefined)
   }
@@ -489,7 +491,8 @@ export function App() {
                     if (file) { setRevision(value => value + 1); showFile(file) }
                   })} />
                 : active.mode === 'outline'
-                  ? <OutlineEditor key={active.path + ':' + active.reload} text={active.text} platform={platform} onChange={edit} />
+                  ? <OutlineEditor key={active.path + ':' + active.reload} text={active.text} name={active.name} path={active.path}
+                    platform={platform} sessions={outlineSessions.current} onChange={edit} />
                   : <MindMapEditor key={active.path + ':' + active.reload} text={active.text} name={active.name} path={active.path} dark={dark} onChange={edit}
                     registerFlush={registerFlush} importWorkbook={importWorkbook} importing={importing} />}
           </Suspense>}

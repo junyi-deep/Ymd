@@ -39,49 +39,57 @@ export function projectList(text: string): Projection | undefined {
     return { before: text, after: '', newline, blocks: [], separator }
   }
 
-  const readList = (node: SyntaxNode): Block[] | undefined => {
+  function extendBlanks(from: number, until: number, indent: string) {
+    while (source[from] === '\n' && from < until) {
+      const next = source.indexOf('\n', from + 1)
+      const end = next < 0 ? source.length : next
+      if (end > until || source.slice(from + 1, end) !== indent) break
+      from = end
+    }
+    return from
+  }
+
+  const readList = (node: SyntaxNode, until: number): { blocks: Block[]; end: number } | undefined => {
     const blocks: Block[] = []
+    let end = node.to
     for (let item = node.firstChild; item; item = item.nextSibling) {
       if (item.name !== 'ListItem') return
       const mark = item.getChild('ListMark')
       if (!mark || !/^[-+*]$/.test(source.slice(mark.from, mark.to))) return
       const indent = mark.from - Math.max(source.lastIndexOf('\n', mark.from - 1), source.lastIndexOf('\r', mark.from - 1)) - 1
-      const sublist = item.getChild('BulletList')
-      const first = mark.nextSibling
-      const body = first && ['Task', 'Paragraph', 'HtmlImageBlock'].includes(first.name) ? first : undefined
-      let bodyEnd = body?.to ?? mark.to
-      let bodyParts = Number(!!body)
-      if (body?.name === 'HtmlImageBlock') {
-        // A sized image is a block token but can share the list item's text with following lines.
-        let part = body.nextSibling
-        while (part?.name === 'HtmlImageBlock') { bodyEnd = part.to; bodyParts++; part = part.nextSibling }
-        if (part?.name === 'Paragraph') { bodyEnd = part.to; bodyParts++ }
+      let sublist: SyntaxNode | undefined
+      let bodyEnd = mark.to
+      for (let part = mark.nextSibling; part; part = part.nextSibling) {
+        if (part.name === 'BulletList') {
+          if (part.nextSibling) return
+          sublist = part
+        } else bodyEnd = part.to
       }
-      const expected = 1 + bodyParts + Number(!!sublist)
-      let count = 0
-      for (let part = item.firstChild; part; part = part.nextSibling) count++
-      if (count !== expected || (sublist && bodyEnd > sublist.from)) return
-      const limit = bodyEnd
-      const bodyLines = source.slice(mark.to, limit).split(/\r\n|\n|\r/)
+      const left = ' '.repeat(indent + 2)
+      const next = item.nextSibling?.from ?? until
+      bodyEnd = extendBlanks(bodyEnd, sublist?.from ?? next, left)
+      const bodyLines = source.slice(mark.to, bodyEnd).split('\n')
       if (bodyLines[0] && !bodyLines[0].startsWith(' ')) return
-      if (bodyLines.slice(1).some(line => !line.startsWith(' '.repeat(indent + 2)) || !line.trim())) return
+      if (bodyLines.slice(1).some(line => !line.startsWith(left))) return
       const continuation = bodyLines.slice(1).map(line => line.slice(indent + 2))
-      if (sublist && !/^\r?\n *$|^\r *$/.test(source.slice(limit, sublist.from))) return
-      if (item.nextSibling && !/^\r?\n *$|^\r *$/.test(source.slice(item.to, item.nextSibling.from))) return
-      const children = sublist ? readList(sublist) : []
-      if (!children) return
+      if (sublist && !/^\n *$/.test(source.slice(bodyEnd, sublist.from))) return
+      const children = sublist && readList(sublist, next)
+      if (sublist && !children) return
+      end = children?.end ?? bodyEnd
+      if (item.nextSibling && !/^\n *$/.test(source.slice(end, next))) return
       blocks.push({
         id: String(mark.from), marker: source.slice(mark.from, mark.to),
-        text: [bodyLines[0].slice(1), ...continuation].join('\n'), children,
+        text: [bodyLines[0].slice(1), ...continuation].join('\n'), children: children?.blocks ?? [],
       })
     }
-    return blocks
+    return { blocks, end }
   }
-  const blocks = readList(list)
-  if (!blocks) return
+  const data = readList(list, list.nextSibling?.from ?? source.length)
+  if (!data) return
+  const { blocks, end } = data
   const projection = {
     before: bom + source.slice(0, list.from).replaceAll('\n', newline),
-    after: source.slice(list.to).replaceAll('\n', newline),
+    after: source.slice(end).replaceAll('\n', newline),
     newline,
     blocks,
   }
