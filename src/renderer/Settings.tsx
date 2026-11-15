@@ -57,9 +57,9 @@ export function Settings({ preferences, platform, library, project, windowsAcryl
             <Row label="外观"><Choices value={preferences.theme} choices={ [['system','跟随系统'], ['light','浅色'], ['dark','深色']] }
               onChange={theme => onChange({ theme })} /></Row>
             <Row label="不透明窗口背景" detail={material
-              ? '关闭后，侧栏透出桌面的毛玻璃。开启后，整个窗口使用实色。'
-              : '当前系统使用实色背景。'}>
-              <button className="switch" role="switch" aria-label="不透明窗口背景" aria-checked={preferences.solidBackground}
+              ? (platform === 'darwin' ? '关闭后，侧栏使用 macOS Vibrancy 毛玻璃。' : '关闭后，侧栏使用 Windows Acrylic 毛玻璃。')
+              : '当前系统使用实色背景。Windows Acrylic 需要 Windows 11 22H2 或更新版本。'}>
+              <button className="switch" role="switch" aria-label="不透明窗口背景" aria-checked={!material || preferences.solidBackground}
                 disabled={!material} onClick={() => onChange({ solidBackground: !preferences.solidBackground })} />
             </Row>
             <Row label="动画" detail="控制侧栏、菜单和设置控件的过渡效果。">

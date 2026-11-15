@@ -122,7 +122,8 @@ export function App() {
   useEffect(() => {
     document.documentElement.dataset.theme = dark ? 'dark' : 'light'
     document.documentElement.dataset.size = preferences.size
-    document.documentElement.dataset.vibrant = String((platform === 'darwin' || windowsAcrylic) && !preferences.solidBackground)
+    document.documentElement.dataset.windowMaterial = preferences.solidBackground ? 'solid'
+      : platform === 'darwin' ? 'vibrancy' : windowsAcrylic ? 'acrylic' : 'solid'
     document.documentElement.dataset.animation = preferences.animations ? 'full' : 'reduced'
     document.documentElement.dataset.documentTheme = preferences.documentTheme
   }, [dark, platform, preferences, windowsAcrylic])

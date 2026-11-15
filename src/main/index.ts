@@ -38,12 +38,19 @@ function normalizePreferences(value: Partial<Preferences> | null): Preferences {
   }
 }
 
+const glassEnabled = () => !preferences.solidBackground && (process.platform === 'darwin' || windowsAcrylic)
+const windowColor = () => nativeTheme.shouldUseDarkColors ? '#222323' : '#fdfdfd'
+const overlayColors = () => ({ color: windowColor(), symbolColor: nativeTheme.shouldUseDarkColors ? '#ededee' : '#222528' })
+
 function applyBackground() {
   nativeTheme.themeSource = preferences.theme
-  const material = !preferences.solidBackground && (process.platform === 'darwin' || windowsAcrylic)
-  if (process.platform === 'darwin') window?.setVibrancy(material ? 'sidebar' : null)
-  if (windowsAcrylic) window?.setBackgroundMaterial(material ? 'acrylic' : 'none')
-  window?.setBackgroundColor(material ? '#00000000' : nativeTheme.shouldUseDarkColors ? '#222323' : '#fdfdfd')
+  const glass = glassEnabled()
+  if (process.platform === 'darwin') window?.setVibrancy(glass ? 'sidebar' : null)
+  if (windowsAcrylic) {
+    window?.setBackgroundMaterial(glass ? 'acrylic' : 'none')
+    window?.setTitleBarOverlay(overlayColors())
+  }
+  window?.setBackgroundColor(glass ? '#00000000' : windowColor())
 }
 
 function command(name: Command) {
@@ -52,15 +59,21 @@ function command(name: Command) {
 
 function createWindow() {
   closing = false
+  nativeTheme.themeSource = preferences.theme
+  const glass = glassEnabled()
   window = new BrowserWindow({
     width: 1220,
     height: 800,
     minWidth: 660,
     minHeight: 510,
     title: 'Ymd',
-    backgroundColor: '#fcfcfc',
-    titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
-    vibrancy: process.platform === 'darwin' && !preferences.solidBackground ? 'sidebar' : undefined,
+    backgroundColor: glass ? '#00000000' : windowColor(),
+    // DWM needs the title bar hidden to extend the backdrop through the client area.
+    titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : windowsAcrylic ? 'hidden' : 'default',
+    titleBarOverlay: windowsAcrylic ? { ...overlayColors(), height: 49 } : undefined,
+    autoHideMenuBar: windowsAcrylic,
+    backgroundMaterial: windowsAcrylic && glass ? 'acrylic' : undefined,
+    vibrancy: process.platform === 'darwin' && glass ? 'sidebar' : undefined,
     webPreferences: { preload: path.join(__dirname, '../preload/index.js'), contextIsolation: true, sandbox: true, nodeIntegration: false },
   })
   applyBackground()
