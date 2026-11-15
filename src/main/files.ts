@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { lstat, mkdir, link, open, unlink, readFile, readdir, realpath, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { cp, lstat, mkdir, link, open, unlink, readFile, readdir, realpath, rename, rm, stat, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { markdownImageExtension, markdownImageExtensions, markdownImageLimits } from '../shared/contracts'
 import type { DocumentFile, Entry, FileKind, MarkdownImageAttachment, MarkdownImageUpload } from '../shared/contracts'
@@ -40,14 +40,23 @@ export const fileKind = (name: string): FileKind | undefined => {
 
 const versionOf = (data: Buffer) => createHash('sha256').update(data).digest('hex')
 const directoryEntry = (file: string): Entry => ({ path: file, name: path.basename(file) || file, kind: 'directory' })
+export const containsPath = (directory: string, file: string) => {
+  const relative = path.relative(directory, file)
+  return !path.isAbsolute(relative) && relative.split(path.sep)[0] !== '..'
+}
+function validName(name: string) {
+  const title = typeof name === 'string' ? name.trim() : ''
+  if (!title || title.startsWith('.') || /[<>:"/\\|?*\x00-\x1f]|[. ]$/.test(title) ||
+    /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(title)) throw new Error('请输入有效的名称。')
+  return title
+}
 
 export class Files {
   private roots = new Set<string>()
   private singles = new Set<string>()
   private writes = new Map<string, Promise<unknown>>()
 
-  async library(userData: string) {
-    const directory = path.join(userData, 'Documents')
+  async library(directory: string) {
     await mkdir(directory, { recursive: true })
     return this.authorizeDirectory(directory)
   }
@@ -59,11 +68,17 @@ export class Files {
     return directoryEntry(canonical)
   }
 
-  async authorizeFile(file: string) {
+  async authorizeFileEntry(file: string): Promise<Entry> {
     const canonical = await realpath(file)
-    if (!fileKind(canonical) || !(await stat(canonical)).isFile()) throw new Error('请打开 Markdown 或 Excalidraw 文件。')
+    const kind = fileKind(canonical)
+    if (!kind || !(await stat(canonical)).isFile()) throw new Error('请打开 Markdown 或 Excalidraw 文件。')
     this.singles.add(canonical)
-    return this.read(canonical)
+    return { path: canonical, name: path.basename(canonical), kind }
+  }
+
+  async authorizeFile(file: string) {
+    const entry = await this.authorizeFileEntry(file)
+    return this.read(entry.path)
   }
 
   retainRoots(entries: Entry[]) {
@@ -117,6 +132,19 @@ export class Files {
     const label = kind === 'markdown' ? '未命名' : '未命名绘图'
     const contents = kind === 'markdown' ? '' : JSON.stringify({ type: 'excalidraw', version: 2, elements: [], appState: {}, files: {} }, null, 2)
     return this.writeNew(root, label, extension, contents)
+  }
+
+  async createFolder(directory: string) {
+    const root = await this.resolve(directory, true)
+    for (let count = 1; ; count++) {
+      const folder = path.join(root, '未命名文件夹' + (count === 1 ? '' : ' ' + count))
+      try {
+        await mkdir(folder)
+        return directoryEntry(folder)
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+      }
+    }
   }
 
   async createImportedMarkdown(directory: string, name: string, text: string) {
@@ -225,11 +253,11 @@ export class Files {
     return data.length <= markdownImageLimits.fileBytes ? `data:${mime};base64,${data.toString('base64')}` : null
   }
 
-  async duplicate(file: string, directory: string, text: string) {
+  async duplicate(file: string, directory: string, text: string, keepName = false) {
     const original = await this.resolve(file)
     const target = await this.resolve(directory, true)
     const extension = path.extname(original)
-    return this.writeNew(target, path.basename(original, extension) + ' 副本', extension, text)
+    return this.writeNew(target, path.basename(original, extension) + (keepName ? '' : ' 副本'), extension, text)
   }
 
   async move(file: string, directory: string, version: string) {
@@ -240,13 +268,43 @@ export class Files {
 
   async renameDocument(file: string, name: string, version: string) {
     const original = await this.authorizedFile(file)
-    if (typeof name !== 'string') throw new Error('文件名无效。')
-    const title = name.trim()
-    if (!title || title.startsWith('.') || /[<>:"/\\|?*\x00-\x1f]|[. ]$/.test(title) ||
-      /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(title)) throw new Error('请输入有效的文件名。')
+    const title = validName(name)
     const extension = path.extname(original)
     const target = title.toLowerCase().endsWith(extension.toLowerCase()) ? title : title + extension
     return this.relocate(original, path.join(path.dirname(original), target), version)
+  }
+
+  async copyDirectory(directory: string, into?: string) {
+    const source = await this.authorizedDirectory(directory)
+    const parent = await this.authorizedDirectory(into ?? path.dirname(source))
+    if (containsPath(source, parent)) throw new Error('不能把文件夹复制到其自身或子文件夹。')
+    const staging = path.join(parent, '.ymd-copy-' + randomUUID())
+    try {
+      await cp(source, staging, { recursive: true, force: false, errorOnExist: true, verbatimSymlinks: true })
+      for (let index = 1; ; index++) {
+        const dest = path.join(parent, path.basename(source) + (into ? '' : ' 副本') + (index === 1 ? '' : ' ' + index))
+        if (await lstat(dest).then(() => true, error => {
+          if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false
+          throw error
+        })) continue
+        await rename(staging, dest)
+        return directoryEntry(dest)
+      }
+    } finally { await rm(staging, { recursive: true, force: true }) }
+  }
+
+  async moveDirectory(directory: string, parent: string, name?: string) {
+    const source = await this.authorizedDirectory(directory)
+    const absolute = name === undefined ? await this.authorizedDirectory(parent) : path.dirname(source)
+    if (containsPath(source, absolute)) throw new Error('不能把文件夹移动到其自身或子文件夹。')
+    const destination = path.join(absolute, name === undefined ? path.basename(source) : validName(name))
+    if (source === destination) return directoryEntry(source)
+    if (await lstat(destination).then(() => true, error => {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false
+      throw error
+    })) throw new Error('目标位置中已有同名文件或文件夹。')
+    await rename(source, destination)
+    return directoryEntry(destination)
   }
 
   private async relocate(original: string, destination: string, version: string) {
@@ -274,6 +332,10 @@ export class Files {
     const canonical = await this.resolve(file)
     if (!fileKind(canonical)) throw new Error('文件类型不受支持。')
     return canonical
+  }
+
+  authorizedDirectory(directory: string) {
+    return this.resolve(directory, true)
   }
 
   save(file: string, text: string, version: string) {

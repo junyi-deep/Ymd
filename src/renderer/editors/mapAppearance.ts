@@ -55,6 +55,19 @@ export interface MapAppearance {
 export const defaultMapSettings: MapSettings = { layout: 'mindMap', palette: 'ocean', font: 'system-ui', lineWidth: 2, colored: true }
 const mapKey = (path: string) => 'ymd.map:' + path
 
+export function styledMapPaths() {
+  return Object.keys(localStorage).filter(key => key.startsWith('ymd.map:')).map(key => key.slice('ymd.map:'.length))
+}
+
+export function copyMapAppearance(source: string, target: string, title: string) {
+  const raw = localStorage.getItem(mapKey(source))
+  if (!raw) return
+  const value = JSON.parse(raw) as MapAppearance
+  const root = value.styles.find(style => style.address === 'root')
+  if (root && !value.imported) root.text = title.replace(/\.md$/i, '')
+  localStorage.setItem(mapKey(target), JSON.stringify(value))
+}
+
 // A topic title is plain text. Keep punctuation, tabs and line breaks inside a single list item.
 export function encodeImportedTopic(title: string) {
   return title.replace(/&/g, '&amp;')

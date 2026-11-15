@@ -21,6 +21,10 @@ export function mapDocumentPath(id: string) {
   return registeredDocuments().find(entry => entry[0] === id)?.[1]
 }
 
+export function registeredMapPaths() {
+  return registeredDocuments().map(entry => entry[1])
+}
+
 export function registerMapDocument(path: string) {
   const entries = registeredDocuments()
   const existing = entries.find(entry => entry[1] === path)

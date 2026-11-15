@@ -12,10 +12,11 @@ export interface MenuItem {
   run?: () => void
 }
 
-export function MarkdownMenu({ items, close, point, upward = false, nativeStyle = false }: {
+export function MarkdownMenu({ items, close, point, anchor, upward = false, nativeStyle = false }: {
   items: MenuItem[]
   close: () => void
   point?: { x: number; y: number }
+  anchor?: HTMLElement
   upward?: boolean
   nativeStyle?: boolean
 }) {
@@ -37,12 +38,12 @@ export function MarkdownMenu({ items, close, point, upward = false, nativeStyle 
       const target = event.target as Node
       const menu = root.current
       if (!menu || menu.contains(target)) return
-      const trigger = menu.parentElement?.matches('.menu-anchor') && menu.parentElement.querySelector(':scope > button[aria-expanded="true"]')
+      const trigger = anchor || menu.parentElement?.matches('.menu-anchor') && menu.parentElement.querySelector(':scope > button[aria-expanded="true"]')
       if (!trigger || !trigger.contains(target)) close()
     }
     window.addEventListener('pointerdown', outer)
     return () => window.removeEventListener('pointerdown', outer)
-  }, [close])
+  }, [anchor, close])
 
   return <div ref={root} className={`document-menu${point ? ' position-fixed' : ''}${upward ? ' upward' : ''}${nativeStyle ? ' native-context' : ''}`}
     role="menu" onKeyDown={event => {
@@ -51,7 +52,8 @@ export function MarkdownMenu({ items, close, point, upward = false, nativeStyle 
         event.preventDefault()
         if (stack.length) setStack(current => current.slice(0, -1))
         else {
-          root.current?.parentElement?.querySelector<HTMLButtonElement>(':scope > button')?.focus()
+          const trigger = anchor ?? root.current?.parentElement?.querySelector<HTMLButtonElement>(':scope > button')
+          trigger?.focus()
           close()
         }
         return

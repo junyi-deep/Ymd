@@ -2,7 +2,7 @@ import type { MapLocationKind } from './localMapLinks'
 import type { AppShortcut, ShortcutOverrides } from './shortcuts'
 
 export type FileKind = 'markdown' | 'drawing'
-export type Scope = 'library' | 'project' | 'local'
+export type Scope = 'library' | 'local'
 export type EditorMode = 'markdown' | 'outline' | 'map'
 export type Theme = 'system' | 'light' | 'dark'
 export type SearchEngine = 'google' | 'baidu' | 'bing' | 'duckduckgo'
@@ -23,6 +23,19 @@ export interface Entry {
   path: string
   name: string
   kind: FileKind | 'directory'
+}
+
+export interface TreeMutation {
+  operation: 'copy' | 'import' | 'move' | 'trash' | 'rename'
+  entries: (Entry & { version?: string; text?: string })[]
+  name?: string
+  destination?: string
+}
+
+export interface TreeChange {
+  source: Entry
+  target?: Entry
+  error?: string
 }
 
 export interface DocumentFile extends Entry {
@@ -56,7 +69,9 @@ export interface Preferences {
   size: 'small' | 'normal' | 'large'
   solidBackground: boolean
   windowTransparency: number
-  projectDirectory?: string
+  libraryDirectory?: string
+  recentLimit: number
+  markdownOutline: MarkdownOutlinePreferences
   animations: boolean
   documentTheme: 'classic' | 'paper' | 'mono'
   autoSave: boolean
@@ -66,8 +81,15 @@ export interface Preferences {
   shortcuts: ShortcutOverrides
 }
 
+export interface MarkdownOutlinePreferences {
+  position: 'left' | 'right'
+  numbering: 'none' | 'flat' | 'hierarchical'
+  visible: boolean
+}
+
 export const defaultPreferences: Preferences = {
-  theme: 'system', size: 'normal', solidBackground: false, windowTransparency: 80, animations: true, documentTheme: 'classic',
+  theme: 'system', size: 'normal', solidBackground: false, windowTransparency: 80, recentLimit: 10, animations: true, documentTheme: 'classic',
+  markdownOutline: { position: 'right', numbering: 'none', visible: false },
   autoSave: false, remoteImages: false, autoCheckUpdates: false, searchEngine: 'google', shortcuts: {},
 }
 export type Command = AppShortcut | 'close'
@@ -89,10 +111,14 @@ export function markdownImageExtension(name: string, type = '') {
 }
 
 export interface Desktop {
-  initialize(): Promise<{ library: Entry; project: Entry | null; preferences: Preferences; platform: string; windowsAcrylic: boolean; version: string }>
+  initialize(): Promise<{ library: Entry; recent: Entry[]; preferences: Preferences; platform: string; windowsAcrylic: boolean; version: string }>
   list(path: string): Promise<Entry[]>
-  chooseProjectDirectory(): Promise<Entry | null>
-  resetProjectDirectory(): Promise<Entry | null>
+  chooseLibraryDirectory(): Promise<Entry | null>
+  resetLibraryDirectory(): Promise<Entry>
+  chooseLocalDirectory(): Promise<Entry[] | null>
+  listRecent(): Promise<Entry[]>
+  touchRecent(path: string): Promise<Entry[]>
+  removeRecent(path: string): Promise<Entry[]>
   search(query: string): Promise<SearchHit[]>
   cancelSearch(): Promise<void>
   chooseFile(kind?: FileKind): Promise<DocumentFile | null>
@@ -100,6 +126,8 @@ export interface Desktop {
   createImportedMarkdown(directory: string, name: string, text: string): Promise<DocumentFile>
   read(path: string): Promise<DocumentFile>
   create(directory: string, kind: FileKind): Promise<DocumentFile>
+  createFolder(directory: string): Promise<Entry>
+  mutateTree(mutation: TreeMutation): Promise<TreeChange[] | null>
   save(path: string, text: string, version: string): Promise<{ version: string; modified: number } | { conflict: true }>
   duplicate(path: string, directory: string, text: string): Promise<DocumentFile>
   rename(path: string, name: string, version: string): Promise<DocumentFile>
@@ -118,8 +146,8 @@ export interface Desktop {
   saveAudioNote(data: ArrayBuffer): Promise<boolean>
   printDocument(name: string, html: string): Promise<void>
   saveCopy(path: string, text: string): Promise<DocumentFile | null>
-  reveal(path: string): Promise<void>
-  openLibraryDirectory(location: 'library' | 'project'): Promise<void>
+  reveal(path: string, directory?: boolean): Promise<void>
+  openLibraryDirectory(): Promise<void>
   checkForUpdates(): Promise<VersionStatus>
   setPreferences(preferences: Preferences): Promise<Preferences>
   setShortcutRecording(active: boolean): Promise<void>

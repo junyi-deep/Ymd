@@ -10,11 +10,11 @@ const { app, BrowserWindow, nativeTheme } = require('electron')
 
 const windows = process.platform === 'win32'
 const profile = mkdtempSync(path.join(os.tmpdir(), 'ymd-window-material-'))
-const documents = path.join(profile, 'Documents')
+const documents = path.join(profile, '.ymd')
 mkdirSync(documents)
 writeFileSync(path.join(documents, 'Window check.md'), '# Window check\n')
 app.setPath('userData', profile)
-app.setPath('documents', documents)
+app.setPath('home', profile)
 
 const vibrancyCalls = []
 let reducesTransparency = false

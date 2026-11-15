@@ -25,11 +25,10 @@ function Choices<T extends string>({ value, choices, onChange }: {
     <button key={key} aria-pressed={value === key} onClick={() => onChange(key)}>{label}</button>)}</div>
 }
 
-export function Settings({ preferences, platform, library, project, windowsAcrylic, macReducesTransparency, initialPage, version, release, checking, onCheckUpdates, onOpenRelease, onOpenDirectory, onChange, onReturn, onProjectChange }: {
+export function Settings({ preferences, platform, library, windowsAcrylic, macReducesTransparency, initialPage, version, release, checking, onCheckUpdates, onOpenRelease, onOpenDirectory, onChange, onReturn, onLibraryChange }: {
   preferences: Preferences
   platform: string
   library: Entry
-  project: Entry | null
   initialPage: (typeof pages)[number]['label']
   windowsAcrylic: boolean
   macReducesTransparency: boolean
@@ -38,8 +37,8 @@ export function Settings({ preferences, platform, library, project, windowsAcryl
   checking: boolean
   onCheckUpdates: () => void
   onOpenRelease: (url: string) => void
-  onOpenDirectory: (location: 'library' | 'project') => void
-  onProjectChange: (reset?: boolean) => void
+  onOpenDirectory: () => void
+  onLibraryChange: (reset?: boolean) => void
   onChange: (preferences: Partial<Preferences>) => void
   onReturn: () => void
 }) {
@@ -89,6 +88,8 @@ export function Settings({ preferences, platform, library, project, windowsAcryl
               onChange={size => onChange({ size })} /></Row>
             <Row label="文档主题"><Choices value={preferences.documentTheme} choices={ [['classic','标准'], ['paper','纸张'], ['mono','等宽']] }
               onChange={documentTheme => onChange({ documentTheme })} /></Row>
+            <Row label="文档目录位置"><Choices value={preferences.markdownOutline.position} choices={ [['left','左侧'], ['right','右侧']] }
+              onChange={position => onChange({ markdownOutline: { ...preferences.markdownOutline, position } })} /></Row>
             <div className="theme-preview"><article className="theme-preview-paper"><h2>写作预览</h2><p>一段包含<strong>重点</strong>和 <code>Markdown</code> 的正文。</p><blockquote>文档保存在本机。</blockquote></article></div>
           </>}
           {page === '通用' && <>
@@ -113,15 +114,24 @@ export function Settings({ preferences, platform, library, project, windowsAcryl
             <Row label="快捷新建" detail={quickNew || undefined}><button className="tool-button" onClick={() => setPage('快捷键')}>设置快捷键</button></Row>
           </>}
           {page === '文档库' && <>
-            <Row label="项目空间" detail={project?.path ?? '文档目录不可用，请选择位置。'}>
+            <Row label="我的文档" detail={library.path}>
               <div className="setting-actions">
-                {project && <button className="tool-button" onClick={() => onOpenDirectory('project')}>显示文件夹</button>}
-                {preferences.projectDirectory && <button className="tool-button" onClick={() => onProjectChange(true)}>恢复默认</button>}
-                <button className="tool-button" onClick={() => onProjectChange()}>更改位置…</button>
+                <button className="tool-button" onClick={onOpenDirectory}>显示文件夹</button>
+                {preferences.libraryDirectory && <button className="tool-button" onClick={() => onLibraryChange(true)}>恢复默认</button>}
+                <button className="tool-button" onClick={() => onLibraryChange()}>更改位置…</button>
               </div>
             </Row>
-            <Row label="我的文档" detail={library.path}>
-              <div className="setting-actions"><button className="tool-button" onClick={() => onOpenDirectory('library')}>显示文件夹</button></div>
+            <Row label="本机文件显示条数" detail="文件和文件夹合计，最多显示 100 条。">
+              <input className="setting-count" type="number" min={1} max={100} aria-label="本机文件显示条数"
+                key={preferences.recentLimit} defaultValue={preferences.recentLimit}
+                onBlur={event => {
+                  const input = event.currentTarget
+                  const value = input.valueAsNumber
+                  if (!Number.isFinite(value)) { input.value = String(preferences.recentLimit); return }
+                  const recentLimit = Math.min(100, Math.max(1, Math.round(value)))
+                  input.value = String(recentLimit)
+                  if (recentLimit !== preferences.recentLimit) onChange({ recentLimit })
+                }} onKeyDown={event => { if (event.key === 'Enter') event.currentTarget.blur() }} />
             </Row>
           </>}
           {page === '关于' && <>

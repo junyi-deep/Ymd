@@ -1,11 +1,11 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, net, protocol, session, shell } from 'electron'
 import type { IpcMainInvokeEvent, MediaAccessPermissionRequest, MenuItemConstructorOptions } from 'electron'
-import { mkdir, readFile, writeFile, rename, open } from 'node:fs/promises'
+import { mkdir, readdir, readFile, writeFile, rename, open } from 'node:fs/promises'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { defaultPreferences, markdownImageExtensions, searchEngines } from '../shared/contracts'
-import type { Command, ContextMenuItem, Desktop, Entry, FileKind, MarkdownImageUpload, Preferences } from '../shared/contracts'
-import { Files, fileKind } from './files'
+import type { Command, ContextMenuItem, Desktop, DocumentFile, Entry, FileKind, MarkdownImageUpload, Preferences, TreeChange, TreeMutation } from '../shared/contracts'
+import { Files, containsPath, fileKind } from './files'
 import { LocalMapLocations } from './localMapLocations'
 import { searchRoots } from './search'
 import { printView } from './printing'
@@ -37,7 +37,15 @@ function normalizePreferences(value: Partial<Preferences> | null): Preferences {
     solidBackground: value?.solidBackground === true,
     windowTransparency: typeof transparency === 'number' && Number.isFinite(transparency)
       ? Math.min(100, Math.max(0, Math.round(transparency / 5) * 5)) : defaultPreferences.windowTransparency,
-    projectDirectory: typeof value?.projectDirectory === 'string' && path.isAbsolute(value.projectDirectory) ? value.projectDirectory : undefined,
+    libraryDirectory: typeof value?.libraryDirectory === 'string' && path.isAbsolute(value.libraryDirectory) ? value.libraryDirectory : undefined,
+    recentLimit: typeof value?.recentLimit === 'number' && Number.isFinite(value.recentLimit)
+      ? Math.min(100, Math.max(1, Math.round(value.recentLimit))) : defaultPreferences.recentLimit,
+    markdownOutline: {
+      position: value?.markdownOutline?.position === 'left' ? 'left' : 'right',
+      numbering: value?.markdownOutline?.numbering === 'flat' || value?.markdownOutline?.numbering === 'hierarchical'
+        ? value.markdownOutline.numbering : 'none',
+      visible: value?.markdownOutline?.visible === true,
+    },
     animations: value?.animations !== false,
     documentTheme: value?.documentTheme === 'paper' || value?.documentTheme === 'mono' ? value.documentTheme : 'classic',
     autoSave: value?.autoSave === true,
@@ -172,19 +180,64 @@ void app.whenReady().then(async () => {
   })
   const data = app.getPath('userData')
   const settings = path.join(data, 'preferences.json')
+  const recentFile = path.join(data, 'recent.json')
+  const defaultLibrary = path.join(app.getPath('home'), '.ymd')
   const localMapLocations = new LocalMapLocations(path.join(data, 'map-locations.json'))
+  let oldProject: unknown
   try {
-    preferences = normalizePreferences(JSON.parse(await readFile(settings, 'utf8')))
+    const value = JSON.parse(await readFile(settings, 'utf8'))
+    preferences = normalizePreferences(value)
+    oldProject = value?.projectDirectory
   } catch {
     preferences = defaultPreferences
   }
-  const library = await files.library(data)
-  const defaultProject = app.getPath('documents')
-  await mkdir(defaultProject, { recursive: true }).catch(() => {})
-  const authorizeProject = (directory: string) => files.authorizeDirectory(directory).catch(() => null)
-  let project: Entry | null = preferences.projectDirectory ? await authorizeProject(preferences.projectDirectory) : null
-  project ??= await authorizeProject(defaultProject)
-  files.retainRoots(project ? [library, project] : [library])
+  let library = (preferences.libraryDirectory && await files.authorizeDirectory(preferences.libraryDirectory).catch(() => null))
+    || await files.library(defaultLibrary)
+  let recent: Entry[] = []
+  let recentWrite: Promise<unknown> = Promise.resolve()
+  let treeWrite: Promise<TreeChange[] | null> = Promise.resolve(null)
+  const temporaryRoots = new Set<Entry>()
+  const roots = () => [library, ...recent.filter(entry => entry.kind === 'directory' && entry.path !== library.path), ...temporaryRoots]
+  const writeRecent = (change: (items: Entry[]) => Entry[]) => {
+    const task = recentWrite.catch(() => {}).then(async () => {
+      const next = change(recent).slice(0, 100)
+      await writeFile(recentFile + '.tmp', JSON.stringify(next), { flush: true })
+      await rename(recentFile + '.tmp', recentFile)
+      recent = next
+      files.retainRoots(roots())
+      return recent
+    })
+    recentWrite = task
+    return task
+  }
+  const remember = (entry: Entry) => writeRecent(items => [entry, ...items.filter(item => item.path !== entry.path)])
+  const oldLibrary = path.join(data, 'Documents')
+  await mkdir(data, { recursive: true })
+  const storedRecent = await readFile(recentFile, 'utf8').catch(error => {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+    return undefined
+  })
+  if (storedRecent === undefined) {
+    const oldEntries = await readdir(oldLibrary).catch(() => [])
+    const paths = [
+      ...(oldEntries.some(name => !name.startsWith('.')) ? [oldLibrary] : []),
+      ...(typeof oldProject === 'string' && path.isAbsolute(oldProject) ? [oldProject] : []),
+    ]
+    for (const location of paths) {
+      const entry = await files.authorizeDirectory(location).catch(() => null)
+      if (entry && entry.path !== library.path && !recent.some(item => item.path === entry.path)) recent.push(entry)
+    }
+    await writeRecent(items => items)
+  } else {
+    let parsed: unknown
+    try { parsed = JSON.parse(storedRecent) } catch {}
+    if (Array.isArray(parsed)) for (const saved of parsed.slice(0, 100)) {
+      if (typeof saved?.path !== 'string' || !path.isAbsolute(saved.path)) continue
+      const entry = await (saved.kind === 'directory' ? files.authorizeDirectory(saved.path) : files.authorizeFileEntry(saved.path)).catch(() => null)
+      if (entry && !recent.some(item => item.path === entry.path)) recent.push(entry)
+    }
+    files.retainRoots(roots())
+  }
 
   function storePreferences(update: (current: Preferences) => Preferences) {
     const task = preferenceWrite.catch(() => {}).then(async () => {
@@ -198,29 +251,39 @@ void app.whenReady().then(async () => {
     return task
   }
 
-  async function updateProject(directory?: string) {
-    const selected = await files.authorizeDirectory(directory ?? defaultProject)
-    await storePreferences(current => ({ ...current, projectDirectory: directory ? selected.path : undefined }))
+  async function updateLibrary(directory?: string) {
+    const selected = directory ? await files.authorizeDirectory(directory) : await files.library(defaultLibrary)
+    await storePreferences(current => ({ ...current, libraryDirectory: directory ? selected.path : undefined }))
     searchController?.abort()
-    project = selected
-    files.retainRoots([library, selected])
-    return project
+    library = selected
+    files.retainRoots(roots())
+    return library
   }
 
-  handle('initialize', () => ({ library, project, preferences, platform: process.platform, windowsAcrylic, version: app.getVersion() }))
+  handle('initialize', () => ({ library, recent, preferences, platform: process.platform, windowsAcrylic, version: app.getVersion() }))
   handle('checkForUpdates', () => readReleaseStatus(app.getVersion()))
-  handle('openLibraryDirectory', async (location: 'library' | 'project') => {
-    const entry = location === 'library' ? library : location === 'project' ? project : null
-    if (!entry) throw new Error('文档目录不可用。')
-    const message = await shell.openPath(entry.path)
+  handle('openLibraryDirectory', async () => {
+    const message = await shell.openPath(library.path)
     if (message) throw new Error(message)
   })
   handle('list', (directory: string) => files.list(directory))
-  handle('chooseProjectDirectory', async () => {
-    const result = await dialog.showOpenDialog(window!, { defaultPath: project?.path, properties: ['openDirectory'] })
-    return result.canceled ? null : updateProject(result.filePaths[0])
+  handle('chooseLibraryDirectory', async () => {
+    const result = await dialog.showOpenDialog(window!, { defaultPath: library.path, properties: ['openDirectory'] })
+    return result.canceled ? null : updateLibrary(result.filePaths[0])
   })
-  handle('resetProjectDirectory', () => updateProject())
+  handle('resetLibraryDirectory', () => updateLibrary())
+  handle('chooseLocalDirectory', async () => {
+    const result = await dialog.showOpenDialog(window!, { properties: ['openDirectory'] })
+    if (result.canceled) return null
+    const entry = await files.authorizeDirectory(result.filePaths[0])
+    return remember(entry)
+  })
+  handle('listRecent', () => recent)
+  handle('touchRecent', (file: string) => writeRecent(items => {
+    const entry = items.find(item => item.path === file)
+    return entry ? [entry, ...items.filter(item => item.path !== file)] : items
+  }))
+  handle('removeRecent', (file: string) => writeRecent(items => items.filter(item => item.path !== file)))
   handle('cancelSearch', () => { searchController?.abort() })
   handle('search', async (input: string) => {
     searchController?.abort()
@@ -232,7 +295,13 @@ void app.whenReady().then(async () => {
     const binary = app.isPackaged ? path.join(process.resourcesPath, 'ripgrep', executable)
       : path.join(app.getAppPath(), 'node_modules/@vscode/ripgrep-universal/bin', `${process.platform}-${process.arch}`, executable)
     try {
-      return await searchRoots(binary, project && project.path !== library.path ? [library, project] : [library], query, controller.signal)
+      const locations = [library, ...recent.filter(entry => entry.path !== library.path &&
+        (entry.kind === 'directory' || !containsPath(library.path, entry.path))).slice(0, preferences.recentLimit)]
+      const authorized = await Promise.all(locations.map(async entry => {
+        const file = await (entry.kind === 'directory' ? files.authorizedDirectory(entry.path) : files.authorizedFile(entry.path)).catch(() => '')
+        return file === entry.path ? entry : undefined
+      }))
+      return await searchRoots(binary, authorized.filter(entry => entry !== undefined), query, controller.signal)
     } finally {
       if (searchController === controller) searchController = undefined
     }
@@ -248,10 +317,97 @@ void app.whenReady().then(async () => {
     if (result.canceled) return null
     const file = result.filePaths[0]
     if (kind && fileKind(file) !== kind) throw new Error('所选文件类型与请求不符。')
-    return files.authorizeFile(file)
+    const document = await files.authorizeFile(file)
+    const relative = path.relative(library.path, document.path)
+    if (path.isAbsolute(relative) || relative.split(path.sep)[0] === '..') {
+      const { path, name, kind } = document
+      await remember({ path, name, kind })
+    }
+    return document
   })
   handle('read', (file: string) => files.read(file, true))
   handle('create', (directory: string, kind: FileKind) => files.create(directory, kind))
+  handle('createFolder', (directory: string) => files.createFolder(directory))
+  async function mutateTree(mutation: TreeMutation): Promise<TreeChange[] | null> {
+    if (!mutation || !['copy', 'import', 'move', 'trash', 'rename'].includes(mutation.operation) ||
+      !Array.isArray(mutation.entries) || !mutation.entries.length || mutation.entries.length > 1000 ||
+      mutation.entries.some(entry => !entry || typeof entry.path !== 'string' || !path.isAbsolute(entry.path) ||
+        !['directory', 'markdown', 'drawing'].includes(entry.kind)) ||
+      mutation.operation === 'rename' && (mutation.entries.length !== 1 || typeof mutation.name !== 'string')) {
+      throw new Error('无效的文件操作。')
+    }
+    const { operation } = mutation
+    const copying = operation === 'copy' || operation === 'import'
+    const unique = [...new Map(mutation.entries.map(entry => [entry.path, entry])).values()]
+    const entries = unique.filter(entry => !unique.some(parent => parent.kind === 'directory' && parent !== entry && containsPath(parent.path, entry.path)))
+    let destination: Entry | undefined
+    if (operation === 'move') {
+      if (mutation.destination !== undefined) {
+        const path = await files.authorizedDirectory(mutation.destination)
+        if (!containsPath(library.path, path)) throw new Error('请选择文档库中的文件夹。')
+        destination = await files.authorizeDirectory(path)
+      } else {
+        const dialogResult = await dialog.showOpenDialog(window!, { defaultPath: library.path, properties: ['openDirectory'] })
+        if (dialogResult.canceled) return null
+        destination = await files.authorizeDirectory(dialogResult.filePaths[0])
+      }
+      temporaryRoots.add(destination)
+    }
+    const changes: TreeChange[] = []
+    try {
+      for (const source of entries) {
+        try {
+          const folder = source.kind === 'directory'
+          const canonical = await (folder ? files.authorizedDirectory(source.path) : files.authorizedFile(source.path))
+          if (canonical === library.path || folder && containsPath(canonical, library.path)) throw new Error('请先在设置中更改文档库位置。')
+          let target: Entry | undefined
+          if (folder) {
+            if (copying) target = await files.copyDirectory(canonical, operation === 'import' ? library.path : undefined)
+            else if (operation === 'trash') await shell.trashItem(canonical)
+            else target = await files.moveDirectory(canonical, destination?.path ?? '', operation === 'rename' ? mutation.name : undefined)
+          } else {
+            const document = await files.read(canonical)
+            const version = source.version ?? document.version
+            if (copying) {
+              const parent = operation === 'import' ? library.path : await files.authorizedDirectory(path.dirname(canonical)).catch(() => library.path)
+              target = await files.duplicate(canonical, parent, typeof source.text === 'string' ? source.text : document.text, operation === 'import')
+            } else if (operation === 'trash') {
+              if (document.version !== version) throw new Error('磁盘上的文件已变化，请重新载入后删除。')
+              await shell.trashItem(canonical)
+            } else if (operation === 'rename') target = await files.renameDocument(canonical, mutation.name!, version)
+            else target = await files.move(canonical, destination!.path, version)
+          }
+          changes.push({ source: { path: canonical, name: path.basename(canonical), kind: source.kind }, target })
+        } catch (error) {
+          changes.push({ source, error: error instanceof Error ? error.message : String(error) })
+        }
+      }
+      if (!copying) await writeRecent(items => {
+        const updated = items.flatMap(entry => {
+          const change = changes.find(change => !change.error && (change.source.path === entry.path ||
+            change.source.kind === 'directory' && containsPath(change.source.path, entry.path)))
+          if (!change) return [entry]
+          if (!change.target) return []
+          const updatedPath = path.join(change.target.path, path.relative(change.source.path, entry.path))
+          return [{ ...entry, path: updatedPath, name: path.basename(updatedPath) }]
+        })
+        for (const change of changes) {
+          const target = change.target
+          if (target && !containsPath(library.path, target.path) &&
+              !updated.some(entry => entry.path === target.path || entry.kind === 'directory' && containsPath(entry.path, target.path))) updated.unshift(target)
+        }
+        return [...new Map(updated.map(entry => [entry.path, entry])).values()]
+      }).catch(error => { console.warn('无法保存最近打开记录。', error) })
+      return changes
+    } finally {
+      if (destination) temporaryRoots.delete(destination)
+      files.retainRoots(roots())
+    }
+  }
+  handle('mutateTree', (mutation: TreeMutation) => {
+    treeWrite = treeWrite.catch(() => null).then(() => mutateTree(mutation))
+    return treeWrite
+  })
   handle('save', (file: string, text: string, version: string) => {
     if (typeof text !== 'string' || typeof version !== 'string') throw new Error('文件内容无效。')
     return files.save(file, text, version)
@@ -260,16 +416,28 @@ void app.whenReady().then(async () => {
     if (typeof text !== 'string') throw new Error('文件内容无效。')
     return files.duplicate(file, directory, text)
   })
-  handle('rename', (file: string, name: string, version: string) => files.renameDocument(file, name, version))
+  const moveRecent = async (oldPath: string, document: DocumentFile) => {
+    if (document.path !== oldPath) {
+      const record = { path: document.path, name: document.name, kind: document.kind }
+      await writeRecent(items => {
+        const next = items.filter(entry => entry.path !== oldPath && entry.path !== document.path)
+        return containsPath(library.path, document.path) ? next : [record, ...next]
+      }).catch(error => { console.warn('无法保存最近打开记录。', error) })
+    }
+    return document
+  }
+  handle('rename', async (file: string, name: string, version: string) => moveRecent(file, await files.renameDocument(file, name, version)))
   handle('move', async (file: string, version: string) => {
     const canonical = await files.authorizedFile(file)
     const result = await dialog.showOpenDialog(window!, { defaultPath: path.dirname(canonical), properties: ['openDirectory'] })
     if (result.canceled) return null
     const selected = await files.authorizeDirectory(result.filePaths[0])
+    temporaryRoots.add(selected)
     try {
-      return await files.move(canonical, selected.path, version)
+      return await moveRecent(canonical, await files.move(canonical, selected.path, version))
     } finally {
-      files.retainRoots(project ? [library, project] : [library])
+      temporaryRoots.delete(selected)
+      files.retainRoots(roots())
     }
   })
   handle('trash', async (file: string, version: string) => {
@@ -277,6 +445,8 @@ void app.whenReady().then(async () => {
     const current = await files.read(canonical)
     if (current.version !== version) throw new Error('磁盘上的文件已变化，请重新载入后删除。')
     await shell.trashItem(canonical)
+    if (recent.some(entry => entry.path === canonical)) await writeRecent(items => items.filter(entry => entry.path !== canonical))
+      .catch(error => { console.warn('无法保存最近打开记录。', error) })
   })
   handle('openExternal', async (input: string) => {
     if (typeof input !== 'string' || input.length > 4096) throw new Error('链接无效。')
@@ -386,14 +556,18 @@ void app.whenReady().then(async () => {
     if (result.canceled || !result.filePath) return null
     const destination = result.filePath.toLowerCase().endsWith(extension) ? result.filePath : result.filePath + extension
     await writeFile(destination, text, { flag: 'wx', flush: true })
-    return files.authorizeFile(destination)
+    const document = await files.authorizeFile(destination)
+    if (!containsPath(library.path, document.path)) await remember({ path: document.path, name: document.name, kind: document.kind })
+      .catch(error => { console.warn('无法保存最近打开记录。', error) })
+    return document
   })
-  handle('reveal', async (file: string) => shell.showItemInFolder(await files.authorizedFile(file)))
+  handle('reveal', async (file: string, directory?: boolean) =>
+    shell.showItemInFolder(await (directory ? files.authorizedDirectory(file) : files.authorizedFile(file))))
   handle('setPreferences', async (value: Preferences) => {
     let changedShortcuts = false
     let changedBackground = false
     const updated = await storePreferences(current => {
-      const next = normalizePreferences({ ...value, projectDirectory: current.projectDirectory })
+      const next = normalizePreferences({ ...value, libraryDirectory: current.libraryDirectory })
       changedShortcuts = JSON.stringify(current.shortcuts) !== JSON.stringify(next.shortcuts)
       changedBackground = current.theme !== next.theme || current.solidBackground !== next.solidBackground
       return next

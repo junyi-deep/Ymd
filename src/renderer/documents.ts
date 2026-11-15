@@ -64,7 +64,12 @@ export function useDocuments() {
     setActive(current => current === path ? latest.current.at(-1)?.path : current)
   }
 
-  return { documents, active: documents.find(document => document.path === active), open, patch, save, reload, close, latest,
+  function relocate(path: string, target: string, name: string, scope: Scope) {
+    patch(path, { path: target, name, scope })
+    setActive(current => current === path ? target : current)
+  }
+
+  return { documents, active: documents.find(document => document.path === active), open, patch, save, reload, close, relocate, latest,
     hasPending: (path?: string) => path ? saving.current.has(path) : saving.current.size > 0,
     waitForPending: (path?: string) => Promise.allSettled(path ? [saving.current.get(path)] : [...saving.current.values()]),
     showHome: () => setActive(undefined) }

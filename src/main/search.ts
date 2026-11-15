@@ -55,14 +55,22 @@ export async function searchRoots(binary: string, roots: Entry[], query: string,
   const needle = fold(query)
   const names = new Map<string, SearchHit>()
   const bodies = new Map<string, SearchHit>()
-  await Promise.all(roots.map(async root => {
-    const filenameSearch = runRipgrep(binary, root.path, ['--files', '.'], signal, name => {
+  async function searchLocation(location: Entry) {
+    const standalone = location.kind !== 'directory'
+    const directory = path.dirname(location.path)
+    const root = standalone ? { path: directory, name: path.basename(directory), kind: 'directory' as const } : location
+    if (!(await stat(root.path).catch(() => null))?.isDirectory()) return
+    const target = standalone ? './' + path.basename(location.path) : '.'
+    if (standalone && names.size < limit && fold(location.name).includes(needle)) {
+      names.set(location.path, { ...location, kind: location.kind as SearchHit['kind'], location: root.name })
+    }
+    const filenameSearch = !standalone && runRipgrep(binary, root.path, ['--files', '.'], signal, name => {
       if (names.size >= limit) return
       const entry = withFilePath(root, name)
       if (entry && fold(entry.name).includes(needle)) names.set(entry.path, entry)
     })
-    const contentSearch = runRipgrep(binary, root.path, [
-      '-g', '!*.excalidraw', '--json', '--fixed-strings', '--ignore-case', '--max-count=1', '--max-filesize=8M', '--', query, '.',
+    const contentSearch = location.kind !== 'drawing' && runRipgrep(binary, root.path, [
+      '-g', '!*.excalidraw', '--json', '--fixed-strings', '--ignore-case', '--max-count=1', '--max-filesize=8M', '--', query, target,
     ], signal, line => {
       if (bodies.size >= limit || !line.includes('"type":"match"')) return
       let match: MatchEvent
@@ -78,6 +86,10 @@ export async function searchRoots(binary: string, roots: Entry[], query: string,
       bodies.set(entry.path, { ...entry, snippet: snippet(source, offset, query), line: match.data.line_number })
     })
     await Promise.all([filenameSearch, contentSearch])
+  }
+  let next = 0
+  await Promise.all(Array.from({ length: Math.min(4, roots.length) }, async () => {
+    while (!signal.aborted && next < roots.length && (names.size < limit || bodies.size < limit)) await searchLocation(roots[next++])
   }))
   if (signal.aborted) return []
   const hits = [...names.values()].map(hit => bodies.get(hit.path) ?? hit)

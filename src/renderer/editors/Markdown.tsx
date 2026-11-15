@@ -14,7 +14,7 @@ import { ensureSyntaxTree, syntaxTree } from '@codemirror/language'
 import { openSearchPanel, search, searchKeymap } from '@codemirror/search'
 import { Compartment, EditorState, Prec, type Range } from '@codemirror/state'
 import { Decoration, drawSelection, EditorView, highlightSpecialChars, keymap, ViewPlugin, WidgetType, type DecorationSet, type ViewUpdate } from '@codemirror/view'
-import type { ContextMenuItem, SearchEngine } from '../../shared/contracts'
+import type { ContextMenuItem, MarkdownOutlinePreferences, SearchEngine } from '../../shared/contracts'
 import type { ShortcutOverrides } from '../../shared/shortcuts'
 
 const inlineStyles: Record<string, string> = {
@@ -141,10 +141,13 @@ const live = (path: string, loadRemote: boolean) => ViewPlugin.fromClass(class {
   }
 }, { decorations: plugin => plugin.decorations })
 
-type OutlinePosition = 'left' | 'right'
 type StatusKind = 'words' | 'lines' | 'modified'
 type Width = 'narrow' | 'normal' | 'wide'
-type OpenMenu = 'outline' | 'more' | 'status'
+type OpenMenu = 'outline-numbering' | 'more' | 'status'
+type Heading = { pos: number; level: number; title: string }
+const outlineNumberings = [
+  ['none', '不显示编号'], ['flat', '数字序号'], ['hierarchical', '带层级的数字序号'],
+] as const
 
 interface Props {
   text: string
@@ -155,6 +158,8 @@ interface Props {
   remoteImages: boolean
   searchEngine: SearchEngine
   keyOverrides: ShortcutOverrides
+  outline: MarkdownOutlinePreferences
+  updateOutline: (patch: Partial<MarkdownOutlinePreferences>) => void
   registerFlush: (flush?: () => void) => void
   onChange: (text: string) => void
   find: number
@@ -174,7 +179,7 @@ interface Props {
   report: (error: unknown) => void
 }
 
-export function MarkdownEditor({ text, name, path, modified, platform, remoteImages, searchEngine, keyOverrides, registerFlush, onChange, find, jump, reveal, saveCopy, duplicate, move, trash, shortcuts, exportPdf, printDocument, pinned, starred, togglePin, toggleStar, report }: Props) {
+export function MarkdownEditor({ text, name, path, modified, platform, remoteImages, searchEngine, keyOverrides, outline, updateOutline, registerFlush, onChange, find, jump, reveal, saveCopy, duplicate, move, trash, shortcuts, exportPdf, printDocument, pinned, starred, togglePin, toggleStar, report }: Props) {
   const host = useRef<HTMLDivElement>(null)
   const view = useRef<EditorView>(null)
   const change = useRef(onChange)
@@ -182,7 +187,7 @@ export function MarkdownEditor({ text, name, path, modified, platform, remoteIma
   const previousFind = useRef(find)
   const [source, setSource] = useState(false)
   const [menu, setMenu] = useState<OpenMenu>()
-  const [outline, setOutline] = useState<OutlinePosition>()
+  const [headings, setHeadings] = useState<Heading[]>([])
   const [status, setStatus] = useState<StatusKind>('words')
   const [width, setWidth] = useState<Width>('normal')
   const [reading, setReading] = useState(false)
@@ -190,6 +195,9 @@ export function MarkdownEditor({ text, name, path, modified, platform, remoteIma
   const [imageResize, setImageResize] = useState<ImageResizeRequest>()
   const infoDialog = useRef<HTMLDialogElement>(null)
   const tableDialog = useRef<HTMLDialogElement>(null)
+  const outlineTrigger = useRef<HTMLButtonElement>(null)
+  const numberingTrigger = useRef<HTMLButtonElement>(null)
+  const [numberingPoint, setNumberingPoint] = useState<{ x: number; y: number }>()
   const readMode = useRef(new Compartment())
   const renderMode = useRef(new Compartment())
   const keyMode = useRef(new Compartment())
@@ -268,24 +276,45 @@ export function MarkdownEditor({ text, name, path, modified, platform, remoteIma
   const lineCount = text.split(/\r\n|\n|\r/).length
   const updateTime = new Intl.DateTimeFormat('zh-CN', { dateStyle: 'short', timeStyle: 'short' }).format(modified)
   const statusText = status === 'words' ? `${characters} 字` : status === 'lines' ? `${lineCount} 行` : updateTime
-  const headings: { pos: number; level: number; title: string }[] = []
-  const state = view.current?.state
-  if (outline && state) {
-    const tree = ensureSyntaxTree(state, state.doc.length, 30) ?? syntaxTree(state)
-    tree.iterate({ enter(node) {
-      if (node.name === 'Frontmatter') return false
-      const match = /^(?:ATX|Setext)Heading([1-6])$/.exec(node.name)
-      if (!match) return
-      const title = state.sliceDoc(node.from, node.to).split('\n')[0].replace(/^#{1,6}\s+|\s+#+\s*$/g, '').trim()
-      if (title) headings.push({ pos: node.from, level: Number(match[1]), title })
-    } })
-  }
-
-  const outlineItems: MenuItem[] = [
-    { label: '在左侧显示', icon: <ChevronsLeft size={16} />, selected: outline === 'left', run: () => setOutline('left') },
-    { label: '在右侧显示', icon: <ChevronsRight size={16} />, selected: outline === 'right', run: () => setOutline('right') },
-    ...(outline ? [{ label: '收起目录', run: () => setOutline(undefined) }] : []),
-  ]
+  useEffect(() => {
+    const state = view.current?.state
+    if (!outline.visible || !state) return
+    let pending: number | undefined
+    const update = () => {
+      const tree = ensureSyntaxTree(state, state.doc.length, 18)
+      if (!tree) {
+        pending = window.setTimeout(update, 16)
+        return
+      }
+      const next: Heading[] = []
+      tree.iterate({ enter(node) {
+        if (node.name === 'Frontmatter') return false
+        const match = /^(?:ATX|Setext)Heading([1-6])$/.exec(node.name)
+        if (!match) return
+        const title = state.sliceDoc(node.from, node.to).split('\n')[0].replace(/^#{1,6}\s+|\s+#+\s*$/g, '').trim()
+        if (title) next.push({ pos: node.from, level: Number(match[1]), title })
+      } })
+      setHeadings(next)
+    }
+    update()
+    return () => window.clearTimeout(pending)
+  }, [text, outline.visible])
+  const numberedHeadings = useMemo(() => {
+    const ancestors: { level: number; ordinal: number; children: number }[] = []
+    let roots = 0
+    return headings.map((heading, index) => {
+      while (ancestors.length && ancestors.at(-1)!.level >= heading.level) ancestors.pop()
+      const parent = ancestors.at(-1)
+      const depth = ancestors.length
+      ancestors.push({ level: heading.level, ordinal: parent ? ++parent.children : ++roots, children: 0 })
+      const number = outline.numbering === 'flat' ? String(index + 1) : outline.numbering === 'hierarchical'
+        ? ancestors.map(item => item.ordinal).join('.') : ''
+      return { ...heading, depth, number }
+    })
+  }, [headings, outline.numbering])
+  const outlineItems: MenuItem[] = outlineNumberings.map(([numbering, label]) => ({
+    label, selected: outline.numbering === numbering, run: () => { updateOutline({ numbering }); numberingTrigger.current?.focus() },
+  }))
   const docItems: MenuItem[] = [
     { label: '页宽设置', icon: <BetweenHorizontalStart size={16} />, children: [
       { label: '窄', selected: width === 'narrow', run: () => setWidth('narrow') },
@@ -342,28 +371,38 @@ export function MarkdownEditor({ text, name, path, modified, platform, remoteIma
 
   return <div className="markdown-editor" data-source={source} data-width={width}>
     <div className="editor-tools">
-      <div className="menu-anchor">
-        <button className="icon-button" title="文档目录" aria-label="文档目录" aria-haspopup="menu" aria-expanded={menu === 'outline'}
-          onClick={() => toggleMenu('outline')}><ListTree size={17} /></button>
-        {menu === 'outline' && <MarkdownMenu items={outlineItems} close={close} />}
-      </div>
+      <button ref={outlineTrigger} className="icon-button" title="文档目录" aria-label="文档目录" aria-controls="markdown-outline"
+        aria-expanded={outline.visible} onClick={() => { close(); updateOutline({ visible: !outline.visible }) }}><ListTree size={17} /></button>
       <div className="menu-anchor">
         <button className="icon-button" title="更多操作" aria-label="更多操作" aria-haspopup="menu" aria-expanded={menu === 'more'}
           onClick={() => toggleMenu('more')}><MoreHorizontal size={20} /></button>
         {menu === 'more' && <MarkdownMenu items={docItems} close={close} />}
       </div>
     </div>
-    <div className="document-editing" data-outline={outline}>
-      {outline && <aside className="document-outline" aria-label="Markdown 标题目录">
-        <header><strong>目录</strong><button className="icon-button" title="收起目录" aria-label="收起目录" onClick={() => setOutline(undefined)}>
-          {outline === 'left' ? <ChevronsLeft size={16} /> : <ChevronsRight size={16} />}</button></header>
-        <nav>{headings.map(heading => <button type="button" key={heading.pos}
-          style={{ paddingLeft: 8 + (heading.level - 1) * 11 }} title={heading.title} onClick={() => {
+    <div className="document-editing" data-outline={outline.visible ? outline.position : undefined}>
+      {outline.visible && <aside id="markdown-outline" className="document-outline" aria-label="Markdown 标题目录">
+        <header><strong>目录</strong><div className="outline-header-actions">
+          <button ref={numberingTrigger} className="icon-button" title="目录编号" aria-label="目录编号" aria-haspopup="menu"
+            aria-expanded={menu === 'outline-numbering'} onClick={event => {
+              const rect = event.currentTarget.getBoundingClientRect()
+              setNumberingPoint({ x: rect.left, y: rect.bottom + 4 })
+              toggleMenu('outline-numbering')
+            }}><Eye size={16} /></button>
+          <button className="icon-button" title="收起目录" aria-label="收起目录" onClick={() => {
+            close()
+            updateOutline({ visible: false })
+            outlineTrigger.current?.focus()
+          }}>{outline.position === 'left' ? <ChevronsLeft size={16} /> : <ChevronsRight size={16} />}</button>
+        </div></header>
+        {menu === 'outline-numbering' && numberingPoint && <MarkdownMenu items={outlineItems} close={close}
+          point={numberingPoint} anchor={numberingTrigger.current ?? undefined} />}
+        <nav>{numberedHeadings.map(heading => <button type="button" key={heading.pos}
+          style={{ paddingInlineStart: 8 + heading.depth * 10 }} title={heading.title} onClick={() => {
             const editor = view.current
             if (!editor) return
             editor.dispatch({ selection: { anchor: heading.pos }, effects: EditorView.scrollIntoView(heading.pos, { y: 'start', yMargin: 20 }) })
             if (!reading) editor.focus()
-          }}>{heading.title}</button>)}</nav>
+          }}>{heading.number && <span className="outline-heading-number">{heading.number}</span>}<span className="outline-heading-title">{heading.title}</span></button>)}</nav>
         {!headings.length && <p>还没有标题</p>}
       </aside>}
       <div className="markdown-surface" ref={host} onClick={event => {
