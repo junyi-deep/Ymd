@@ -13,6 +13,7 @@ import { discardInterruptedMapImports, loadMapAppearance, relocateMapAppearance,
 import { forgetAudio, storeAudio } from './editors/mapAudio'
 import { mapDocumentPath, mapDocumentSheets, registerMapDocument, relocateMapDocument, removeMapDocument } from './editors/mapDocumentLinks'
 import { findTopic, type TopicLink } from './editors/mapTopicLinks'
+import { shortcutLabel, shortcutValue, type AppShortcut } from '../shared/shortcuts'
 
 const MindMapEditor = lazy(() => import('./editors/MindMap'))
 const DrawingEditor = lazy(() => import('./editors/Drawing'))
@@ -386,6 +387,10 @@ export function App() {
 
   const dirty = active && active.saved !== active.text
   const edit = (text: string) => { if (active) sessions.patch(active.path, { text }) }
+  const homeHint = (id: AppShortcut) => {
+    const key = shortcutValue(preferences.shortcuts, id, platform)
+    return key ? <kbd aria-hidden="true">{shortcutLabel(key, platform)}</kbd> : <ChevronRight size={16} />
+  }
   const local = sessions.documents.filter(document => scopeOf(document.path) === 'local')
   const activeScope = active && scopeOf(active.path)
   const home = () => { flushEditor.current?.(); ++openIntent.current; setSettings(false); sessions.showHome() }
@@ -490,16 +495,16 @@ export function App() {
             <h1>我的文档</h1>
             <p>创建文档或打开已有的本机文件。</p>
             <div className="home-actions">
-              <button onClick={() => create()}><FilePlus2 size={21} /><span>新建文档</span><kbd>{platform === 'darwin' ? '⌘' : 'Ctrl'} N</kbd></button>
-              <button onClick={() => create('drawing')}><Shapes size={21} /><span>新建绘图</span><ChevronRight size={16} /></button>
-              <button onClick={openFile}><FileText size={21} /><span>打开本机文件</span><ChevronRight size={16} /></button>
-              <button onClick={importWorkbook} disabled={importing || !library}><FolderInput size={21} /><span>{importing ? '正在导入 Xmind…' : '导入 Xmind'}</span><ChevronRight size={16} /></button>
+              <button onClick={() => create()}><FilePlus2 size={21} /><span>新建文档</span>{homeHint('new-file')}</button>
+              <button onClick={() => create('drawing')}><Shapes size={21} /><span>新建绘图</span>{homeHint('new-drawing')}</button>
+              <button onClick={openFile}><FileText size={21} /><span>打开本机文件</span>{homeHint('open-file')}</button>
+              <button onClick={importWorkbook} disabled={importing || !library}><FolderInput size={21} /><span>{importing ? '正在导入 Xmind…' : '导入 Xmind'}</span>{homeHint('import-xmind')}</button>
             </div>
           </div> : <Suspense fallback={<div className="startup">正在加载编辑器…</div>}>
             {active.kind === 'drawing'
               ? <DrawingEditor key={active.path + ':' + active.reload} text={active.text} dark={dark} onChange={edit} />
               : active.mode === 'markdown'
-                ? <MarkdownEditor key={active.path + ':' + active.reload} text={active.text} name={active.name} path={active.path} modified={active.modified} platform={platform} remoteImages={preferences.remoteImages}
+                ? <MarkdownEditor key={active.path + ':' + active.reload} text={active.text} name={active.name} path={active.path} modified={active.modified} platform={platform} remoteImages={preferences.remoteImages} keyOverrides={preferences.shortcuts}
                   searchEngine={preferences.searchEngine} registerFlush={registerFlush}
                   find={find} jump={jump?.path === active.path ? jump : undefined} onChange={edit}
                   report={error => setNotice(message(error))}
@@ -529,6 +534,7 @@ export function App() {
                   ? <OutlineEditor key={active.path + ':' + active.reload} text={active.text} name={active.name} path={active.path}
                     platform={platform} remoteImages={preferences.remoteImages} sessions={outlineSessions.current} onChange={edit} />
                   : <MindMapEditor key={active.path + ':' + active.reload} text={active.text} name={active.name} path={active.path} dark={dark} onChange={edit}
+                    platform={platform} keyOverrides={preferences.shortcuts}
                     registerFlush={registerFlush} importWorkbook={importWorkbook} importing={importing}
                     readMapDocument={readMapDocument} followMapDocument={followMapDocument} consumedMapJump={consumedMapJump}
                     entryJump={mapJump?.path === active.path ? mapJump.target : undefined}

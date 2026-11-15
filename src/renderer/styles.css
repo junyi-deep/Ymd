@@ -148,6 +148,29 @@ kbd { color: var(--muted); font-family: inherit; font-size: .9em; white-space: n
 .theme-preview { padding: 16px; background: var(--soft); }
 .theme-preview-paper { border: 1px solid var(--line); border-radius: 8px; background: var(--editor-page, var(--page)); padding: 24px 29px; font: 1.12rem var(--editor-font, system-ui, sans-serif); }
 .settings-row select { padding: 5px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--page); color: var(--text); }
+.shortcut-heading, .shortcut-toolbar, .shortcut-actions { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.shortcut-heading { justify-content: space-between; margin-bottom: 14px; }
+.shortcut-heading h1 { margin: 0; }
+.shortcut-search { display: flex; align-items: center; gap: 7px; min-height: 30px; width: 184px; max-width: 100%; padding-inline: 8px; border-radius: 7px; background: var(--soft); color: var(--muted); }
+.shortcut-search input { min-width: 0; width: 100%; color: var(--text); }
+.shortcut-search:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
+.shortcut-search input:focus-visible { outline: none; }
+.shortcut-search svg { flex: none; }
+.shortcut-group + .shortcut-group { margin-top: 16px; }
+.shortcut-group h2 { margin: 0 0 7px; font-weight: 650; color: var(--muted); }
+.shortcut-row + .shortcut-row { border-top: 1px solid var(--line); }
+.shortcut-row .settings-row { min-height: 41px; padding-block: 6px; }
+.shortcut-actions { justify-content: end; }
+.shortcut-keycap { min-width: 57px; min-height: 28px; padding: 3px 8px; border: 1px solid var(--line); border-radius: 7px; background: var(--soft); white-space: pre-wrap; }
+.shortcut-keycap[data-recording="true"] { border-color: var(--accent); color: var(--link); }
+.shortcut-keycap kbd { color: inherit; }
+.shortcut-remove { opacity: 0; }
+.shortcut-row:hover .shortcut-remove, .shortcut-row:focus-within .shortcut-remove { opacity: 1; }
+.shortcut-recorder { padding: 0 16px 8px; color: var(--muted); font-size: .92em; }
+.shortcut-recorder p + p { margin-block-start: 4px; }
+.shortcut-recorder [role="alert"] { color: var(--text); }
+.shortcut-recorder .shortcut-save { color: var(--link); }
+.shortcut-empty { padding: 14px 0; color: var(--muted); }
 .theme-preview h2 { font-size: 1.7rem; font-weight: 680; margin-bottom: 10px; }
 .theme-preview blockquote { border-left: 1px solid var(--selected); color: var(--muted); margin: 12px 0 0; padding-left: 9px; }
 

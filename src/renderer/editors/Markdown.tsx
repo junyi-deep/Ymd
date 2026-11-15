@@ -3,7 +3,7 @@ import { BetweenHorizontalStart, Check, ChevronsLeft, ChevronsRight, Code2, Copy
 import { MarkdownMenu, type MenuItem } from './MarkdownMenu'
 import { contextItems, insertMermaid, typographyKeys } from './markdownCommands'
 import { markdownPlainText } from './markdownHtml'
-import { editImageReference, imageContextItems, isImageNode, MarkdownImage, markdownImageIntake, readImageReference, type ImageResizeRequest } from './markdownImages'
+import { chooseMarkdownImages, editImageReference, imageContextItems, isImageNode, MarkdownImage, markdownImageIntake, readImageReference, type ImageResizeRequest } from './markdownImages'
 import { MarkdownImageSize } from './MarkdownImageSize'
 import { renderedBlocks } from './renderedBlocks'
 import { insertTable, markdownTable } from './markdownTable'
@@ -15,6 +15,7 @@ import { openSearchPanel, search, searchKeymap } from '@codemirror/search'
 import { Compartment, EditorState, Prec, type Range } from '@codemirror/state'
 import { Decoration, drawSelection, EditorView, highlightSpecialChars, keymap, ViewPlugin, WidgetType, type DecorationSet, type ViewUpdate } from '@codemirror/view'
 import type { ContextMenuItem, SearchEngine } from '../../shared/contracts'
+import type { ShortcutOverrides } from '../../shared/shortcuts'
 
 const inlineStyles: Record<string, string> = {
   StrongEmphasis: 'md-bold', Emphasis: 'md-italic', Strikethrough: 'md-strike',
@@ -153,6 +154,7 @@ interface Props {
   platform: string
   remoteImages: boolean
   searchEngine: SearchEngine
+  keyOverrides: ShortcutOverrides
   registerFlush: (flush?: () => void) => void
   onChange: (text: string) => void
   find: number
@@ -172,7 +174,7 @@ interface Props {
   report: (error: unknown) => void
 }
 
-export function MarkdownEditor({ text, name, path, modified, platform, remoteImages, searchEngine, registerFlush, onChange, find, jump, reveal, saveCopy, duplicate, move, trash, shortcuts, exportPdf, printDocument, pinned, starred, togglePin, toggleStar, report }: Props) {
+export function MarkdownEditor({ text, name, path, modified, platform, remoteImages, searchEngine, keyOverrides, registerFlush, onChange, find, jump, reveal, saveCopy, duplicate, move, trash, shortcuts, exportPdf, printDocument, pinned, starred, togglePin, toggleStar, report }: Props) {
   const host = useRef<HTMLDivElement>(null)
   const view = useRef<EditorView>(null)
   const change = useRef(onChange)
@@ -190,7 +192,10 @@ export function MarkdownEditor({ text, name, path, modified, platform, remoteIma
   const tableDialog = useRef<HTMLDialogElement>(null)
   const readMode = useRef(new Compartment())
   const renderMode = useRef(new Compartment())
+  const keyMode = useRef(new Compartment())
   change.current = onChange
+  const showTable = () => tableDialog.current?.showModal()
+  const writingKeys = () => typographyKeys(keyOverrides, platform, showTable, editor => chooseMarkdownImages(editor, path, report))
 
   useEffect(() => {
     const raw = initial.current
@@ -201,9 +206,11 @@ export function MarkdownEditor({ text, name, path, modified, platform, remoteIma
       state: EditorState.create({
         doc: raw.slice(bom.length).replace(/\r\n|\r/g, '\n'),
         extensions: [
-          highlightSpecialChars(), history(), drawSelection(), keymap.of([...defaultKeymap, ...historyKeymap]), EditorView.lineWrapping, markdownWithMetadata, footnotes,
+          highlightSpecialChars(), history(), drawSelection(), keymap.of([...defaultKeymap.filter(binding =>
+            !['Mod-i', 'Mod-[', 'Mod-]'].includes(binding.key ?? '') && (platform === 'darwin' || binding.key !== 'Shift-Mod-k')), ...historyKeymap]),
+          EditorView.lineWrapping, markdownWithMetadata, footnotes, keyMode.current.of(writingKeys()),
           search({ top: true }), Prec.high(keymap.of([{ key: 'Enter', run: expandMetadata },
-            ...typographyKeys(() => tableDialog.current?.showModal()), ...markdownKeymap, ...searchKeymap])),
+            ...markdownKeymap, ...searchKeymap.filter(binding => binding.key !== 'Mod-f')])),
           EditorView.contentAttributes.of({ 'aria-label': 'Markdown 编辑器', spellcheck: 'false' }),
           markdownImageIntake(path, report),
           renderMode.current.of([live(path, remoteImages), renderedBlocks, markdownTable, markdownNotes]),
@@ -217,6 +224,10 @@ export function MarkdownEditor({ text, name, path, modified, platform, remoteIma
     view.current = editor
     return () => { editor.destroy(); view.current = null }
   }, [])
+
+  useEffect(() => {
+    view.current?.dispatch({ effects: keyMode.current.reconfigure(writingKeys()) })
+  }, [keyOverrides, platform])
 
   useEffect(() => {
     registerFlush(() => view.current?.dom.querySelector<HTMLInputElement>('.markdown-table-widget input:focus')?.blur())
@@ -384,7 +395,7 @@ export function MarkdownEditor({ text, name, path, modified, platform, remoteIma
         const pos = editor.posAtCoords({ x: event.clientX, y: event.clientY })
         const selection = editor.state.selection.main
         if (pos !== null && (pos < selection.from || pos > selection.to)) editor.dispatch({ selection: { anchor: pos } })
-        const items = contextItems(editor, platform, path, report, reading, searchEngine, () => tableDialog.current?.showModal())
+        const items = contextItems(editor, platform, path, report, reading, searchEngine, keyOverrides, showTable)
         openContextMenu(editor, event.clientX, event.clientY, items)
       }} />
     </div>

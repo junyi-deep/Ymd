@@ -1,6 +1,8 @@
 import { useState, type ReactNode } from 'react'
 import { ArrowLeft, HardDrive, Info, Keyboard, Palette, SlidersHorizontal } from 'lucide-react'
 import { searchEngines, type Entry, type Preferences, type SearchEngine, type VersionStatus } from '../shared/contracts'
+import { ShortcutSettings } from './ShortcutSettings'
+import { appShortcuts, shortcutLabel, shortcutValue } from '../shared/shortcuts'
 
 const pages = [
   { label: '通用', icon: SlidersHorizontal },
@@ -42,7 +44,10 @@ export function Settings({ preferences, platform, library, project, windowsAcryl
 }) {
   const [page, setPage] = useState(initialPage)
   const material = platform === 'darwin' || windowsAcrylic
-  const mod = platform === 'darwin' ? '⌘' : 'Ctrl'
+  const quickNew = (['new-file', 'new-drawing'] as const).flatMap(id => {
+    const key = shortcutValue(preferences.shortcuts, id, platform)
+    return key ? [appShortcuts[id].label + ' ' + shortcutLabel(key, platform)] : []
+  }).join(' · ')
   return <>
     <aside className="sidebar settings-nav"><div className="sidebar-scroll">
       <h2>设置</h2>
@@ -51,6 +56,8 @@ export function Settings({ preferences, platform, library, project, windowsAcryl
     </div><button className="tree-row sidebar-footer" onClick={onReturn}><ArrowLeft size={18} /><span>返回</span></button></aside>
     <div className="settings-main">
       <div className="settings-content">
+        {page === '快捷键' ? <ShortcutSettings platform={platform} overrides={preferences.shortcuts}
+          onChange={shortcuts => onChange({ shortcuts })} /> : <>
         <h1>{page}</h1>
         <div className="settings-group">
           {page === '外观' && <>
@@ -91,7 +98,7 @@ export function Settings({ preferences, platform, library, project, windowsAcryl
                 {Object.entries(searchEngines).map(([key, item]) => <option value={key} key={key}>{item.label}</option>)}
               </select>
             </Row>
-            <Row label="快捷新建" detail={`${mod} + N 新建 Markdown，${mod} + Shift + N 新建绘图。`} />
+            <Row label="快捷新建" detail={quickNew || undefined}><button className="tool-button" onClick={() => setPage('快捷键')}>设置快捷键</button></Row>
           </>}
           {page === '文档库' && <>
             <Row label="项目空间" detail={project?.path ?? '文档目录不可用，请选择位置。'}>
@@ -117,10 +124,7 @@ export function Settings({ preferences, platform, library, project, windowsAcryl
               <button className="tool-button" onClick={() => onOpenRelease('https://github.com/junyi-deep/Ymd')}>在 GitHub 查看</button>
             </div></Row>
           </>}
-          {page === '快捷键' && [
-            ['新建', 'N'], ['打开文件', 'O'], ['新建绘图', 'Shift + N'], ['保存', 'S'], ['查找和替换', 'F'], ['搜索文档', 'J'], ['设置', ','],
-          ].map(([label, key]) => <Row key={label} label={label}><kbd>{mod} + {key}</kbd></Row>)}
-        </div>
+        </div></>}
       </div>
     </div>
   </>

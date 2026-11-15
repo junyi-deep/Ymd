@@ -35,6 +35,7 @@ const desktop: Desktop = {
   openLibraryDirectory: location => ipcRenderer.invoke('ymd:openLibraryDirectory', location),
   checkForUpdates: () => ipcRenderer.invoke('ymd:checkForUpdates'),
   setPreferences: preferences => ipcRenderer.invoke('ymd:setPreferences', preferences),
+  setShortcutRecording: active => ipcRenderer.invoke('ymd:setShortcutRecording', active),
   finishClose: () => ipcRenderer.invoke('ymd:finishClose'),
   onCommand: callback => {
     const listener = (_event: unknown, command: Command) => callback(command)

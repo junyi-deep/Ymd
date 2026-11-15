@@ -27,6 +27,7 @@ import { MindMapRecorder } from './MindMapRecorder'
 import { MindMapArt } from './MindMapArt'
 import { MindMapLink, type LinkSheet } from './MindMapLink'
 import { readLocalMapUrl } from '../../shared/localMapLinks'
+import { inputChord, ShortcutSequence, shortcutsFor, type ShortcutOverrides } from '../../shared/shortcuts'
 import { addTopicImage, applyArt, imagePlacements, installTopicImageGestures, isTopicImage, placeTopicImage, removeTopicImage, resetTopicImage, topicAcceptsArt } from './mapTopicImages'
 import { audioButton, audioTitle, createAudioPlayer, forgetAudio, loadAudio, readAudioNote, storeAudio, type AudioNote } from './mapAudio'
 import { MarkdownMenu, type MenuItem } from './MarkdownMenu'
@@ -79,6 +80,7 @@ function hasAudio(tree: MapData, id: string): boolean {
 
 interface MapEditorProps {
   text: string; name: string; path: string; dark: boolean; onChange: (text: string) => void
+  platform: string; keyOverrides: ShortcutOverrides
   registerFlush: (flush?: () => void) => void
   importWorkbook: () => void
   importing: boolean
@@ -297,7 +299,7 @@ export default function MindMapEditor(props: MapEditorProps) {
   </div>
 }
 
-function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, updateSheet, multipleSheets, saveXmind, createSheet,
+function MapCanvas({ text, name, path, dark, platform, keyOverrides, onChange, registerFlush, sheet, updateSheet, multipleSheets, saveXmind, createSheet,
   linkWorkbook, jump, followTopicLink, readMapDocument, linkDocuments }: MapEditorProps & {
   sheet?: MapSheet
   updateSheet: (id: string, settings: MapSettings, tree: MapData) => void
@@ -701,17 +703,25 @@ function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, upd
     const current = selectedCallout && readCallout(selectedCallout)
     const source = current?.owner ?? (selected.length === 1 ? selected[0] : undefined)
     if (gantt || !source || source.isGeneralization || readAudioNote(source.getData('ymdAudio')) || linkEditor || field || taskTopic || audioParent || calloutText) return
+    const bindings = shortcutsFor('map', keyOverrides, platform)
+    const sequence = new ShortcutSequence()
     const editLink = (event: KeyboardEvent) => {
-      if (event.defaultPrevented || event.isComposing || event.altKey || !(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== 'k' ||
+      if (event.defaultPrevented || event.isComposing || event.keyCode === 229 ||
           !(event.target instanceof Element) || event.target.closest('input, textarea, select, [contenteditable], dialog, .document-menu') ||
           (event.target !== document.body && !host.current?.contains(event.target))) return
+      if (event.key === 'Escape') { sequence.reset(); return }
+      const chord = inputChord({ key: event.key, code: event.code, control: event.ctrlKey, alt: event.altKey, meta: event.metaKey, shift: event.shiftKey }, platform)
+      const match = chord && sequence.take(chord, bindings, event.repeat)
+      if (!match) return
       event.preventDefault()
+      event.stopPropagation()
+      if (match === 'pending') return
       const href = current ? current.note.data.hyperlink : source.getData('hyperlink')
       setLinkEditor({ node: source, callout: current ? selectedCallout : undefined, kind: mapLinkType(href) })
     }
-    window.addEventListener('keydown', editLink)
-    return () => window.removeEventListener('keydown', editLink)
-  }, [gantt, selected, selectedCallout, linkEditor, field, taskTopic, audioParent, calloutText])
+    window.addEventListener('keydown', editLink, true)
+    return () => window.removeEventListener('keydown', editLink, true)
+  }, [gantt, selected, selectedCallout, linkEditor, field, taskTopic, audioParent, calloutText, keyOverrides, platform])
 
   useEffect(() => {
     const map = engine.current

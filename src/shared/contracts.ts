@@ -1,4 +1,5 @@
 import type { MapLocationKind } from './localMapLinks'
+import type { AppShortcut, ShortcutOverrides } from './shortcuts'
 
 export type FileKind = 'markdown' | 'drawing'
 export type Scope = 'library' | 'project' | 'local'
@@ -61,13 +62,14 @@ export interface Preferences {
   remoteImages: boolean
   autoCheckUpdates: boolean
   searchEngine: SearchEngine
+  shortcuts: ShortcutOverrides
 }
 
 export const defaultPreferences: Preferences = {
   theme: 'system', size: 'normal', solidBackground: false, animations: true, documentTheme: 'classic',
-  autoSave: false, remoteImages: false, autoCheckUpdates: false, searchEngine: 'google',
+  autoSave: false, remoteImages: false, autoCheckUpdates: false, searchEngine: 'google', shortcuts: {},
 }
-export type Command = 'open-file' | 'import-xmind' | 'new-file' | 'new-drawing' | 'search' | 'save' | 'preferences' | 'close' | 'find'
+export type Command = AppShortcut | 'close'
 
 export const markdownImageExtensions = {
   png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif',
@@ -119,6 +121,7 @@ export interface Desktop {
   openLibraryDirectory(location: 'library' | 'project'): Promise<void>
   checkForUpdates(): Promise<VersionStatus>
   setPreferences(preferences: Preferences): Promise<Preferences>
+  setShortcutRecording(active: boolean): Promise<void>
   finishClose(): Promise<void>
   onCommand(callback: (command: Command) => void): () => void
 }

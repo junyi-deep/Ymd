@@ -10,6 +10,8 @@ import { LocalMapLocations } from './localMapLocations'
 import { searchRoots } from './search'
 import { printView } from './printing'
 import { readReleaseStatus } from './releases'
+import { appShortcuts, inputChord, isShortcutAccelerator, readShortcutOverrides, shortcutAccelerator, shortcutMenuLabel, ShortcutSequence, shortcutsFor, shortcutValue,
+  type AppShortcut } from '../shared/shortcuts'
 
 const files = new Files()
 const dev = !app.isPackaged && process.argv.includes('--dev')
@@ -22,6 +24,9 @@ let closing = false
 let searchController: AbortController | undefined
 const windowsAcrylic = process.platform === 'win32' && Number(process.getSystemVersion().split('.')[2]) >= 22621
 let preferenceWrite: Promise<unknown> = Promise.resolve()
+let recordingShortcut = false
+const appKeySequence = new ShortcutSequence()
+let appBindings = shortcutsFor('app', preferences.shortcuts, process.platform)
 
 function normalizePreferences(value: Partial<Preferences> | null): Preferences {
   return {
@@ -35,6 +40,7 @@ function normalizePreferences(value: Partial<Preferences> | null): Preferences {
     remoteImages: value?.remoteImages === true,
     autoCheckUpdates: value?.autoCheckUpdates === true,
     searchEngine: value?.searchEngine && Object.hasOwn(searchEngines, value.searchEngine) ? value.searchEngine : 'google',
+    shortcuts: readShortcutOverrides(value?.shortcuts, process.platform),
   }
 }
 
@@ -57,6 +63,29 @@ function command(name: Command) {
   window?.webContents.send('ymd:command', name)
 }
 
+function setShortcutRecording(active: boolean) {
+  recordingShortcut = active
+  appKeySequence.reset()
+  window?.webContents.setIgnoreMenuShortcuts(active)
+}
+
+function installMenu() {
+  appBindings = shortcutsFor('app', preferences.shortcuts, process.platform)
+  appKeySequence.reset()
+  const entry = (id: AppShortcut): MenuItemConstructorOptions => {
+    const value = shortcutValue(preferences.shortcuts, id, process.platform)
+    return { label: shortcutMenuLabel(appShortcuts[id].label, value, process.platform), accelerator: shortcutAccelerator(value), click: () => command(id) }
+  }
+  Menu.setApplicationMenu(Menu.buildFromTemplate([
+    ...(process.platform === 'darwin' ? [{ role: 'appMenu' } as const] : []),
+    { label: '文件', submenu: [entry('new-file'), entry('open-file'), entry('import-xmind'), entry('new-drawing'), entry('save'),
+      { type: 'separator' }, entry('preferences'), { role: 'close' }] },
+    { label: '编辑', submenu: [{ role: 'undo' }, { role: 'redo' }, { type: 'separator' }, { role: 'cut' }, { role: 'copy' },
+      { role: 'paste' }, { role: 'selectAll' }, entry('find'), entry('search')] },
+    { role: 'windowMenu' },
+  ]))
+}
+
 function createWindow() {
   closing = false
   nativeTheme.themeSource = preferences.theme
@@ -77,6 +106,20 @@ function createWindow() {
     webPreferences: { preload: path.join(__dirname, '../preload/index.js'), contextIsolation: true, sandbox: true, nodeIntegration: false },
   })
   applyBackground()
+  window.on('blur', () => appKeySequence.reset())
+  window.webContents.on('did-start-navigation', () => setShortcutRecording(false))
+  window.webContents.on('before-input-event', (event, input) => {
+    if (recordingShortcut || input.type !== 'keyDown' || input.isComposing) return
+    const chord = inputChord(input, process.platform)
+    if (!chord) {
+      if (input.key === 'Escape') appKeySequence.reset()
+      return
+    }
+    const matched = appKeySequence.take(chord, appBindings, input.isAutoRepeat)
+    if (!matched) return
+    event.preventDefault()
+    if (matched !== 'pending') command(matched as AppShortcut)
+  })
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
   window.webContents.on('will-navigate', (event, url) => { if (url !== rendererUrl) event.preventDefault() })
   window.on('close', event => {
@@ -258,8 +301,7 @@ void app.whenReady().then(async () => {
       if (!item || typeof item.label !== 'string') return []
       const submenu = depth < 2 && Array.isArray(item.children) ? template(item.children, depth + 1) : undefined
       const label = item.label.slice(0, 100)
-      const accelerator = typeof item.shortcut === 'string' && /^(?:(?:CommandOrControl|Control|Alt|Shift)\+){1,3}[A-Z0-9=\[\]\\`-]$/.test(item.shortcut)
-        ? item.shortcut : undefined
+      const accelerator = isShortcutAccelerator(item.shortcut) ? item.shortcut : undefined
       return [
         ...(item.separator ? [{ type: 'separator' } as const] : []),
         { label, submenu, enabled: item.disabled !== true, accelerator, registerAccelerator: false,
@@ -342,27 +384,19 @@ void app.whenReady().then(async () => {
   })
   handle('reveal', async (file: string) => shell.showItemInFolder(await files.authorizedFile(file)))
   handle('setPreferences', async (value: Preferences) => {
-    const updated = await storePreferences(current => normalizePreferences({ ...value, projectDirectory: current.projectDirectory }))
+    let changedShortcuts = false
+    const updated = await storePreferences(current => {
+      const next = normalizePreferences({ ...value, projectDirectory: current.projectDirectory })
+      changedShortcuts = JSON.stringify(current.shortcuts) !== JSON.stringify(next.shortcuts)
+      return next
+    })
+    if (changedShortcuts) installMenu()
     applyBackground()
     return updated
   })
+  handle('setShortcutRecording', (active: boolean) => setShortcutRecording(active === true))
   handle('finishClose', () => { closing = true; window?.close() })
-  const items: MenuItemConstructorOptions[] = [
-    ...(process.platform === 'darwin' ? [{ role: 'appMenu' } as const] : []),
-    { label: '文件', submenu: [
-      { label: '新建', accelerator: 'CmdOrCtrl+N', click: () => command('new-file') },
-      { label: '打开文件…', accelerator: 'CmdOrCtrl+O', click: () => command('open-file') },
-      { label: '导入 Xmind…', click: () => command('import-xmind') },
-      { label: '新建绘图', accelerator: 'CmdOrCtrl+Shift+N', click: () => command('new-drawing') },
-      { label: '保存', accelerator: 'CmdOrCtrl+S', click: () => command('save') },
-      { type: 'separator' },
-      { label: '设置', accelerator: 'CmdOrCtrl+,', click: () => command('preferences') },
-      { role: 'close' },
-    ] },
-    { label: '编辑', submenu: [{ role: 'undo' }, { role: 'redo' }, { type: 'separator' }, { role: 'cut' }, { role: 'copy' }, { role: 'paste' }, { role: 'selectAll' }, { label: '查找和替换', accelerator: 'CmdOrCtrl+F', click: () => command('find') }, { label: '搜索文档', accelerator: 'CmdOrCtrl+J', click: () => command('search') }] },
-    { role: 'windowMenu' },
-  ]
-  Menu.setApplicationMenu(Menu.buildFromTemplate(items))
+  installMenu()
   createWindow()
   nativeTheme.on('updated', applyBackground)
   app.on('activate', () => { if (!window) createWindow() })

@@ -1,13 +1,15 @@
-import { EditorSelection, Transaction, type ChangeSpec } from '@codemirror/state'
-import { EditorView, type Command, type KeyBinding } from '@codemirror/view'
+import { EditorSelection, Prec, Transaction, type ChangeSpec } from '@codemirror/state'
+import { EditorView, type Command } from '@codemirror/view'
 import { indentLess, indentMore } from '@codemirror/commands'
 import { searchEngines, type SearchEngine } from '../../shared/contracts'
+import { inputChord, markdownShortcuts, shortcutAccelerator, shortcutMenuLabel, ShortcutSequence, shortcutsFor, shortcutValue,
+  type MarkdownShortcut, type ShortcutOverrides } from '../../shared/shortcuts'
 import { markdownHtml, markdownPlainText } from './markdownHtml'
 import { chooseMarkdownImages } from './markdownImages'
 import { insertFootnote, insertMetadata } from './markdownNotes'
 import type { MenuItem } from './MarkdownMenu'
 
-type EditCommand = { label: string; command: Command; key?: string; mac?: string }
+type EditCommand = { id: MarkdownShortcut; command: Command }
 
 const paragraphPrefix = /^(\s*)(?:(?:#{1,6}|>|[-+*]|\d+[.)])(?:[ \t]+|$))(?:\[[ xX]\][ \t]+)?/
 
@@ -73,16 +75,13 @@ function insertBlock(snippet: string, highlight?: string): Command {
   }
 }
 
-function insertAsset(kind: 'link' | 'image'): Command {
-  return view => {
-    const { from, to } = view.state.selection.main
-    const current = view.state.sliceDoc(from, to)
-    const label = current || (kind === 'image' ? '图片说明' : '链接文字')
-    const url = kind === 'image' ? '图片路径' : 'https://'
-    const prefix = (kind === 'image' ? '!' : '') + '[' + label + ']('
-    view.dispatch({ changes: { from, to, insert: prefix + url + ')' }, selection: { anchor: from + prefix.length, head: from + prefix.length + url.length }, userEvent: 'input' })
-    return true
-  }
+const insertHyperlink: Command = view => {
+  const { from, to } = view.state.selection.main
+  const label = view.state.sliceDoc(from, to) || '链接文字'
+  const url = 'https://'
+  const prefix = '[' + label + ']('
+  view.dispatch({ changes: { from, to, insert: prefix + url + ')' }, selection: { anchor: from + prefix.length, head: from + prefix.length + url.length }, userEvent: 'input' })
+  return true
 }
 
 function insertParagraph(before: boolean): Command {
@@ -106,59 +105,75 @@ const clearStyle: Command = view => {
   return true
 }
 
-const headings = ['一级标题', '二级标题', '三级标题', '四级标题', '五级标题', '六级标题']
-  .map((label, index) => ({ label, command: paragraph('#'.repeat(index + 1) + ' '), key: 'Mod-' + (index + 1) }))
 const formats: EditCommand[] = [
-  { label: '加粗', command: format('**'), key: 'Mod-b' },
-  { label: '斜体', command: format('*'), key: 'Mod-i' },
-  { label: '下划线', command: format('<u>', '</u>'), key: 'Mod-u' },
-  { label: '代码', command: format('`'), key: 'Mod-Shift-`' },
-  { label: '删除线', command: format('~~'), key: 'Alt-Shift-5', mac: 'Ctrl-Shift-`' },
-  { label: '高亮', command: format('==') },
-  { label: '超链接', command: insertAsset('link'), key: 'Mod-k' },
-  { label: '清除样式', command: clearStyle, key: 'Mod-\\' },
+  { id: 'bold', command: format('**') },
+  { id: 'italic', command: format('*') },
+  { id: 'underline', command: format('<u>', '</u>') },
+  { id: 'code', command: format('`') },
+  { id: 'strike', command: format('~~') },
+  { id: 'highlight', command: format('==') },
+  { id: 'hyperlink', command: insertHyperlink },
+  { id: 'clear-style', command: clearStyle },
 ]
 const paragraphs: EditCommand[] = [
-  ...headings,
-  { label: '增加标题级别', command: headingLevel(1), key: 'Mod-=' },
-  { label: '减少标题级别', command: headingLevel(-1), key: 'Mod--' },
-  { label: '引用', command: paragraph('> '), key: 'Mod-Shift-q', mac: 'Alt-Mod-q' },
-  { label: '有序列表', command: paragraph('1. '), key: 'Mod-Shift-[', mac: 'Alt-Mod-o' },
-  { label: '无序列表', command: paragraph('- '), key: 'Mod-Shift-]', mac: 'Alt-Mod-u' },
-  { label: '任务列表', command: paragraph('- [ ] ') },
-  { label: '缩进', command: indentMore, key: 'Mod-[' },
-  { label: '减少缩进', command: indentLess, key: 'Mod-]' },
-  { label: '段落', command: paragraph(''), key: 'Mod-0' },
+  ...(['heading-1', 'heading-2', 'heading-3', 'heading-4', 'heading-5', 'heading-6'] as const)
+    .map((id, index) => ({ id, command: paragraph('#'.repeat(index + 1) + ' ') })),
+  { id: 'heading-more', command: headingLevel(1) },
+  { id: 'heading-less', command: headingLevel(-1) },
+  { id: 'quote', command: paragraph('> ') },
+  { id: 'ordered-list', command: paragraph('1. ') },
+  { id: 'unordered-list', command: paragraph('- ') },
+  { id: 'task-list', command: paragraph('- [ ] ') },
+  { id: 'indent', command: indentMore },
+  { id: 'outdent', command: indentLess },
+  { id: 'paragraph', command: paragraph('') },
 ]
 export const insertMermaid = insertBlock('```mermaid\nflowchart LR\n  A[开始] --> B[结束]\n```', 'flowchart LR\n  A[开始] --> B[结束]')
-const tableKey = { key: 'Mod-t', mac: 'Alt-Mod-t' }
 const inserts: EditCommand[] = [
-  { label: '图像', command: insertAsset('image') },
-  { label: '代码块', command: insertBlock('```text\n代码\n```', '代码'), key: 'Mod-Shift-k', mac: 'Alt-Mod-c' },
-  { label: '公式块', command: insertBlock('$$\n公式\n$$', '公式'), key: 'Mod-Shift-m', mac: 'Alt-Mod-b' },
-  { label: '水平分割线', command: insertBlock('---') },
-  { label: 'Mermaid 图', command: insertMermaid },
-  { label: '脚注', command: insertFootnote },
-  { label: 'YAML 元数据', command: insertMetadata },
-  { label: '在上方插入段落', command: insertParagraph(true) },
-  { label: '在下方插入段落', command: insertParagraph(false) },
+  { id: 'code-block', command: insertBlock('```text\n代码\n```', '代码') },
+  { id: 'formula', command: insertBlock('$$\n公式\n$$', '公式') },
+  { id: 'rule', command: insertBlock('---') },
+  { id: 'mermaid', command: insertMermaid },
+  { id: 'footnote', command: insertFootnote },
+  { id: 'metadata', command: insertMetadata },
+  { id: 'paragraph-before', command: insertParagraph(true) },
+  { id: 'paragraph-after', command: insertParagraph(false) },
 ]
+const editCommands = new Map([...paragraphs, ...formats, ...inserts].map(item => [item.id, item.command]))
 
-export function typographyKeys(chooseTable: () => void): KeyBinding[] {
-  return [...paragraphs, ...formats, ...inserts, { label: '表格', ...tableKey, command: () => { chooseTable(); return true } }]
-    .flatMap(item => item.key ? [{ key: item.key, mac: item.mac, run: view => !view.state.readOnly && item.command(view) }] : [])
+export function typographyKeys(overrides: ShortcutOverrides, platform: string, chooseTable: () => void,
+  chooseImage: (view: EditorView) => void) {
+  const bindings = shortcutsFor('markdown', overrides, platform)
+  const sequence = new ShortcutSequence()
+  return Prec.highest(EditorView.domEventHandlers({
+    blur() { sequence.reset() },
+    keydown(event, view) {
+      if (view.state.readOnly || event.isComposing || event.keyCode === 229 ||
+          event.target instanceof Element && event.target.closest('input, textarea, select, button, dialog')) return false
+      if (event.key === 'Escape') { sequence.reset(); return false }
+      const chord = inputChord({ key: event.key, code: event.code, alt: event.altKey, control: event.ctrlKey, meta: event.metaKey,
+        shift: event.shiftKey }, platform)
+      const id = chord && sequence.take(chord, bindings, event.repeat)
+      if (!id) return false
+      if (id === 'table') chooseTable()
+      else if (id === 'image') chooseImage(view)
+      else if (id !== 'pending') return editCommands.get(id as MarkdownShortcut)?.(view) ?? false
+      return true
+    },
+  }))
 }
 
-export function contextItems(view: EditorView, platform: string, path: string, report: (error: unknown) => void, readOnly: boolean, searchEngine: SearchEngine, chooseTable: () => void): MenuItem[] {
+export function contextItems(view: EditorView, platform: string, path: string, report: (error: unknown) => void, readOnly: boolean,
+  searchEngine: SearchEngine, shortcuts: ShortcutOverrides, chooseTable: () => void): MenuItem[] {
   const { state } = view
   const selection = state.selection.main
   const source = state.sliceDoc(selection.from, selection.to)
   const mod = 'CommandOrControl+'
-  const displayKey = (item: Pick<EditCommand, 'key' | 'mac'>) => (platform === 'darwin' ? item.mac ?? item.key : item.key)
-    ?.replace('Mod-', mod).replace('Shift-', 'Shift+').replace('Alt-', 'Alt+').replace('Ctrl-', 'Control+')
-    .replace(/[a-z]$/, key => key.toUpperCase())
-  const toMenu = (item: EditCommand): MenuItem =>
-    ({ label: item.label, shortcut: displayKey(item), run: () => { item.command(view); view.focus() } })
+  const commandItem = (id: MarkdownShortcut, run: () => void): MenuItem => {
+    const key = shortcutValue(shortcuts, id, platform)
+    return { label: shortcutMenuLabel(markdownShortcuts[id].label, key, platform), shortcut: shortcutAccelerator(key), run }
+  }
+  const toMenu = (item: EditCommand) => commandItem(item.id, () => { item.command(view); view.focus() })
   const pasteText = () => navigator.clipboard.readText().then(insert => {
     const { from, to } = view.state.selection.main
     view.dispatch({ changes: { from, to, insert }, selection: { anchor: from + insert.length }, annotations: Transaction.userEvent.of('input.paste') })
@@ -191,8 +206,9 @@ export function contextItems(view: EditorView, platform: string, path: string, r
     { label: '段落', separator: true, disabled: readOnly, children: paragraphs.map(toMenu) },
     { label: '格式', disabled: readOnly, children: formats.map(toMenu) },
     { label: '插入', disabled: readOnly, children: [
-      { label: '表格', shortcut: displayKey(tableKey), run: chooseTable },
-      ...inserts.map(item => item.label === '图像' ? { label: item.label, run: () => chooseMarkdownImages(view, path, report) } : toMenu(item)),
+      commandItem('table', chooseTable),
+      commandItem('image', () => chooseMarkdownImages(view, path, report)),
+      ...inserts.map(toMenu),
     ] },
     { label: '在网页中搜索选中文字', separator: true, disabled: !source.trim(), run: () => {
       const engine = searchEngines[searchEngine]
