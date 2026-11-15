@@ -372,6 +372,8 @@ dialog button.primary { background: var(--accent); color: var(--accent-ink); }
 .outline-markdown blockquote { border-left: 1px solid var(--selected); padding-left: 10px; color: var(--muted); }
 .outline-markdown code { border-radius: 4px; padding: 1px 4px; background: var(--soft); font-size: .88em; }
 .outline-markdown pre { background: var(--soft); padding: 8px; border-radius: 5px; overflow: auto; }
+.outline-markdown .mermaid-preview { justify-items: start; min-height: 0; margin-block: 8px; padding: 0; }
+.outline-markdown .mermaid-preview pre { width: 100%; }
 .outline-markdown table { border-collapse: collapse; }
 .outline-markdown :is(th, td) { border: 1px solid var(--line); padding: 3px 7px; }
 .outline-markdown :is(ul, ol) { padding-left: 20px; }

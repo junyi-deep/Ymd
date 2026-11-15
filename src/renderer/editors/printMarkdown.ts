@@ -3,7 +3,8 @@ import { Marked } from 'marked'
 import type { Tokens } from 'marked'
 import markedFootnote from 'marked-footnote'
 import { markdownBody } from './markdownExtras'
-import { applyImageSizing, isEmbeddedMarkdownImage, isRemoteMarkdownImage, parseImageTag, readImageSizing } from './markdownImageSyntax'
+import { applyImageSizing, isEmbeddedMarkdownImage, isRemoteMarkdownImage, markdownImageLine, readImageSizing } from './markdownImageSyntax'
+import { displayMath, renderMermaid } from './markdownPreviewMedia'
 
 export async function printMarkdown(file: string, source: string) {
   const parser = new Marked({ gfm: true, breaks: false })
@@ -13,12 +14,8 @@ export async function printMarkdown(file: string, source: string) {
       name: 'imageLine',
       level: 'block',
       tokenizer(source) {
-        if (!/^ {0,3}<img[\t />]/i.test(source)) return
-        const ending = source.indexOf('\n')
-        const raw = ending < 0 ? source : source.slice(0, ending + 1)
-        const text = raw.trim()
-        const image = parseImageTag(text)
-        if (image?.length === text.length) return { type: 'imageLine', raw, text }
+        const line = markdownImageLine(source)
+        if (line) return { type: 'imageLine', ...line }
       },
       renderer(token) { return token.text + '\n' },
     }],
@@ -27,14 +24,13 @@ export async function printMarkdown(file: string, source: string) {
         const code = token as Tokens.Code
         if (code.lang?.trim().toLowerCase() !== 'mermaid') return
         try {
-          const { renderAsync } = await import('pele/lazy')
-          const { svg } = await renderAsync(code.text, { responsive: true, links: false, images: false, idPrefix: 'ymd-print-' + crypto.randomUUID() })
+          const svg = await renderMermaid(code.text)
           Object.assign(token, { type: 'html', text: '<figure>' + svg + '</figure>' })
         } catch {}
       }
       if (token.type === 'paragraph') {
         const paragraph = token as Tokens.Paragraph
-        const math = /^\$\$[ \t]*\n([\s\S]+)\n\$\$[ \t]*$/.exec(paragraph.text)
+        const math = displayMath.exec(paragraph.text)
         if (!math) return
         try {
           const { default: katex } = await import('katex')

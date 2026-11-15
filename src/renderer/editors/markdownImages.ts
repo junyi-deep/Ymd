@@ -5,14 +5,12 @@ import { EditorView, ViewPlugin, WidgetType, type ViewUpdate } from '@codemirror
 import type { SyntaxNode } from '@lezer/common'
 import { markdownImageExtension, markdownImageLimits, type MarkdownImageAttachment } from '../../shared/contracts'
 import type { MenuItem } from './MarkdownMenu'
-import { applyImageSizing, decodeImageAttribute, imageHasSizing, isEmbeddedMarkdownImage, isRemoteMarkdownImage,
-  parseImageTag, readImageSizing, writeSizedImage, type ImageSizing } from './markdownImageSyntax'
+import { decodeImageAttribute, imageHasSizing, readHtmlImage, writeSizedImage, type ImageSizing } from './markdownImageSyntax'
+import { createMarkdownImage, type PreviewImage } from './markdownPreviewMedia'
 
 type Target = { from: number; to: number }
 type Report = (error: unknown) => void
-type ImageReference = Target & {
-  urlFrom: number; urlTo: number; markdown: string; source: string; label: string; title?: string; sizing: ImageSizing
-}
+type ImageReference = Target & PreviewImage & { urlFrom: number; urlTo: number; markdown: string }
 export interface ImageResizeRequest {
   width: string
   height: string
@@ -35,15 +33,10 @@ export function readImageReference(state: EditorState, node: SyntaxNode): ImageR
       label: markup(state.sliceDoc(from + 2, labelEnd.from)),
       title: title ? markup(state.sliceDoc(title.from + 1, title.to - 1)) : undefined }
   }
-  const tag = parseImageTag(markdown)
-  const src = tag?.attributes.find(item => item.name === 'src')
-  if (src?.value === undefined) return
-  const attribute = (name: string) => {
-    const raw = tag?.attributes.find(item => item.name === name)?.value
-    return raw === undefined ? undefined : decodeImageAttribute(raw)
-  }
-  return { from, to, markdown, urlFrom: from + src.valueFrom, urlTo: from + src.valueFrom + src.value.length,
-    source: decodeImageAttribute(src.value), label: attribute('alt') ?? '', title: attribute('title'), sizing: readImageSizing(attribute) }
+  const image = readHtmlImage(markdown)
+  if (!image) return
+  const { src, ...reference } = image
+  return { from, to, markdown, ...reference, urlFrom: from + src.from, urlTo: from + src.to }
 }
 
 export class MarkdownImage extends WidgetType {
@@ -55,41 +48,7 @@ export class MarkdownImage extends WidgetType {
   }
 
   toDOM(view: EditorView) {
-    const wrapper = document.createElement('span')
-    const { label, source, title, sizing } = this.reference
-    const fallback = label || '图像'
-    wrapper.className = 'md-image'
-    if (this.standalone) wrapper.dataset.standalone = 'true'
-    if (imageHasSizing(sizing)) wrapper.dataset.sized = 'true'
-    const display = (url: string) => {
-      const image = document.createElement('img')
-      image.alt = label
-      if (title) image.title = title
-      image.referrerPolicy = 'no-referrer'
-      applyImageSizing(image, sizing)
-      image.addEventListener('load', () => view.requestMeasure(), { once: true })
-      image.addEventListener('error', () => { wrapper.textContent = fallback + ' · 无法读取图像' }, { once: true })
-      wrapper.replaceChildren(image)
-      image.src = url
-    }
-    if (isRemoteMarkdownImage(source)) {
-      if (this.loadRemote) display(source)
-      else {
-        const button = document.createElement('button')
-        button.type = 'button'
-        button.textContent = fallback + ' · 加载网络图像'
-        button.addEventListener('click', () => display(source))
-        wrapper.append(button)
-      }
-    } else if (isEmbeddedMarkdownImage(source)) display(source)
-    else {
-      wrapper.textContent = fallback
-      void window.desktop.readMarkdownImage(this.file, source).then(url => {
-        if (url) display(url)
-        else wrapper.textContent = fallback + ' · 找不到图像'
-      }, () => { wrapper.textContent = fallback + ' · 无法读取图像' })
-    }
-    return wrapper
+    return createMarkdownImage(this.file, this.reference, this.loadRemote, this.standalone, () => view.requestMeasure())
   }
 }
 

@@ -74,6 +74,14 @@ export function decodeImageAttribute(value: string) {
   return text.value
 }
 
+export function markdownImageLine(source: string) {
+  if (!/^ {0,3}<img[\t />]/i.test(source)) return
+  const end = source.indexOf('\n')
+  const raw = end < 0 ? source : source.slice(0, end + 1)
+  const text = raw.trim()
+  if (parseImageTag(text)?.length === text.length) return { raw, text }
+}
+
 export function imageDimension(value: string) {
   const match = /^(\d+(?:\.\d+)?|\.\d+)(px|%)?$/i.exec(value.trim())
   const amount = match ? Number(match[1]) : 0
@@ -97,6 +105,19 @@ export function readImageSizing(get: (name: string) => string | undefined): Imag
   const style = imageStyle(get('style') ?? '')
   return { width: imageDimension(style.width || get('width') || ''), height: imageDimension(style.height || get('height') || ''),
     zoom: imageZoom(style.getPropertyValue('zoom')) }
+}
+
+export function readHtmlImage(source: string) {
+  const tag = parseImageTag(source)
+  if (tag?.length !== source.length) return
+  const src = tag.attributes.find(item => item.name === 'src' && item.value !== undefined)
+  if (src?.value === undefined) return
+  const attribute = (name: string) => {
+    const raw = tag.attributes.find(item => item.name === name)?.value
+    return raw === undefined ? undefined : decodeImageAttribute(raw)
+  }
+  return { source: decodeImageAttribute(src.value), label: attribute('alt') ?? '', title: attribute('title'),
+    sizing: readImageSizing(attribute), src: { from: src.valueFrom, to: src.valueFrom + src.value.length } }
 }
 
 export function imageHasSizing({ width, height, zoom }: ImageSizing) {

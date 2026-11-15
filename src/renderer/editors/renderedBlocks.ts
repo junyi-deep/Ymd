@@ -1,7 +1,7 @@
 import { EditorState, StateField, type Range } from '@codemirror/state'
 import { syntaxTree } from '@codemirror/language'
 import { Decoration, EditorView, WidgetType, type DecorationSet } from '@codemirror/view'
-import DOMPurify from 'dompurify'
+import { displayMath, renderBlockPreview } from './markdownPreviewMedia'
 
 class RenderedBlock extends WidgetType {
   constructor(readonly code: string, readonly kind: 'mermaid' | 'math', readonly readOnly: boolean) { super() }
@@ -30,17 +30,7 @@ class RenderedBlock extends WidgetType {
       view.focus()
     })
 
-    const render = diagram ? import('pele/lazy').then(({ renderAsync }) => renderAsync(this.code, {
-      responsive: true, links: false, images: false, idPrefix: 'ymd-' + crypto.randomUUID().replaceAll('-', ''),
-    })).then(({ svg }) => {
-      content.innerHTML = DOMPurify.sanitize(svg, {
-        USE_PROFILES: { svg: true, svgFilters: true },
-        FORBID_TAGS: ['style', 'foreignObject', 'a', 'image'],
-      })
-    }) : Promise.all([import('katex'), import('katex/dist/katex.min.css')]).then(([katex]) => {
-      katex.default.render(this.code, content, { displayMode: true, trust: false, maxExpand: 1000 })
-    })
-    void render.catch(error => {
+    void renderBlockPreview(content, this.code, this.kind).catch(error => {
       content.classList.add('mermaid-error')
       content.textContent = (diagram ? 'Mermaid 无法渲染。' : '公式无法渲染。') + (error instanceof Error ? error.message : '')
     }).finally(() => { if (figure.isConnected) view.requestMeasure() })
@@ -53,7 +43,7 @@ function previews(state: EditorState): DecorationSet {
   syntaxTree(state).iterate({ enter(node) {
     if (node.name === 'Paragraph') {
       const raw = state.sliceDoc(node.from, node.to)
-      const math = /^\$\$[ \t]*\n([\s\S]+)\n\$\$[ \t]*$/.exec(raw)
+      const math = displayMath.exec(raw)
       if (!math || state.doc.lineAt(node.from).from !== node.from ||
         state.selection.ranges.some(range => !state.readOnly && range.from <= node.to && range.to >= node.from)) return
       ranges.push(Decoration.replace({ block: true, widget: new RenderedBlock(math[1], 'math', state.readOnly) }).range(node.from, node.to))
@@ -65,11 +55,10 @@ function previews(state: EditorState): DecorationSet {
     if (!info || end?.name !== 'CodeMark' || end.from <= info.to ||
       state.sliceDoc(info.from, info.to).trim().toLowerCase() !== 'mermaid') return false
     if (state.selection.ranges.some(range => !state.readOnly && range.from <= node.to && range.to >= node.from)) return false
-    const start = state.doc.lineAt(node.from)
     const closing = state.doc.lineAt(end.from)
-    if (start.from !== node.from || state.sliceDoc(end.to, closing.to).trim()) return false
-    const code = state.sliceDoc(start.to + 1, closing.from).trim()
-    if (code) ranges.push(Decoration.replace({ block: true, widget: new RenderedBlock(code, 'mermaid', state.readOnly) }).range(start.from, closing.to))
+    if (state.sliceDoc(end.to, closing.to).trim()) return false
+    const code = node.node.getChildren('CodeText').map(part => state.sliceDoc(part.from, part.to)).join('').trim()
+    if (code) ranges.push(Decoration.replace({ block: true, widget: new RenderedBlock(code, 'mermaid', state.readOnly) }).range(node.from, closing.to))
     return false
   } })
   return Decoration.set(ranges)

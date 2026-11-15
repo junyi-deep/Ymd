@@ -492,7 +492,7 @@ export function App() {
                   })} />
                 : active.mode === 'outline'
                   ? <OutlineEditor key={active.path + ':' + active.reload} text={active.text} name={active.name} path={active.path}
-                    platform={platform} sessions={outlineSessions.current} onChange={edit} />
+                    platform={platform} remoteImages={preferences.remoteImages} sessions={outlineSessions.current} onChange={edit} />
                   : <MindMapEditor key={active.path + ':' + active.reload} text={active.text} name={active.name} path={active.path} dark={dark} onChange={edit}
                     registerFlush={registerFlush} importWorkbook={importWorkbook} importing={importing} />}
           </Suspense>}

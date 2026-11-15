@@ -1,7 +1,8 @@
 import { useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type KeyboardEvent, type MouseEvent } from 'react'
 import { ChevronRight, ListTree, Plus, Redo2, Undo2 } from 'lucide-react'
+import type { Links } from 'marked'
 import { MarkdownMenu } from './MarkdownMenu'
-import { markdownHtml } from './markdownHtml'
+import { OutlineMarkdown, outlineReferences } from './OutlineMarkdown'
 import { locateBlock, newBlock, writeList, type Block } from './listProjection'
 import { blockPath, editBlockText, flattenBlocks, moveBranches, openOutline, readBranches, removeBranches, selectedBranches, writeBranches,
   type OutlineCaret, type OutlineDrop, type OutlineFrame, type OutlineSession } from './outlineEditing'
@@ -16,13 +17,8 @@ const typingTypes = new Set(['insertText', 'deleteContentBackward', 'deleteConte
 const blockTitle = (node: Block) => node.text.split('\n')[0].trim() || '空块'
 const cursor = (id: string, start: number, end = start): OutlineCaret => ({ id, start, end })
 
-function RenderBlock({ text }: { text: string }) {
-  const html = useMemo(() => text ? markdownHtml(/^\[[ xX]\]\s/.test(text) ? '- ' + text : text) : '&nbsp;', [text])
-  return <div dangerouslySetInnerHTML={{ __html: html }} />
-}
-
-export function OutlineEditor({ text, name, path, platform, sessions, onChange }: {
-  text: string; name: string; path: string; platform: string; sessions: Map<string, OutlineSession>; onChange: (text: string) => void
+export function OutlineEditor({ text, name, path, platform, remoteImages, sessions, onChange }: {
+  text: string; name: string; path: string; platform: string; remoteImages: boolean; sessions: Map<string, OutlineSession>; onChange: (text: string) => void
 }) {
   const [session] = useState(() => openOutline(sessions.get(path), text))
   const [blocks, setBlocks] = useState(() => session?.blocks ?? [])
@@ -32,6 +28,8 @@ export function OutlineEditor({ text, name, path, platform, sessions, onChange }
   const [collapsed, setCollapsed] = useState(() => session?.collapsed ?? new Set<string>())
   const [drop, setDrop] = useState<OutlineDrop>()
   const [menu, setMenu] = useState<{ id: string; x: number; y: number }>()
+  const references = useMemo(() => outlineReferences(text), [text])
+  const links = useMemo<Links | undefined>(() => references ? JSON.parse(references) : undefined, [references])
   const focus = useRef<OutlineCaret | undefined>(undefined)
   const inputs = useRef(new Map<string, HTMLTextAreaElement>())
   const root = useRef<HTMLDivElement>(null)
@@ -83,7 +81,7 @@ export function OutlineEditor({ text, name, path, platform, sessions, onChange }
     if (event.target instanceof HTMLElement && event.target.closest('a')) event.preventDefault()
   }}>
     <UnsupportedList />
-    <div className="outline-content outline-markdown" dangerouslySetInnerHTML={{ __html: markdownHtml(text) }} />
+    <OutlineMarkdown text={text} className="outline-content outline-markdown" {...{ path, remoteImages, links }} />
   </div>
 
   const breadcrumb = scope ? blockPath(blocks, scope) : []
@@ -387,6 +385,7 @@ export function OutlineEditor({ text, name, path, platform, sessions, onChange }
   }
 
   function preview(event: MouseEvent, node: Block) {
+    if (event.target instanceof Element && event.target.closest('.md-image button')) return
     if (event.shiftKey || event.metaKey || event.ctrlKey) {
       event.preventDefault()
       select(node.id, event.shiftKey, !event.shiftKey)
@@ -526,8 +525,11 @@ export function OutlineEditor({ text, name, path, platform, sessions, onChange }
             : <div className="outline-markdown outline-preview" role="button" tabIndex={0} aria-label={'编辑块 ' + blockTitle(node)}
                 onMouseDown={event => { if (event.shiftKey || event.metaKey || event.ctrlKey) event.preventDefault() }}
                 onClick={event => preview(event, node)} onKeyDown={event => {
-                  if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); cursorTo(cursor(node.id, 0)) }
-                }}><RenderBlock text={node.text} /></div>}
+                  if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) {
+                    event.preventDefault()
+                    cursorTo(cursor(node.id, 0))
+                  }
+                }}><OutlineMarkdown block text={node.text} {...{ path, remoteImages, links }} /></div>}
         </div>
         {node.children.length > 0 && !closed && <div className="outline-children">
           <button className="outline-guide" tabIndex={-1} aria-label="折叠此分支" onClick={() => collapse(node.id, true)} />
@@ -555,12 +557,12 @@ export function OutlineEditor({ text, name, path, platform, sessions, onChange }
         <button className="icon-button" aria-label="重做块编辑" title="重做" disabled={!session.redo.length}
           onMouseDown={event => event.preventDefault()} onClick={() => restore(true)}><Redo2 size={16} /></button>
       </div>
-      {!focused && !!session.projection.before.trim() && <div className="outline-markdown outline-surrounding"
-        dangerouslySetInnerHTML={{ __html: markdownHtml(session.projection.before) }} />}
+      {!focused && !!session.projection.before.trim() && <OutlineMarkdown text={session.projection.before}
+        className="outline-markdown outline-surrounding" {...{ path, remoteImages, links }} />}
       {render(focused ? [focused] : blocks)}
       <button className="tool-button outline-add" onClick={() => addBlock(focused?.id)}><Plus size={17} />新增块</button>
-      {!focused && !!session.projection.after.trim() && <div className="outline-markdown outline-surrounding"
-        dangerouslySetInnerHTML={{ __html: markdownHtml(session.projection.after) }} />}
+      {!focused && !!session.projection.after.trim() && <OutlineMarkdown text={session.projection.after}
+        className="outline-markdown outline-surrounding" {...{ path, remoteImages, links }} />}
     </div>
     {menu && <MarkdownMenu point={menu} nativeStyle close={() => setMenu(undefined)} items={[
       { label: '聚焦此分支', run: () => setBranch(menu.id) },
