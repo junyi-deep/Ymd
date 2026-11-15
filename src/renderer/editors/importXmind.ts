@@ -9,6 +9,7 @@ import { readLegacyXmind } from './xmindXml'
 import { calloutTopicId } from './mapCallouts'
 import { importTaskExtension, legacyTaskExtension, taskExtension } from './xmindTasks'
 import type { MapTask } from './mapTasks'
+import { decodeXmindCalendar, workCalendarExtension } from './workCalendar'
 
 const MiB = 1024 * 1024
 const asRecord = (value: unknown) => value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
@@ -314,6 +315,10 @@ export async function importXmind(data: ArrayBuffer) {
 
       const rawRoot = asRecord(rawSheet.rootTopic)
       const tree = await topic(rawRoot, 0)
+      const calendarExtension = records(rawSheet.extensions).find(extension => extension.provider === workCalendarExtension)
+      const calendar = decodeXmindCalendar(calendarExtension?.content, rawSheet.nonWorkingDaysSkipping)
+      if (calendar) tree.data.ymdWorkCalendar = calendar
+      else if (calendarExtension || rawSheet.nonWorkingDaysSkipping === 'skip') unconverted.add('工作日历')
       for (const { uid, task } of tasks) {
         task.dependencies = task.dependencies.flatMap(item => {
           const target = ids.get(item.id)

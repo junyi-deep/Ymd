@@ -426,6 +426,7 @@ dialog button.primary { background: var(--accent); color: var(--accent-ink); }
 .map-gantt-track { background-image: repeating-linear-gradient(90deg, transparent 0 calc(var(--gantt-day) - 1px), var(--line) calc(var(--gantt-day) - 1px) var(--gantt-day)); }
 .map-gantt-rows { position: relative; }
 .map-gantt-today, .map-gantt-links { position: absolute; top: 0; pointer-events: none; }
+.map-gantt-day-off { position: absolute; inset-block: 0; pointer-events: none; background: color-mix(in srgb, var(--text) 7%, transparent); }
 .map-gantt-today { bottom: 0; width: 1px; background: var(--accent); opacity: .62; }
 .map-gantt-links { left: var(--gantt-list); color: var(--muted); z-index: 1; }
 .map-gantt-links > path { stroke: currentColor; stroke-width: 1.25px; fill: none; }
@@ -522,6 +523,45 @@ dialog button.primary { background: var(--accent); color: var(--accent-ink); }
 .ymd-callout [data-callout-resize] { cursor: ew-resize; }
 .ymd-callout [data-callout-action] { cursor: pointer; }
 .map-task-dialog { width: min(460px, calc(100vw - 32px)); }
+.map-task-calendar { margin-top: 10px; }
+.map-work-calendar { width: min(665px, calc(100vw - 32px)); max-height: calc(100vh - 34px); padding: 0; overflow: hidden; }
+.map-work-calendar form { display: flex; flex-direction: column; max-height: calc(100vh - 36px); }
+.map-calendar-heading { padding: 15px 20px 0; }
+.map-calendar-heading h2 { margin: 0; }
+.map-calendar-content { min-height: 0; overflow: auto; padding: 0 20px 12px; }
+.map-work-calendar footer { margin: 0; padding: 9px 20px; border-top: 1px solid var(--line); }
+.map-calendar-switch { display: flex; gap: 8px; align-items: center; margin: 0; padding: 9px 0; }
+.map-calendar-switch input { accent-color: var(--accent); }
+.map-calendar-workweek { display: grid; grid-template-columns: minmax(190px, 1fr) minmax(245px, 1.15fr); gap: 16px; }
+.map-calendar-workweek fieldset { min-width: 0; }
+.map-calendar-weekdays { display: flex; flex-wrap: wrap; gap: 4px; margin: 6px 0; }
+.map-calendar-weekdays label { position: relative; margin: 0; }
+.map-calendar-weekdays input { position: absolute; inset: 0; opacity: 0; }
+.map-calendar-weekdays span { display: grid; width: 28px; height: 28px; place-items: center; border: 1px solid var(--line); border-radius: 5px; }
+.map-calendar-weekdays input:checked + span { background: var(--selected); border-color: var(--accent); }
+.map-calendar-weekdays input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 1px; }
+.map-calendar-preview { border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px 8px; }
+.map-calendar-preview header, .map-calendar-exceptions header { display: flex; align-items: center; justify-content: space-between; }
+.map-calendar-days { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 2px; text-align: center; }
+.map-calendar-days > * { display: grid; place-items: center; min-height: 22px; border-radius: 4px; }
+.map-calendar-days time[data-off="true"] { background: var(--soft); color: var(--muted); }
+.map-calendar-exceptions, .map-calendar-templates { border-top: 1px solid var(--line); margin-top: 13px; padding-top: 8px; }
+.map-calendar-exceptions h3 { font-weight: 620; }
+.map-calendar-rule {
+  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px 8px; margin-top: 7px;
+  align-items: end; padding: 6px 8px; background: var(--soft); border-radius: 5px;
+}
+.map-calendar-rule label, .map-calendar-templates label { display: grid; gap: 3px; min-width: 0; color: var(--muted); }
+.map-calendar-rule input, .map-calendar-rule select, .map-calendar-templates input, .map-calendar-templates select {
+  width: 100%; min-width: 0; min-height: 27px; padding: 2px 5px; border-radius: 4px; background: var(--page); color: var(--text);
+}
+.map-calendar-rule > button { justify-self: end; }
+.map-calendar-templates summary { cursor: pointer; }
+.map-calendar-templates > div { display: flex; align-items: end; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+@media (max-width: 560px) {
+  .map-calendar-workweek { grid-template-columns: 1fr; gap: 8px; }
+  .map-calendar-rule { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
 .map-link-dialog { width: min(440px, calc(100vw - 32px)); }
 .map-link-dialog select[size] { padding-inline: 5px; }
 .map-link-dialog .map-link-choice { display: flex; align-items: center; gap: 8px; }

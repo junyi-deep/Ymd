@@ -18,7 +18,9 @@ import { projectList, writeList, type Block } from './listProjection'
 import { MindMapFormat } from './MindMapFormat'
 import { MindMapTask, taskBadge, taskTopics, todoBadge } from './MindMapTask'
 import { MindMapGantt } from './MindMapGantt'
-import { orderSchedule, scheduledTopics } from './mapSchedule'
+import { MindMapWorkCalendar } from './MindMapWorkCalendar'
+import { calendarSchedule, editWorkDates, orderSchedule, scheduledTopics } from './mapSchedule'
+import { calendarDays, readWorkCalendar, type WorkCalendar } from './workCalendar'
 import { readTask, readTodo, type MapTask, type MapTodo } from './mapTasks'
 import { MindMapRecorder } from './MindMapRecorder'
 import { MindMapArt } from './MindMapArt'
@@ -45,7 +47,7 @@ class MapAssociativeLine extends AssociativeLine {
 }
 
 for (const plugin of [MapAssociativeLine, Drag, Export, ExportPDF, KeyboardNavigation, MiniMap, NodeImgAdjust, OuterFrame, RainbowLines, SearchPlugin, Select]) MindMap.usePlugin(plugin)
-MindMap.extendNodeDataNoStylePropList(['ymdMarker', 'ymdFloating', 'ymdTask', 'ymdTodo', 'ymdStructure', 'ymdAudio', 'ymdOriginalImageSize', 'ymdCallouts'])
+MindMap.extendNodeDataNoStylePropList(['ymdMarker', 'ymdFloating', 'ymdTask', 'ymdTodo', 'ymdStructure', 'ymdAudio', 'ymdOriginalImageSize', 'ymdCallouts', 'ymdWorkCalendar'])
 
 type MapNode = NonNullable<MindMap['renderer']['root']>
 type TopicField = '备注' | '标签'
@@ -348,6 +350,9 @@ function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, upd
   const [selectedCallout, setSelectedCallout] = useState<CalloutTarget>()
   const [calloutText, setCalloutText] = useState<{ target: CalloutTarget; note: Callout; add: boolean }>()
   const [taskTopic, setTaskTopic] = useState<string>()
+  const [calendarOpen, setCalendarOpen] = useState(false)
+  const [calendar, setCalendar] = useState(() => readWorkCalendar(sheet?.tree.data.ymdWorkCalendar ??
+    (!sheet ? appearance.styles.find(style => style.address === 'root')?.data.ymdWorkCalendar : undefined)))
   const [gantt, setGantt] = useState(false)
   const [audioParent, setAudioParent] = useState<MapNode>()
   const [error, setError] = useState('')
@@ -379,6 +384,7 @@ function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, upd
   }, [selected, selectedCallout, linkWorkbook, sheetId, version])
 
   const ganttRows = useMemo(() => gantt ? scheduledTopics(engine.current?.getData()) : [], [gantt, version])
+  const days = useMemo(() => calendarDays(calendar), [calendar])
 
   function readCallout(target: CalloutTarget) {
     const owner = engine.current?.renderer.findNodeByUid(target.owner)
@@ -430,17 +436,23 @@ function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, upd
     if (!map) return false
     const tree = map.getData()
     const rows = scheduledTopics(tree)
-    const replacements = schedule ? orderSchedule(rows, new Map([...edits].flatMap(([id, task]) => task ? [[id, task] as const] : []))) : edits
+    const replacements = schedule ? orderSchedule(rows, new Map([...edits].flatMap(([id, task]) => task ? [[id, task] as const] : [])), days) : edits
+    return commitTaskChanges(tree, replacements, edits)
+  }
+
+  function commitTaskChanges(tree: MapData, replacements: Map<string, MapTask | null> | 'cycle' | 'dates', direct?: Map<string, MapTask | null>) {
     if (replacements === 'cycle' || replacements === 'dates') {
-      setNotice(replacements === 'cycle' ? '这些任务的依赖形成了循环。请先移除其中一条依赖。' : '依赖调整超出了可用日期范围。')
+      setNotice(replacements === 'cycle' ? '这些任务的依赖形成了循环。请先移除其中一条依赖。' : '当前规则下没有可用日期。请检查工作日和任务依赖。')
       return false
     }
+    const map = engine.current
+    if (!map) return false
     const updates = replacements
     function write(node: MapData) {
       const id = node.data.uid
       if (id && updates.has(id)) {
         node.data.ymdTask = updates.get(id)
-        if (edits.has(id)) node.data.ymdTodo = null
+        if (direct?.has(id)) node.data.ymdTodo = null
       }
       node.children?.forEach(write)
     }
@@ -450,6 +462,21 @@ function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, upd
     map.command.originAddHistory()
     setNotice('')
     return true
+  }
+
+  function saveCalendar(next: WorkCalendar) {
+    const tree = engine.current?.getData()
+    if (!tree) return false
+    if (JSON.stringify(next) === JSON.stringify(calendar)) return true
+    const replacements = next.enabled || calendar?.enabled
+      ? calendarSchedule(scheduledTopics(tree), days, calendarDays(next)) : new Map<string, MapTask>()
+    tree.data.ymdWorkCalendar = next
+    return commitTaskChanges(tree, replacements)
+  }
+
+  function openCalendar() {
+    setNotice('')
+    setCalendarOpen(true)
   }
 
   function toggleGantt(visible: boolean) {
@@ -534,6 +561,7 @@ function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, upd
     const removeBranchLayouts = installBranchLayouts(map)
     const removeImageGestures = installTopicImageGestures(map, host.current)
     const onData = (node: MapData) => {
+      setCalendar(readWorkCalendar(node.data.ymdWorkCalendar))
       const audioId = audio.activeId
       if (audioId && !hasAudio(node, audioId)) audio.stop()
       if (!initialSheet && projection) {
@@ -654,7 +682,7 @@ function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, upd
   useEffect(() => {
     if (!gantt && !zen && !linking && !searchOpen && !formatOpen && !artOpen) return
     const escape = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape' || event.isComposing || event.defaultPrevented || field || linkEditor || taskTopic || audioParent || calloutText ||
+      if (event.key !== 'Escape' || event.isComposing || event.defaultPrevented || calendarOpen || field || linkEditor || taskTopic || audioParent || calloutText ||
           event.target instanceof HTMLElement && event.target.closest('.smm-node-edit-wrap, .document-menu')) return
       if (gantt) { event.preventDefault(); toggleGantt(false) }
       else if (linking) { engine.current?.associativeLine.cancelCreateLine(); setLinking(false) }
@@ -669,7 +697,7 @@ function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, upd
     }
     window.addEventListener('keydown', escape)
     return () => window.removeEventListener('keydown', escape)
-  }, [gantt, zen, linking, searchOpen, formatOpen, artOpen, field, linkEditor, taskTopic, audioParent, calloutText])
+  }, [gantt, zen, linking, searchOpen, formatOpen, artOpen, calendarOpen, field, linkEditor, taskTopic, audioParent, calloutText])
 
   useEffect(() => {
     const current = selectedCallout && readCallout(selectedCallout)
@@ -1065,6 +1093,7 @@ function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, upd
     <input ref={resourceInput} type="file" hidden onChange={event => attach(event.target.files?.[0])} />
     <div className="map-view">
     {gantt && <MindMapGantt title={sheet?.title ?? mapTitle(name)} rows={ganttRows} edit={openTask} change={updateTasks} report={setNotice}
+      days={days} skipClosed={calendar?.enabled === true} openCalendar={openCalendar}
       undo={() => command('BACK')} redo={() => command('FORWARD')} notice={notice} clearNotice={() => setNotice('')} />}
     <div className="map-body" data-show-gantt={gantt} aria-hidden={gantt || undefined}>
       <div className="map-stage">
@@ -1148,12 +1177,17 @@ function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, upd
     {audioParent && <MindMapRecorder title={String(audioParent.getData('text') ?? '')}
       close={() => setAudioParent(undefined)} save={(audio, duration) => addRecordedAudio(audioParent, audio, duration)} />}
     {taskTopic && taskSource && <MindMapTask initial={initialTask} notice={notice}
+      skipClosed={calendar?.enabled === true} openCalendar={openCalendar}
       title={taskSource.data.text ?? ''} topics={taskTopics(taskTree, taskTopic)}
       close={() => openTask()} save={task => {
-        const schedule = !!task && (task.start !== initialTask?.start || task.due !== initialTask?.due ||
-          task.duration !== initialTask?.duration || JSON.stringify(task.dependencies) !== JSON.stringify(initialTask?.dependencies))
-        if (updateTasks(new Map([[taskTopic, task]]), schedule)) setTaskTopic(undefined)
+        const dateChanged = !!task && (task.start !== initialTask?.start || task.due !== initialTask?.due || task.duration !== initialTask?.duration)
+        const next = task && dateChanged && calendar?.enabled ? editWorkDates(task, initialTask, days) : task
+        if (next === undefined) { setNotice('所选日期范围内没有可用的工作日。'); return }
+        const schedule = !!next && (dateChanged || JSON.stringify(next.dependencies) !== JSON.stringify(initialTask?.dependencies))
+        if (updateTasks(new Map([[taskTopic, next]]), schedule)) setTaskTopic(undefined)
       }} />}
+    {calendarOpen && <MindMapWorkCalendar initial={calendar} notice={notice} save={saveCalendar}
+      close={() => { setNotice(''); setCalendarOpen(false) }} />}
     {calloutText && <MindMapCalloutText initial={calloutText.note.data.text} add={calloutText.add}
       close={() => setCalloutText(undefined)} save={saveCalloutText} />}
     {linkEditor && <MindMapLink

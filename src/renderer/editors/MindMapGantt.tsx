@@ -4,6 +4,7 @@ import { MarkdownMenu } from './MarkdownMenu'
 import { dayDate, dayMs, firstDay, lastDay, setTaskRange, taskRange, todayDay, type ScheduledTopic, type TaskRange } from './mapSchedule'
 import type { MapTask } from './mapTasks'
 import { ganttExport, type GanttFile } from './ganttExport'
+import type { Workdays } from './workCalendar'
 
 const rowHeight = 38
 const scaleWidths = [6, 13, 30, 48]
@@ -14,15 +15,21 @@ type Drag = {
   range: TaskRange; progress: number; preview?: { range: TaskRange; progress: number }
 }
 
-function translate(range: TaskRange, kind: DragKind, difference: number): TaskRange {
+function translate(range: TaskRange, kind: DragKind, difference: number, days: Workdays): TaskRange {
+  if (!difference) return range
   const { start, end } = range
-  if (kind === 'start') return { start: Math.max(firstDay, Math.min(end, start + difference)), end }
-  if (kind === 'end') return { start, end: Math.min(lastDay, Math.max(start, end + difference)) }
-  const offset = Math.max(firstDay - start, Math.min(lastDay - end, difference))
-  return { start: start + offset, end: end + offset }
+  const direction = difference > 0 ? 1 : -1
+  const length = Math.max(1, days.count(start, end))
+  const target = kind === 'end' ? end + difference : start + difference
+  const moved = days.seek(Math.max(firstDay, Math.min(lastDay, target)), direction)
+  if (moved === undefined) return range
+  if (kind === 'start') return { start: Math.min(end, moved), end }
+  if (kind === 'end') return { start, end: Math.max(start, moved) }
+  const last = days.shift(moved, length - 1)
+  return last === undefined ? range : { start: moved, end: last }
 }
 
-export function MindMapGantt({ title, rows, edit, change, undo, redo, notice, clearNotice, report }: {
+export function MindMapGantt({ title, rows, edit, change, undo, redo, notice, clearNotice, report, days, skipClosed, openCalendar }: {
   title: string
   rows: ScheduledTopic[]
   edit: (id: string) => void
@@ -32,19 +39,23 @@ export function MindMapGantt({ title, rows, edit, change, undo, redo, notice, cl
   notice: string
   clearNotice: () => void
   report: (error: string) => void
+  days: Workdays
+  skipClosed: boolean
+  openCalendar: () => void
 }) {
   const [scale, setScale] = useState(2)
   const [selection, setSelection] = useState<string[]>([])
   const [preview, setPreview] = useState<Drag>()
   const [exportMenu, setExportMenu] = useState(false)
   const [exporting, setExporting] = useState(false)
+  const [windowPixels, setWindowPixels] = useState({ left: 0, width: 1000 })
   const scroll = useRef<HTMLDivElement>(null)
   const drag = useRef<Drag | undefined>(undefined)
   const zoomAnchor = useRef<number | undefined>(undefined)
   const marker = useId()
   const today = todayDay()
   const ranges = new Map(rows.flatMap(({ id, task }) => {
-    const range = taskRange(task)
+    const range = taskRange(task, days)
     return range ? [[id, range]] : []
   }))
   const dates = [...ranges.values()]
@@ -63,10 +74,26 @@ export function MindMapGantt({ title, rows, edit, change, undo, redo, notice, cl
   const position = (day: number) => (day - start) * dayWidth
   const rangeFor = (id: string) => preview?.id === id && preview.preview ? preview.preview.range : ranges.get(id)
   const rowIndexes = new Map(rows.map((row, index) => [row.id, index]))
+  const offDays: number[] = []
+  if (skipClosed) {
+    const first = Math.max(start, start + Math.floor(windowPixels.left / dayWidth) - 2)
+    const last = Math.min(end, start + Math.ceil((windowPixels.left + windowPixels.width) / dayWidth) + 2)
+    for (let day = first; day <= last; day++) if (!days.working(day)) offDays.push(day)
+  }
 
   useLayoutEffect(() => {
     scroll.current?.focus({ preventScroll: true })
   }, [])
+
+  useLayoutEffect(() => {
+    const viewport = scroll.current
+    if (!viewport || !skipClosed) return
+    const update = () => setWindowPixels({ left: viewport.scrollLeft, width: viewport.clientWidth })
+    const observer = new ResizeObserver(update)
+    observer.observe(viewport)
+    viewport.addEventListener('scroll', update, { passive: true })
+    return () => { observer.disconnect(); viewport.removeEventListener('scroll', update) }
+  }, [skipClosed, rows.length > 0])
 
   useLayoutEffect(() => {
     if (zoomAnchor.current !== undefined && scroll.current) scroll.current.scrollLeft = position(zoomAnchor.current)
@@ -97,7 +124,7 @@ export function MindMapGantt({ title, rows, edit, change, undo, redo, notice, cl
     if (!rows.length || exporting) return
     setExporting(true)
     clearNotice()
-    try { await ganttExport(title, rows, format) }
+    try { await ganttExport(title, rows, format, days) }
     catch (error) { report(error instanceof Error ? error.message : '无法导出甘特图。') }
     finally { setExporting(false) }
   }
@@ -133,7 +160,7 @@ export function MindMapGantt({ title, rows, edit, change, undo, redo, notice, cl
     const scrollOffset = (scroll.current?.scrollLeft ?? 0) - current.scrolled
     const delta = event.clientX - current.origin + scrollOffset
     if (!current.preview && Math.abs(delta) < 3) return
-    const range = current.kind === 'progress' ? current.range : translate(current.range, current.kind, Math.round(delta / dayWidth))
+    const range = current.kind === 'progress' ? current.range : translate(current.range, current.kind, Math.round(delta / dayWidth), days)
     const progress = current.kind === 'progress'
       ? Math.max(0, Math.min(100, Math.round((event.clientX - current.left + scrollOffset) * 100 / current.width)))
       : current.progress
@@ -151,7 +178,7 @@ export function MindMapGantt({ title, rows, edit, change, undo, redo, notice, cl
     if (current.kind === 'progress') {
       if (progress !== row.task.progress) change(new Map([[row.id, { ...row.task, progress, nativeProgress: undefined }]]), false)
     } else if (range.start !== current.range.start || range.end !== current.range.end) {
-      change(new Map([[row.id, setTaskRange(row.task, range, current.kind !== 'move')]]), true)
+      change(new Map([[row.id, setTaskRange(row.task, range, current.kind !== 'move', days)]]), true)
     }
   }
 
@@ -163,9 +190,9 @@ export function MindMapGantt({ title, rows, edit, change, undo, redo, notice, cl
       const progress = Math.max(0, Math.min(100, row.task.progress + delta))
       if (progress !== row.task.progress) change(new Map([[row.id, { ...row.task, progress, nativeProgress: undefined }]]), false)
     } else {
-      const next = translate(range, kind, delta)
+      const next = translate(range, kind, delta, days)
       if (next.start !== range.start || next.end !== range.end) {
-        change(new Map([[row.id, setTaskRange(row.task, next, kind !== 'move')]]), true)
+        change(new Map([[row.id, setTaskRange(row.task, next, kind !== 'move', days)]]), true)
       }
     }
   }
@@ -185,6 +212,7 @@ export function MindMapGantt({ title, rows, edit, change, undo, redo, notice, cl
       <button className="tool-button" disabled={chosen.length < 2} onClick={link} title="按选择顺序添加完成到开始的依赖">
         <Link2 size={15} />建立依赖</button>
       <button className="tool-button" disabled={chosen.length !== 1} onClick={() => edit(chosen[0])}>编辑任务</button>
+      <button className="tool-button" aria-pressed={skipClosed} onClick={openCalendar}><CalendarDays size={15} />项目工作日</button>
       <div className="menu-anchor">
         <button className="tool-button" aria-haspopup="menu" aria-expanded={exportMenu} disabled={!rows.length || exporting}
           onClick={() => setExportMenu(!exportMenu)}><Download size={15} />导出</button>
@@ -237,7 +265,7 @@ export function MindMapGantt({ title, rows, edit, change, undo, redo, notice, cl
                     onDoubleClick={() => edit(row.id)} style={{ paddingInlineStart: 12 + Math.min(4, row.depth) * 10 }}>
                     {row.title}</button>
                   <span>{range ? dateLabel(range.start) : '—'}</span>
-                  <span>{range ? row.task.duration ?? range.end - range.start + 1 : row.task.duration ?? '—'}</span>
+                  <span>{range ? row.task.duration ?? days.count(range.start, range.end) : row.task.duration ?? '—'}</span>
                 </div>
                 <div className="map-gantt-track">
                   {range ? <div className="map-gantt-bar" data-gantt-id={row.id} data-moving={preview?.id === row.id}
@@ -257,6 +285,8 @@ export function MindMapGantt({ title, rows, edit, change, undo, redo, notice, cl
                 </div>
               </div>
             })}
+            {offDays.map(day => <div key={day} className="map-gantt-day-off" aria-hidden="true"
+              title={dayDate(day) + ' 休息日'} style={{ left: 'calc(var(--gantt-list) + ' + position(day) + 'px)', width: dayWidth }} />)}
             {includeToday && <div className="map-gantt-today" style={{ left: 'calc(var(--gantt-list) + ' + position(today) + 'px)' }} />}
             <svg className="map-gantt-links" width={width} height={rows.length * rowHeight} aria-hidden="true">
               <defs><marker id={marker} viewBox="0 0 8 8" markerWidth="6" markerHeight="6" refX="7" refY="4" orient="auto">

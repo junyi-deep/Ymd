@@ -48,17 +48,32 @@ function taskControl(label: string, text: string, run: () => void) {
   return element
 }
 
-export function MindMapTask({ initial, title, topics, notice, save, close }: {
+export function MindMapTask({ initial, title, topics, notice, skipClosed, openCalendar, save, close }: {
   initial?: MapTask
   title: string
   topics: ReturnType<typeof taskTopics>
   notice?: string
+  skipClosed?: boolean
+  openCalendar: () => void
   save: (task: MapTask | null) => void
   close: () => void
 }) {
   const dialog = useRef<HTMLDialogElement>(null)
   const [task, setTask] = useState(initial ?? emptyTask)
+  const previous = useRef(initial ?? emptyTask)
   useEffect(() => { dialog.current?.showModal() }, [])
+  useEffect(() => {
+    const before = previous.current
+    const next = initial ?? emptyTask
+    previous.current = next
+    if (before.start === next.start && before.due === next.due && before.duration === next.duration) return
+    setTask(current => ({
+      ...current,
+      ...(current.start === before.start ? { start: next.start, startTime: next.startTime } : {}),
+      ...(current.due === before.due ? { due: next.due, dueTime: next.dueTime } : {}),
+      ...(current.duration === before.duration ? { duration: next.duration } : {}),
+    }))
+  }, [initial])
   const update = (patch: Partial<MapTask>) => setTask(previous => ({ ...previous, ...patch }))
   const available = new Set(topics.map(topic => topic.id))
   const dependencies = [...topics, ...task.dependencies.filter(item => !available.has(item.id)).map(({ id }) => ({ id, title: '已删除的主题' }))]
@@ -75,11 +90,11 @@ export function MindMapTask({ initial, title, topics, notice, save, close }: {
           <option value="0">无</option>
           {[1, 2, 3, 4, 5, 6, 7, 8, 9].map(level => <option key={level} value={level}>优先级 {level}</option>)}
         </select></label>
-        <label>开始日期<input type="date" max={task.due || undefined} value={task.start}
+        <label>开始日期<input type="date" max={!skipClosed && task.due ? task.due : undefined} value={task.start}
           onChange={event => update({ start: event.target.value })} /></label>
         <label>截止日期<input type="date" min={task.start || undefined} value={task.due}
           onChange={event => update({ due: event.target.value })} /></label>
-        <label>持续天数<input type="number" min="0" max="36500" step="any" value={task.duration ?? ''}
+        <label>{skipClosed ? '工作天数' : '持续天数'}<input type="number" min="0" max="36500" step="any" value={task.duration ?? ''}
           onChange={event => update({ duration: event.target.value === '' ? null : Number(event.target.value) })} /></label>
         <label>负责人<input value={task.assignee} maxLength={500} placeholder="多人用顿号分隔"
           onChange={event => update({ assignee: event.target.value })} /></label>
@@ -103,6 +118,7 @@ export function MindMapTask({ initial, title, topics, notice, save, close }: {
           </div>
         })}</div>
       </fieldset>}
+      <button className="tool-button map-task-calendar" type="button" onClick={openCalendar} aria-pressed={skipClosed}>项目工作日</button>
       <footer>
         {initial && <button type="button" className="map-task-remove" onClick={() => save(null)}>移除任务</button>}
         <button type="button" onClick={close}>取消</button><button type="submit" className="primary">保存任务</button>

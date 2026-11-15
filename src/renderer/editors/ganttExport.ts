@@ -1,4 +1,5 @@
 import { dateDay, dayDate, lastDay, taskRange, todayDay, type ScheduledTopic } from './mapSchedule'
+import type { Workdays } from './workCalendar'
 
 export type GanttFile = 'png' | 'jpeg' | 'pdf' | 'csv' | 'ics' | 'print'
 
@@ -28,13 +29,13 @@ function csv(rows: ScheduledTopic[]) {
   return '\ufeff' + fields.map(row => row.map(cell).join(',')).join('\r\n') + '\r\n'
 }
 
-function calendar(id: string, rows: ScheduledTopic[]) {
+function calendar(id: string, rows: ScheduledTopic[], days?: Workdays) {
   const escape = (text: string) => text.replaceAll('\\', '\\\\').replace(/\r\n?|\n/g, '\\n').replace(/[;,]/g, char => '\\' + char)
   const clock = new Date().toISOString().replace(/[-:]|\.\d{3}/g, '')
   const lines = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Ymd//Gantt//ZH', 'CALSCALE:GREGORIAN']
   for (const row of rows) {
     const start = dateDay(row.task.start)
-    const range = taskRange(row.task)
+    const range = taskRange(row.task, days)
     if (start === undefined || !range) continue
     lines.push('BEGIN:VEVENT', 'UID:' + escape(row.id + '.' + id + '@ymd'), 'DTSTAMP:' + clock,
       'DTSTART;VALUE=DATE:' + dayDate(start).replaceAll('-', ''),
@@ -57,13 +58,13 @@ function calendar(id: string, rows: ScheduledTopic[]) {
   }).join('\r\n') + '\r\n'
 }
 
-function chartImage(title: string, all: ScheduledTopic[], rows: ScheduledTopic[], page = 0) {
+function chartImage(title: string, all: ScheduledTopic[], rows: ScheduledTopic[], days?: Workdays, page = 0) {
   const width = 1080
   const rowHeight = 29
   const header = 62
   const list = 270
   const height = header + rows.length * rowHeight
-  const dates = all.map(row => taskRange(row.task)).filter(range => range !== undefined)
+  const dates = all.map(row => taskRange(row.task, days)).filter(range => range !== undefined)
   const start = dates.length ? Math.min(...dates.map(range => range.start)) : todayDay()
   const end = (dates.length ? Math.max(...dates.map(range => range.end)) : start + 6) + 1
   const step = Math.max(1, Math.ceil((end - start) / 18))
@@ -79,16 +80,17 @@ function chartImage(title: string, all: ScheduledTopic[], rows: ScheduledTopic[]
     <text x="12" y="54">任务</text><text x="206" y="54">开始</text><text x="242" y="54">天数</text>`]
   for (let day = start; day < end; day += step) {
     const x = position(day)
+    if (days && step === 1 && !days.working(day)) parts.push(`<rect x="${x}" y="62" width="${pixel}" height="${height - 62}" fill="#f0f1f3"/>`)
     parts.push(`<path d="M ${x} 36 V ${height}" stroke="#e1e5eb"/><text x="${x + 3}" y="54">${dayDate(day).slice(5)}</text>`)
   }
   const indexes = new Map(rows.map((row, index) => [row.id, index]))
   const bars: string[] = []
   rows.forEach((row, index) => {
     const y = header + index * rowHeight
-    const range = taskRange(row.task)
+    const range = taskRange(row.task, days)
     const characters = Array.from(row.title)
     const title = characters.length > 22 ? characters.slice(0, 21).join('') + '…' : row.title
-    const duration = row.task.duration ?? (range ? range.end - range.start + 1 : '—')
+    const duration = row.task.duration ?? (range ? (days?.count(range.start, range.end) ?? range.end - range.start + 1) : '—')
     parts.push(`<path d="M 0 ${y} H ${width}" stroke="#e1e5eb"/>
       <text x="${12 + Math.min(3, row.depth) * 7}" y="${y + 19}">${escapeMarkup(title)}</text>
       <text x="206" y="${y + 19}">${range ? dayDate(range.start).slice(5) : '—'}</text>
@@ -102,7 +104,7 @@ function chartImage(title: string, all: ScheduledTopic[], rows: ScheduledTopic[]
       ${barWidth > 36 ? `<text x="${left + 5}" y="${y + 19}">${progress}%</text>` : ''}`)
     for (const dependency of row.task.dependencies) {
       const source = indexes.get(dependency.id)
-      const from = source === undefined ? undefined : taskRange(rows[source].task)
+      const from = source === undefined ? undefined : taskRange(rows[source].task, days)
       if (!from || source === index) continue
       const first = dependency.type[0] === 'S'
       const last = dependency.type[1] === 'S'
@@ -117,8 +119,8 @@ function chartImage(title: string, all: ScheduledTopic[], rows: ScheduledTopic[]
   return { width, height, svg: [...parts, ...bars, '</svg>'].join('') }
 }
 
-async function imageBlob(title: string, rows: ScheduledTopic[], mime: string) {
-  const { svg, width, height } = chartImage(title, rows, rows)
+async function imageBlob(title: string, rows: ScheduledTopic[], mime: string, days?: Workdays) {
+  const { svg, width, height } = chartImage(title, rows, rows, days)
   if (height > 8192) throw new Error('任务较多，图片高度超出限制。请导出 PDF 或 CSV。')
   const url = URL.createObjectURL(new Blob([svg], { type: 'image/svg+xml;charset=utf-8' }))
   try {
@@ -136,16 +138,16 @@ async function imageBlob(title: string, rows: ScheduledTopic[], mime: string) {
   } finally { URL.revokeObjectURL(url) }
 }
 
-export async function ganttExport(title: string, rows: ScheduledTopic[], format: GanttFile) {
+export async function ganttExport(title: string, rows: ScheduledTopic[], format: GanttFile, days?: Workdays) {
   const name = title.replace(/[<>:"/\\|?*\u0000-\u001f]/g, '_').slice(0, 100) + ' 甘特图'
   if (format === 'csv') download(new Blob([csv(rows)], { type: 'text/csv;charset=utf-8' }), name + '.csv')
-  else if (format === 'ics') download(new Blob([calendar(name, rows)], { type: 'text/calendar;charset=utf-8' }), name + '.ics')
+  else if (format === 'ics') download(new Blob([calendar(name, rows, days)], { type: 'text/calendar;charset=utf-8' }), name + '.ics')
   else if (format === 'pdf' || format === 'print') {
     const perPage = 19
     const pages = Array.from({ length: Math.ceil(rows.length / perPage) }, (_, page) =>
-      '<div class="gantt-print-page">' + chartImage(title, rows, rows.slice(page * perPage, (page + 1) * perPage), page).svg + '</div>')
+      '<div class="gantt-print-page">' + chartImage(title, rows, rows.slice(page * perPage, (page + 1) * perPage), days, page).svg + '</div>')
     const html = '<style>@page{size:landscape;margin:12mm}.gantt-print-page{break-after:page}.gantt-print-page:last-child{break-after:auto}</style>' + pages.join('')
     if (format === 'pdf') await window.desktop.exportPdf(name + '.pdf', html)
     else await window.desktop.printDocument(name, html)
-  } else download(await imageBlob(title, rows, 'image/' + format), name + '.' + format)
+  } else download(await imageBlob(title, rows, 'image/' + format, days), name + '.' + format)
 }
