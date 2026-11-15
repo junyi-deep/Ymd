@@ -2,7 +2,7 @@ import JSZip from 'jszip'
 import { branchStructure, mapTheme, palettes, type MapData, type MapSheet } from './mapAppearance'
 import { loadAudio, readAudioNote } from './mapAudio'
 import { calloutShapeClasses, progressMarkers, shapes, structures, styleKeys, topicLinkExtension } from './xmindFormat'
-import { isExternalMapLink, readTopicLink, topicLinkUrl, type TopicLink } from './mapTopicLinks'
+import { readTopicLink, topicLinkUrl, xmindAddressLink, type TopicLink } from './mapTopicLinks'
 import { calloutDefaults, calloutTopicId, readCallouts } from './mapCallouts'
 import { readTask, readTodo, type MapTask } from './mapTasks'
 import { exportTaskContent, taskExtension } from './xmindTasks'
@@ -96,15 +96,16 @@ export async function exportXmind(sheets: Sheet[], active: string, dark: boolean
       output.style = { id: id(), properties }
       if (typeof data.note === 'string' && data.note) output.notes = { plain: { content: data.note } }
       const attachment = typeof data.attachmentUrl === 'string' && /^data:application\/octet-stream;base64,([A-Za-z0-9+/=]+)$/.exec(data.attachmentUrl)
+      const address = xmindAddressLink(data.hyperlink)
       if (attachment) {
         const name = String(data.attachmentName ?? '附件').replace(/[<>:"/\\|?*\u0000-\u001f]/g, '_').slice(0, 160).replace(/^[.]+|[. ]+$/g, '')
         output.href = resource('', attachment[1], name || '附件')
-        if (callout && isExternalMapLink(data.hyperlink)) {
+        if (address) {
           output.extensions = [...(output.extensions ?? []), {
-            provider: topicLinkExtension, content: [{ href: data.hyperlink }], resourceRefs: [],
+            provider: topicLinkExtension, content: [{ href: address }], resourceRefs: [],
           }]
         }
-      } else if (isExternalMapLink(data.hyperlink)) output.href = data.hyperlink
+      } else if (address) output.href = address
       const target = readTopicLink(data.hyperlink)
       if (target) links.push({ output, target })
       const labels = list(data.tag).map(item => typeof item === 'string' ? item : record(item).text)

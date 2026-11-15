@@ -4,7 +4,7 @@ import { writeList, projectList, type Block } from './listProjection'
 import { audioTitle, readAudioNote } from './mapAudio'
 import { branchStructure, collectMapAppearance, defaultMapSettings, encodeImportedTopic, type MapData, type MapSheet } from './mapAppearance'
 import { calloutShapeClasses, progressMarkers, shapes, structures, styleKeys, topicLinkExtension } from './xmindFormat'
-import { isExternalMapLink, mainSheetId, readTopicLink, topicLinkUrl, type TopicLink } from './mapTopicLinks'
+import { linkLabels, mainSheetId, mapLinkType, readTopicLink, topicLinkUrl, xmindAddressLink, type TopicLink } from './mapTopicLinks'
 import { readLegacyXmind } from './xmindXml'
 import { calloutTopicId } from './mapCallouts'
 import { importTaskExtension, legacyTaskExtension, taskExtension } from './xmindTasks'
@@ -164,9 +164,17 @@ export async function importXmind(data: ArrayBuffer) {
       if (/^(top|bottom|left|right)$/.test(align)) node.data.imgPlacement = align
     }
 
+    function addAddress(node: MapData, href: unknown) {
+      const address = xmindAddressLink(href)
+      if (!address) return false
+      node.data.hyperlink = address
+      node.data.hyperlinkTitle = linkLabels[mapLinkType(address)]
+      return true
+    }
+
     async function addAttachments(node: MapData, href: unknown) {
       if (typeof href !== 'string' || !href) return
-      if (isExternalMapLink(href)) { node.data.hyperlink = href; return }
+      if (addAddress(node, href)) return
       const path = resourcePath(href)
       const bytes = path ? await resource(path) : undefined
       if (!path || !bytes?.length) { unconverted.add('链接或附件'); return }
@@ -291,7 +299,7 @@ export async function importXmind(data: ArrayBuffer) {
           node.data.hyperlinkTitle = '主题链接'
           crossDocumentLinks = true
         }
-        if (kind === 'callout' && node.data.attachmentUrl && isExternalMapLink(supplemental?.href)) node.data.hyperlink = supplemental.href
+        if (node.data.attachmentUrl) addAddress(node, supplemental?.href)
         const children = asRecord(raw.children)
         const attached: MapData[] = []
         for (const child of records(children.attached)) attached.push(await topic(child, depth + 1))

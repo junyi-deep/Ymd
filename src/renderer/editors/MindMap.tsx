@@ -25,13 +25,15 @@ import { calendarDays, readWorkCalendar, type WorkCalendar } from './workCalenda
 import { readTask, readTodo, type MapTask, type MapTodo } from './mapTasks'
 import { MindMapRecorder } from './MindMapRecorder'
 import { MindMapArt } from './MindMapArt'
-import { MindMapLink, type LinkSheet, type LinkType } from './MindMapLink'
+import { MindMapLink, type LinkSheet } from './MindMapLink'
+import { readLocalMapUrl } from '../../shared/localMapLinks'
 import { addTopicImage, applyArt, imagePlacements, installTopicImageGestures, isTopicImage, placeTopicImage, removeTopicImage, resetTopicImage, topicAcceptsArt } from './mapTopicImages'
 import { audioButton, audioTitle, createAudioPlayer, forgetAudio, loadAudio, readAudioNote, storeAudio, type AudioNote } from './mapAudio'
 import { MarkdownMenu, type MenuItem } from './MarkdownMenu'
 import { branchStructure, defaultMapSettings, encodeImportedTopic, loadMapAppearance, mapTheme, palettes, rememberImportedSheet, saveMapAppearance, saveMapSheets, type MapData, type MapSettings, type MapSheet } from './mapAppearance'
 import { installBranchLayouts } from './mixedMapLayout'
-import { findTopic, listBacklinks, listMapTopics, mainSheetId, readTopicLink, remapCopiedLinks, type TopicLink } from './mapTopicLinks'
+import { findTopic, linkLabels, linkTypes, listBacklinks, listMapTopics, mainSheetId, mapLinkType, readTopicLink, remapCopiedLinks,
+  type LinkType, type TopicLink } from './mapTopicLinks'
 import { documentBacklinks, documentTopics, mainMap, mapDocumentPath, mapTitle, primaryMapSheet } from './mapDocumentLinks'
 import { installCallouts } from './calloutLayer'
 import { MindMapCalloutFormat, MindMapCalloutText } from './MindMapCallout'
@@ -488,6 +490,12 @@ function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, upd
   function openHyperlink(url: string) {
     const target = readTopicLink(url)
     if (target) void followLinkWithNotice(target, '链接指向的画布或主题已删除，或无法定位。')
+    else if (readLocalMapUrl(url)) {
+      setNotice('')
+      void window.desktop.openLocalMapLocation(url).catch(error => {
+        setNotice(String(error).replace(/^Error(?: invoking remote method '[^']+': Error)?: /, ''))
+      })
+    }
     else void window.desktop.openExternal(url).catch(() => setNotice('无法打开链接。'))
   }
 
@@ -699,7 +707,7 @@ function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, upd
           (event.target !== document.body && !host.current?.contains(event.target))) return
       event.preventDefault()
       const href = current ? current.note.data.hyperlink : source.getData('hyperlink')
-      setLinkEditor({ node: source, callout: current ? selectedCallout : undefined, kind: readTopicLink(href) ? 'topic' : 'web' })
+      setLinkEditor({ node: source, callout: current ? selectedCallout : undefined, kind: mapLinkType(href) })
     }
     window.addEventListener('keydown', editLink)
     return () => window.removeEventListener('keydown', editLink)
@@ -836,7 +844,7 @@ function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, upd
     const map = engine.current
     const current = map?.renderer.findNodeByUid(source.uid)
     if (!map || !current || String(current.getData('hyperlink') ?? '') === value) return
-    const title = readTopicLink(value) ? '主题链接' : '网页链接'
+    const title = linkLabels[mapLinkType(value)]
     // Link editing is a single history step, even before the library's queued snapshot runs.
     map.command.originAddHistory()
     map.execCommand('SET_NODE_HYPERLINK', current, value, value ? title : '')
@@ -938,10 +946,7 @@ function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, upd
     { label: audioTitle, icon: <Mic size={16} />, disabled: !node || !!audioNote || !!node.isGeneralization || selected.length !== 1,
       run: () => setAudioParent(node) },
     { label: '标签', icon: <Tag size={16} />, disabled: !node, run: () => fieldFor('标签') },
-    { label: '链接', disabled: !canLink, children: [
-      { label: '网页链接', run: () => editLink('web') },
-      { label: '主题链接', run: () => editLink('topic') },
-    ] },
+    { label: '链接', disabled: !canLink, children: linkTypes.map(kind => ({ label: linkLabels[kind], run: () => editLink(kind) })) },
     { label: '图片', icon: <ImagePlus size={16} />, disabled: !node, run: () => chooseResource(true) },
     { label: '贴纸与插图', icon: <Sticker size={16} />, run: () => setArtOpen(true) },
     { label: '附件', icon: <Paperclip size={16} />, disabled: !node, run: () => chooseResource(false) },
@@ -997,7 +1002,7 @@ function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, upd
   ] : []
   const linkItems: MenuItem[] = node && typeof currentLink === 'string' && currentLink ? [
     { label: '打开链接', run: () => openHyperlink(currentLink) },
-    { label: '编辑链接', disabled: !canLink, run: () => editLink(readTopicLink(currentLink) ? 'topic' : 'web') },
+    { label: '编辑链接', disabled: !canLink, run: () => editLink(mapLinkType(currentLink)) },
     { label: '移除链接', icon: <Trash2 size={16} />, disabled: !canLink, run: () => setNodeLink(node, '') },
   ] : []
   const backlinkItems: MenuItem[] = backlinks.map(({ label, target }) => ({
@@ -1007,7 +1012,7 @@ function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, upd
     { label: '编辑标注', run: () => editCallout(contextCallout) },
     { label: '标注格式', run: () => { setArtOpen(false); setFormatOpen(true) } },
     { label: '链接', children: [
-      ...(['web', 'topic'] as const).map(kind => ({ label: kind === 'web' ? '网页链接' : '主题链接',
+      ...linkTypes.map(kind => ({ label: linkLabels[kind],
         run: () => setLinkEditor({ node: menuCallout.owner, kind, callout: contextCallout }) })),
       ...(menuCallout.note.data.hyperlink ? [{ label: '移除链接', run: () => changeCallout(contextCallout, { hyperlink: '' }) }] : []),
     ] },

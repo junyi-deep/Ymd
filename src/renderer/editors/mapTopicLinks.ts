@@ -1,5 +1,10 @@
 import type { MapData } from './mapAppearance'
 import { calloutTopicId, readCallouts } from './mapCallouts'
+import { readLocalMapUrl } from '../../shared/localMapLinks'
+
+export const linkTypes = ['web', 'topic', 'file', 'folder'] as const
+export type LinkType = (typeof linkTypes)[number]
+export const linkLabels: Record<LinkType, string> = { web: '网页链接', topic: '主题链接', file: '本机文件链接', folder: '本机文件夹链接' }
 
 export const mainSheetId = 'ymd-root'
 export interface TopicLink { document?: string; sheet: string; topic?: string; bidirectional?: boolean }
@@ -10,6 +15,16 @@ const documentId = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/
 
 export function isExternalMapLink(value: unknown): value is string {
   return typeof value === 'string' && /^(https?:\/\/|mailto:)/i.test(value)
+}
+
+export function mapLinkType(value: unknown): LinkType {
+  if (readTopicLink(value)) return 'topic'
+  const location = readLocalMapUrl(value)
+  return location ? location.pathname.endsWith('/') ? 'folder' : 'file' : 'web'
+}
+
+export function xmindAddressLink(value: unknown) {
+  return isExternalMapLink(value) ? value : readLocalMapUrl(value)?.href
 }
 
 export function topicLinkUrl(link: TopicLink) {

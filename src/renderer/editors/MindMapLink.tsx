@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 import type { DocumentFile, Entry } from '../../shared/contracts'
+import { readLocalMapUrl } from '../../shared/localMapLinks'
 import { mapDocumentPath, mapDocumentSheets, registerMapDocument, registerMapTarget } from './mapDocumentLinks'
-import { isExternalMapLink, listMapTopics, mainSheetId, readTopicLink, topicLinkUrl } from './mapTopicLinks'
+import { isExternalMapLink, linkLabels, listMapTopics, mainSheetId, mapLinkType, readTopicLink, topicLinkUrl, type LinkType } from './mapTopicLinks'
 
-export type LinkType = 'web' | 'topic'
 export interface LinkSheet { id: string; title: string; topics: ReturnType<typeof listMapTopics> }
 
 export function MindMapLink({ initial, kind, current, currentPath, source, sheets, documents, readDocument, close, save }: {
@@ -19,7 +19,7 @@ export function MindMapLink({ initial, kind, current, currentPath, source, sheet
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(initialDocument === 'unavailable' ? '目标文档未关联。请选择文档。' : '')
   const request = useRef(0)
-  const [url, setUrl] = useState(previous ? '' : initial)
+  const [url, setUrl] = useState(() => mapLinkType(initial) === kind ? initial : '')
   const [sheetId, setSheetId] = useState(previous?.sheet ?? current)
   const [topic, setTopic] = useState(previous?.topic ?? '')
   const [bidirectional, setBidirectional] = useState(previous?.bidirectional ?? false)
@@ -34,6 +34,9 @@ export function MindMapLink({ initial, kind, current, currentPath, source, sheet
   const filter = query.trim().toLowerCase()
   const matches = filter ? available.filter(item => item.id === topic || item.title.toLowerCase().includes(filter)) : available
   const validWeb = isExternalMapLink(url.trim())
+  const local = kind === 'file' || kind === 'folder' ? readLocalMapUrl(url) : undefined
+  const selectedPath = local ? decodeURIComponent(local.pathname).replace(/^\/(?=[a-z]:\/)/i, '') : ''
+  const valid = !busy && (kind === 'topic' ? validTopic : kind === 'web' ? validWeb : !!local)
 
   function selectDocument(file: DocumentFile, keepTopic: boolean) {
     if (file.path === currentPath) { selectCurrentDocument(); return }
@@ -90,6 +93,21 @@ export function MindMapLink({ initial, kind, current, currentPath, source, sheet
     }
   }
 
+  async function browseLocation() {
+    if (kind !== 'file' && kind !== 'folder') return
+    const id = ++request.current
+    setBusy(true)
+    setError('')
+    try {
+      const next = await window.desktop.chooseLocalMapLocation(kind, url || undefined)
+      if (next && id === request.current) setUrl(next)
+    } catch (error) {
+      if (id === request.current) setError(String(error).replace(/^Error(?: invoking remote method '[^']+': Error)?: /, ''))
+    } finally {
+      if (id === request.current) setBusy(false)
+    }
+  }
+
   useEffect(() => {
     dialog.current?.showModal()
     if (kind === 'topic' && initialDocument && initialDocument !== 'unavailable' && initialDocument !== currentPath) {
@@ -110,13 +128,14 @@ export function MindMapLink({ initial, kind, current, currentPath, source, sheet
     onCancel={event => { event.preventDefault(); close() }}>
     <form onSubmit={event => {
       event.preventDefault()
-      if (kind === 'topic' && validTopic && !busy) saveTopic()
-      if (kind === 'web' && validWeb) save(url.trim())
+      if (!valid) return
+      if (kind === 'topic') saveTopic()
+      else save(url.trim())
     }}>
-      <h2 id="map-link-title">{kind === 'web' ? '网页链接' : '主题链接'}</h2>
+      <h2 id="map-link-title">{linkLabels[kind]}</h2>
       {kind === 'web'
         ? <label>网址<input type="url" placeholder="https://" value={url} autoFocus required onChange={event => setUrl(event.target.value)} /></label>
-        : <>
+        : kind === 'topic' ? <>
           <div className="map-link-document">
             <label>链接到文档<select value={destination} onChange={event => {
               if (event.target.value) void loadDocument(event.target.value)
@@ -131,7 +150,6 @@ export function MindMapLink({ initial, kind, current, currentPath, source, sheet
             <button type="button" className="tool-button" disabled={busy} onClick={() => void browseDocuments()}>浏览…</button>
           </div>
           {busy && <p className="map-link-status" role="status">正在读取文档…</p>}
-          {error && <p className="map-link-status" role="alert">{error}</p>}
           <label>链接到画布<select value={sheetId} disabled={busy || !candidates.length} onChange={event => {
             setSheetId(event.target.value)
             setTopic('')
@@ -149,11 +167,16 @@ export function MindMapLink({ initial, kind, current, currentPath, source, sheet
           </select></label>
           <label className="map-link-choice"><input type="checkbox" checked={!!topic && bidirectional} disabled={!topic || !validTopic}
             onChange={event => setBidirectional(event.target.checked)} />双向链接</label>
-        </>}
+        </> : <div className="map-link-document">
+          <label>{kind === 'folder' ? '文件夹路径' : '文件路径'}<input type="text" value={selectedPath} title={selectedPath}
+            placeholder={kind === 'folder' ? '尚未选择文件夹' : '尚未选择文件'} readOnly /></label>
+          <button type="button" className="tool-button" autoFocus disabled={busy} onClick={() => void browseLocation()}>浏览…</button>
+        </div>}
+      {error && <p className="map-link-status" role="alert">{error}</p>}
       <footer>
         {initial && <button className="map-link-remove" type="button" onClick={() => save('')}>移除链接</button>}
         <button type="button" onClick={close}>取消</button>
-        <button type="submit" className="primary" disabled={kind === 'web' ? !validWeb : busy || !validTopic}>保存</button>
+        <button type="submit" className="primary" disabled={!valid}>保存</button>
       </footer>
     </form>
   </dialog>

@@ -6,6 +6,7 @@ import { pathToFileURL } from 'node:url'
 import { defaultPreferences, markdownImageExtensions, searchEngines } from '../shared/contracts'
 import type { Command, ContextMenuItem, Desktop, Entry, FileKind, MarkdownImageUpload, Preferences } from '../shared/contracts'
 import { Files, fileKind } from './files'
+import { LocalMapLocations } from './localMapLocations'
 import { searchRoots } from './search'
 import { printView } from './printing'
 import { readReleaseStatus } from './releases'
@@ -109,6 +110,7 @@ void app.whenReady().then(async () => {
   })
   const data = app.getPath('userData')
   const settings = path.join(data, 'preferences.json')
+  const localMapLocations = new LocalMapLocations(path.join(data, 'map-locations.json'))
   try {
     preferences = normalizePreferences(JSON.parse(await readFile(settings, 'utf8')))
   } catch {
@@ -220,6 +222,9 @@ void app.whenReady().then(async () => {
     if (!['https:', 'http:', 'mailto:'].includes(url.protocol)) throw new Error('链接类型不受支持。')
     await shell.openExternal(url.href)
   })
+  handle('chooseLocalMapLocation', (kind: Parameters<LocalMapLocations['choose']>[1], previous?: string) =>
+    localMapLocations.choose(window!, kind, previous))
+  handle('openLocalMapLocation', (url: string) => localMapLocations.open(window!, url))
   handle('chooseMarkdownImages', async (file: string) => {
     const canonical = await files.authorizedFile(file)
     const result = await dialog.showOpenDialog(window!, {

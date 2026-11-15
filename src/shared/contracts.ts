@@ -1,3 +1,5 @@
+import type { MapLocationKind } from './localMapLinks'
+
 export type FileKind = 'markdown' | 'drawing'
 export type Scope = 'library' | 'project' | 'local'
 export type EditorMode = 'markdown' | 'outline' | 'map'
@@ -101,6 +103,8 @@ export interface Desktop {
   move(path: string, version: string): Promise<DocumentFile | null>
   trash(path: string, version: string): Promise<void>
   openExternal(url: string): Promise<void>
+  chooseLocalMapLocation(kind: MapLocationKind, previous?: string): Promise<string | null>
+  openLocalMapLocation(url: string): Promise<void>
   chooseMarkdownImages(path: string): Promise<MarkdownImageAttachment[]>
   importMarkdownImages(path: string, images: MarkdownImageUpload[]): Promise<MarkdownImageAttachment[]>
   pasteMarkdownClipboard(): Promise<void>
