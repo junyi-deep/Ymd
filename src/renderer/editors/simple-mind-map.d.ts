@@ -67,6 +67,7 @@ declare module 'simple-mind-map' {
     static extendNodeDataNoStylePropList(fields: string[]): void
     static usePlugin(plugin: unknown): typeof MindMap
     command: { originAddHistory(): void }
+    draw: { node: SVGGElement }
     renderer: {
       root: MapNode | null
       layout: MapLayout

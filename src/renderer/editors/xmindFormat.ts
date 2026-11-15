@@ -19,3 +19,9 @@ export const progressMarkers = ['task-start', 'task-oct', 'task-quarter', 'task-
   'task-5oct', 'task-3quar', 'task-7oct', 'task-done'] as const
 
 export const topicLinkExtension = 'org.ymd.topic-link'
+
+export const calloutShapeClasses: Record<string, string> = {
+  roundedRectangle: 'org.xmind.calloutTopicShape.balloon.roundedRect',
+  ellipse: 'org.xmind.calloutTopicShape.balloon.ellipse',
+  rectangle: 'org.xmind.calloutTopicShape.balloon.rect',
+}

@@ -41,7 +41,9 @@ export function readLegacyXmind(content: string, stylesheet?: string) {
     const childrenByType: Record<string, unknown> = {}
     for (const group of lists) {
       const type = attribute(group, 'type')
-      if (type === 'attached' || type === 'detached' || type === 'summary') childrenByType[type] = children(group, 'topic').map(node => topic(node, depth + 1))
+      if (type === 'attached' || type === 'detached' || type === 'summary' || type === 'callout') {
+        childrenByType[type] = children(group, 'topic').map(node => topic(node, depth + 1))
+      }
     }
     const image = child(element, 'img')
     const position = child(element, 'position')
@@ -51,6 +53,7 @@ export function readLegacyXmind(content: string, stylesheet?: string) {
     return {
       id: attribute(element, 'id'), title: title(element), style: styleFor(element),
       href: linked(element, 'href'), branch: attribute(element, 'branch'), structureClass: attribute(element, 'structure-class'),
+      width: child(element, 'title')?.getAttributeNS(svg, 'width') ?? undefined,
       ...(position ? { position: { x: Number(position.getAttributeNS(svg, 'x')), y: Number(position.getAttributeNS(svg, 'y')) } } : {}),
       notes: { plain: { content: plain?.textContent } },
       labels: children(child(element, 'labels'), 'label').map(label => label.textContent),

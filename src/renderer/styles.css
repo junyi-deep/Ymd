@@ -427,6 +427,11 @@ dialog button.primary { background: var(--accent); color: var(--accent-ink); }
 .image-size-help { margin-top: 7px; color: var(--muted); font-size: .9em; }
 #image-size-title ~ footer button:disabled { opacity: .5; cursor: default; }
 .map-canvas:focus { outline: none; }
+.ymd-callout { cursor: grab; touch-action: none; }
+.ymd-callout:active { cursor: grabbing; }
+.ymd-callout:focus-visible [data-callout-body] { stroke: var(--focus, var(--accent)); stroke-opacity: 1; stroke-width: 2; }
+.ymd-callout [data-callout-resize] { cursor: ew-resize; }
+.ymd-callout [data-callout-action] { cursor: pointer; }
 .map-task-dialog { width: min(460px, calc(100vw - 32px)); }
 .map-link-dialog { width: min(440px, calc(100vw - 32px)); }
 .map-link-dialog select[size] { padding-inline: 5px; }

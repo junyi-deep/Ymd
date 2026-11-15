@@ -3,9 +3,10 @@ import { markdownImageExtension, markdownImageExtensions } from '../../shared/co
 import { writeList, projectList, type Block } from './listProjection'
 import { audioTitle, readAudioNote } from './mapAudio'
 import { branchStructure, collectMapAppearance, defaultMapSettings, encodeImportedTopic, type MapData, type MapSheet } from './mapAppearance'
-import { progressMarkers, shapes, structures, styleKeys, topicLinkExtension } from './xmindFormat'
+import { calloutShapeClasses, progressMarkers, shapes, structures, styleKeys, topicLinkExtension } from './xmindFormat'
 import { isExternalMapLink, mainSheetId, topicLinkUrl, type TopicLink } from './mapTopicLinks'
 import { readLegacyXmind } from './xmindXml'
+import { calloutTopicId } from './mapCallouts'
 
 const MiB = 1024 * 1024
 const asRecord = (value: unknown) => value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
@@ -65,11 +66,13 @@ function styles(value: unknown) {
     const raw = properties[attribute]
     const parsed = key === 'fillColor' || key.toLowerCase().endsWith('color') ? color(raw)
       : /Width$|^fontSize$/.test(key) ? size(raw, 240)
-        : typeof raw === 'string' && raw.length <= 120 && !/[<>{};]/.test(raw) ? raw : undefined
+        : key === 'fontWeight' && typeof raw === 'number' && raw >= 100 && raw <= 900 ? String(raw)
+          : typeof raw === 'string' && raw.length <= 120 && !/[<>{};]/.test(raw) ? raw : undefined
     if (parsed !== undefined) data[key] = parsed === '$system$' ? 'system-ui' : parsed
   }
   const shape = string(properties['shape-class']).split('.').at(-1)
-  const key = entries(shapes).find(([, name]) => name === shape)?.[0]
+  const key = entries(calloutShapeClasses).find(([, name]) => name === properties['callout-shape-class'])?.[0] ??
+    entries(shapes).find(([, name]) => name === shape)?.[0]
   if (key) data.shape = key
   return data
 }
@@ -115,7 +118,8 @@ export async function importXmind(data: ArrayBuffer) {
     const unconverted = new Set<string>()
     const sheetTargets = new Map<string, TopicLink>()
     const topicTargets = new Map<string, TopicLink | null>()
-    const links: { node: MapData; destination: string; localTopics: Map<string, MapData>; sheet: string;
+    type ImportedTopic = { node: MapData; linkId: string }
+    const links: { node: MapData; origin: TopicLink; destination: string; localTopics: Map<string, ImportedTopic>;
       bidirectional: boolean; generated: boolean }[] = []
     let resourceBytes = 0
     let topicCount = 0
@@ -201,28 +205,38 @@ export async function importXmind(data: ArrayBuffer) {
       const sheetId = sheets.length ? crypto.randomUUID() : mainSheetId
       const originalSheet = string(rawSheet.id)
       if (originalSheet && !sheetTargets.has(originalSheet)) sheetTargets.set(originalSheet, { sheet: sheetId })
-      const ids = new Map<string, MapData>()
+      const ids = new Map<string, ImportedTopic>()
       let floating = 0
-      async function topic(raw: Record<string, unknown>, depth: number, detached = false): Promise<MapData> {
+      async function topic(raw: Record<string, unknown>, depth: number,
+        kind: 'attached' | 'detached' | 'callout' = 'attached', owner?: string): Promise<MapData> {
         if (++topicCount > 10000 || depth > 80 || !Object.hasOwn(raw, 'title') && !Object.hasOwn(raw, 'id')) {
           throw new Error('Xmind 主题无效，或数量与层级超过导入限制。')
         }
         const text = string(raw.title).replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, '')
-        const node: MapData = { data: { ...styles(raw.style), text, uid: crypto.randomUUID(), expand: raw.branch !== 'folded' }, children: [] }
+        const inherited = kind === 'callout' ? styles(asRecord(rawSheet.theme).calloutTopic) : {}
+        const uid = crypto.randomUUID()
+        const linkId = owner ? calloutTopicId(owner, uid) : uid
+        const node: MapData = { data: { ...inherited, ...styles(raw.style), text, uid, expand: raw.branch !== 'folded' }, children: [] }
         const id = string(raw.id)
         if (id && !ids.has(id)) {
-          ids.set(id, node)
-          topicTargets.set(id, topicTargets.has(id) ? null : { sheet: sheetId, topic: node.data.uid })
+          ids.set(id, { node, linkId })
+          topicTargets.set(id, topicTargets.has(id) ? null : { sheet: sheetId, topic: linkId })
         }
         const structure = layout(raw.structureClass)
         if (structure && depth) node.data.ymdStructure = structure
         if (!structure && raw.structureClass) unconverted.add('部分布局')
-        if (detached) {
+        if (kind === 'detached') {
           const position = asRecord(raw.position)
           node.data.ymdFloating = true
           node.data.customLeft = anchor + (Object.hasOwn(position, 'x') ? coordinate(position.x) : 300)
           node.data.customTop = anchor + (Object.hasOwn(position, 'y') ? coordinate(position.y) : -160 + 70 * floating)
           floating++
+        } else if (kind === 'callout') {
+          const position = asRecord(raw.position)
+          if (typeof position.x === 'number' && Number.isFinite(position.x)) node.data.calloutX = position.x
+          if (typeof position.y === 'number' && Number.isFinite(position.y)) node.data.calloutY = position.y
+          const width = size(raw.width ?? raw.customWidth, 640)
+          if (width) node.data.calloutWidth = width
         } else if (depth && Object.keys(asRecord(raw.position)).length) {
           unconverted.add('部分手动位置')
         }
@@ -251,17 +265,20 @@ export async function importXmind(data: ArrayBuffer) {
           const reference = topicHref.slice('xmind:#'.length)
           let destination = reference
           try { destination = decodeURIComponent(reference) } catch {}
-          links.push({ node, destination, localTopics: ids, sheet: sheetId,
+          links.push({ node, destination, localTopics: ids, origin: { sheet: sheetId, topic: linkId },
             bidirectional: supplemental?.bidirectional === true && supplemental.href === topicHref,
             generated: supplemental?.generated === true && supplemental.href === topicHref })
         }
         if (!href.startsWith('xmind:#')) await addAttachments(node, href)
+        if (kind === 'callout' && node.data.attachmentUrl && isExternalMapLink(supplemental?.href)) node.data.hyperlink = supplemental.href
         const children = asRecord(raw.children)
-        if (records(children.callout).length) unconverted.add('标注')
         const attached: MapData[] = []
         for (const child of records(children.attached)) attached.push(await topic(child, depth + 1))
         node.children = [...attached]
-        for (const child of records(children.detached)) node.children.push(await topic(child, depth + 1, true))
+        for (const child of records(children.detached)) node.children.push(await topic(child, depth + 1, 'detached'))
+        const callouts: MapData[] = []
+        for (const child of records(children.callout)) callouts.push(await topic(child, depth + 1, 'callout', uid))
+        if (callouts.length) node.data.ymdCallouts = callouts
         for (const boundary of records(raw.boundaries)) {
           const range = topicRange(boundary.range, attached)
           if (!range) continue
@@ -289,8 +306,8 @@ export async function importXmind(data: ArrayBuffer) {
         tree.data.customTop = anchor
       }
       for (const line of records(rawSheet.relationships)) {
-        const start = ids.get(string(line.end1Id))
-        const to = ids.get(string(line.end2Id))?.data.uid
+        const start = ids.get(string(line.end1Id))?.node
+        const to = ids.get(string(line.end2Id))?.node.data.uid
         if (!start || !to || start.data.uid === to) continue
         const targets = Array.isArray(start.data.associativeLineTargets) ? start.data.associativeLineTargets : []
         if (!targets.includes(to)) start.data.associativeLineTargets = [...targets, to]
@@ -304,10 +321,10 @@ export async function importXmind(data: ArrayBuffer) {
       if (sheets.length && activeSheet && originalSheet === activeSheet) active = sheetId
       sheets.push({ id: sheetId, title, settings, tree })
     }
-    const resolved = links.flatMap(({ node, destination, localTopics, sheet, bidirectional, generated }) => {
+    const resolved = links.flatMap(({ node, origin, destination, localTopics, bidirectional, generated }) => {
       const local = localTopics.get(destination)
-      const target = local ? { sheet, topic: local.data.uid } : topicTargets.get(destination) ?? sheetTargets.get(destination)
-      if (target) return [{ node, origin: { sheet, topic: node.data.uid }, target, bidirectional, generated }]
+      const target = local ? { sheet: origin.sheet, topic: local.linkId } : topicTargets.get(destination) ?? sheetTargets.get(destination)
+      if (target) return [{ node, origin, target, bidirectional, generated }]
       unconverted.add('失效的主题链接')
       return []
     })

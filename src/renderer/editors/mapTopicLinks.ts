@@ -1,4 +1,5 @@
 import type { MapData } from './mapAppearance'
+import { calloutTopicId, readCallouts } from './mapCallouts'
 
 export const mainSheetId = 'ymd-root'
 export interface TopicLink { sheet: string; topic?: string; bidirectional?: boolean }
@@ -28,6 +29,9 @@ export function readTopicLink(value: unknown): TopicLink | undefined {
 
 export function findTopic(tree: MapData, uid: string): MapData | undefined {
   if (tree.data.uid === uid) return tree
+  const owner = tree.data.uid
+  const callout = owner && readCallouts(tree.data.ymdCallouts).find(note => calloutTopicId(owner, note.data.uid) === uid)
+  if (callout) return callout
   for (const child of tree.children ?? []) {
     const found = findTopic(child, uid)
     if (found) return found
@@ -37,7 +41,13 @@ export function findTopic(tree: MapData, uid: string): MapData | undefined {
 export function listMapTopics(tree: MapData) {
   const topics: { id: string; title: string; depth: number }[] = []
   function visit(node: MapData, depth: number) {
-    if (node.data.uid) topics.push({ id: node.data.uid, title: node.data.text?.replace(/\s+/g, ' ').trim() || '未命名主题', depth })
+    const { uid, text } = node.data
+    if (uid) {
+      topics.push({ id: uid, title: text?.replace(/\s+/g, ' ').trim() || '未命名主题', depth })
+      for (const { data } of readCallouts(node.data.ymdCallouts)) {
+        topics.push({ id: calloutTopicId(uid, data.uid), title: '标注 · ' + data.text.replace(/\s+/g, ' ').trim(), depth: depth + 1 })
+      }
+    }
     node.children?.forEach(child => visit(child, depth + 1))
   }
   visit(tree, 0)
@@ -51,6 +61,7 @@ export function remapCopiedLinks(tree: MapData, source: string, destination: str
     if (link?.sheet === source && (link.topic ? copied.has(link.topic) : wholeSheet)) {
       node.data.hyperlink = topicLinkUrl({ ...link, sheet: destination })
     }
+    readCallouts(node.data.ymdCallouts).forEach(visit)
     node.children?.forEach(visit)
   }
   visit(tree)
@@ -59,11 +70,18 @@ export function remapCopiedLinks(tree: MapData, source: string, destination: str
 export function listBacklinks(sheets: { id: string; title: string; tree: MapData }[], target: TopicLink) {
   const links: { label: string; target: TopicLink }[] = []
   for (const sheet of sheets) {
+    function add(data: MapData['data'], uid: string) {
+      const link = readTopicLink(data.hyperlink)
+      if (link?.bidirectional && link.sheet === target.sheet && link.topic === target.topic) {
+        links.push({ label: sheet.title + ' · ' + (data.text?.replace(/\s+/g, ' ').trim() || '未命名主题'),
+          target: { sheet: sheet.id, topic: uid } })
+      }
+    }
     function visit(node: MapData) {
-      const link = readTopicLink(node.data.hyperlink)
-      if (node.data.uid && link?.bidirectional && link.sheet === target.sheet && link.topic === target.topic) {
-        links.push({ label: sheet.title + ' · ' + (node.data.text?.replace(/\s+/g, ' ').trim() || '未命名主题'),
-          target: { sheet: sheet.id, topic: node.data.uid } })
+      const { uid } = node.data
+      if (uid) {
+        add(node.data, uid)
+        for (const { data } of readCallouts(node.data.ymdCallouts)) add(data, calloutTopicId(uid, data.uid))
       }
       node.children?.forEach(visit)
     }

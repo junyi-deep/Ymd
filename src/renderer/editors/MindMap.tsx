@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { ChevronDown, ChevronsLeft, ClipboardList, CornerUpLeft, Crosshair, Download, Focus, FolderInput, GitBranch, GitFork, ImagePlus, ListTree, Map, Maximize, Mic, Minus, Paperclip, Plus, Redo2, Search, SlidersHorizontal, Square, Star, Sticker, StickyNote, Tag, Trash2, Undo2, X } from 'lucide-react'
+import { ChevronDown, ChevronsLeft, ClipboardList, CornerUpLeft, Crosshair, Download, Focus, FolderInput, GitBranch, GitFork, ImagePlus, ListTree, Map, Maximize, MessageSquare, Mic, Minus, Paperclip, Plus, Redo2, Search, SlidersHorizontal, Square, Star, Sticker, StickyNote, Tag, Trash2, Undo2, X } from 'lucide-react'
 import DOMPurify from 'dompurify'
 import MindMap from 'simple-mind-map'
 import AssociativeLine from 'simple-mind-map/src/plugins/AssociativeLine.js'
@@ -26,6 +26,9 @@ import { MarkdownMenu, type MenuItem } from './MarkdownMenu'
 import { branchStructure, decodeImportedTopic, defaultMapSettings, encodeImportedTopic, loadMapAppearance, mapTheme, palettes, rememberImportedSheet, restoreFloating, restoreMapStyles, saveMapAppearance, saveMapSheets, type MapAppearance, type MapData, type MapSettings, type MapSheet } from './mapAppearance'
 import { installBranchLayouts } from './mixedMapLayout'
 import { findTopic, listBacklinks, listMapTopics, mainSheetId, readTopicLink, remapCopiedLinks, type TopicLink } from './mapTopicLinks'
+import { installCallouts } from './calloutLayer'
+import { MindMapCalloutFormat, MindMapCalloutText } from './MindMapCallout'
+import { calloutById, calloutTopicId, readCallouts, type Callout, type CalloutTarget } from './mapCallouts'
 
 class MapAssociativeLine extends AssociativeLine {
   protected checkOverlapNode(x: number, y: number) {
@@ -39,11 +42,19 @@ class MapAssociativeLine extends AssociativeLine {
 }
 
 for (const plugin of [MapAssociativeLine, Drag, Export, ExportPDF, KeyboardNavigation, MiniMap, NodeImgAdjust, OuterFrame, RainbowLines, SearchPlugin, Select]) MindMap.usePlugin(plugin)
-MindMap.extendNodeDataNoStylePropList(['ymdMarker', 'ymdFloating', 'ymdTask', 'ymdStructure', 'ymdAudio', 'ymdOriginalImageSize'])
+MindMap.extendNodeDataNoStylePropList(['ymdMarker', 'ymdFloating', 'ymdTask', 'ymdStructure', 'ymdAudio', 'ymdOriginalImageSize', 'ymdCallouts'])
 
 type MapNode = NonNullable<MindMap['renderer']['root']>
 type TopicField = '备注' | '标签'
 const mapTitle = (name: string) => name.replace(/\.(?:md|markdown)$/i, '')
+
+function downloadAttachment(source: unknown, name: unknown) {
+  if (typeof source !== 'string' || !source.startsWith('data:application/octet-stream;base64,')) return
+  const anchor = document.createElement('a')
+  anchor.href = source
+  anchor.download = typeof name === 'string' ? name : '附件'
+  anchor.click()
+}
 
 function markdownTopicId(block: Block) {
   // A different topic at the same Markdown offset must not inherit links to the old one.
@@ -321,7 +332,7 @@ function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, upd
   const [version, setVersion] = useState(0)
   const [zen, setZen] = useState(false)
   const [linking, setLinking] = useState(false)
-  const [menu, setMenu] = useState<'export' | 'insert' | 'backlinks' | { x: number; y: number; image?: boolean; link?: boolean }>()
+  const [menu, setMenu] = useState<'export' | 'insert' | 'backlinks' | { x: number; y: number; image?: boolean; link?: boolean; callout?: CalloutTarget }>()
   const [artOpen, setArtOpen] = useState(false)
   const [query, setQuery] = useState('')
   const [replace, setReplace] = useState('')
@@ -330,7 +341,9 @@ function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, upd
   const [miniMap, setMiniMap] = useState<{ markup: string; viewport: Record<string, string> }>()
   const [matches, setMatches] = useState({ total: 0, currentIndex: -1 })
   const [field, setField] = useState<{ key: TopicField; node: MapNode; value: string }>()
-  const [linkEditor, setLinkEditor] = useState<{ node: MapNode; kind: LinkType }>()
+  const [linkEditor, setLinkEditor] = useState<{ node: MapNode; kind: LinkType; callout?: CalloutTarget }>()
+  const [selectedCallout, setSelectedCallout] = useState<CalloutTarget>()
+  const [calloutText, setCalloutText] = useState<{ target: CalloutTarget; note: Callout; add: boolean }>()
   const [taskNode, setTaskNode] = useState<MapNode>()
   const [audioParent, setAudioParent] = useState<MapNode>()
   const [error, setError] = useState('')
@@ -338,8 +351,9 @@ function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, upd
   const host = useRef<HTMLDivElement>(null)
   const artTrigger = useRef<HTMLButtonElement>(null)
   const resourceInput = useRef<HTMLInputElement>(null)
-  const resourceTarget = useRef<{ node: MapNode; image: boolean } | undefined>(undefined)
+  const resourceTarget = useRef<{ node: MapNode; image: boolean; callout?: CalloutTarget } | undefined>(undefined)
   const engine = useRef<MindMap | undefined>(undefined)
+  const calloutLayer = useRef<ReturnType<typeof installCallouts> | undefined>(undefined)
   const exporting = useRef(false)
   const fieldDialog = useRef<HTMLDialogElement>(null)
   const change = useRef(onChange)
@@ -354,9 +368,46 @@ function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, upd
 
   const backlinks = useMemo(() => {
     const map = engine.current
-    if (!map || selected.length !== 1) return []
-    return listBacklinks(linkWorkbook(map.getData()), { sheet: sheetId, topic: selected[0].uid })
-  }, [selected, linkWorkbook, sheetId, version])
+    const topic = selectedCallout ? calloutTopicId(selectedCallout.owner, selectedCallout.id)
+      : selected.length === 1 ? selected[0].uid : undefined
+    return map && topic ? listBacklinks(linkWorkbook(map.getData()), { sheet: sheetId, topic }) : []
+  }, [selected, selectedCallout, linkWorkbook, sheetId, version])
+
+  function readCallout(target: CalloutTarget) {
+    const owner = engine.current?.renderer.findNodeByUid(target.owner)
+    const note = owner && readCallouts(owner.getData('ymdCallouts')).find(item => item.data.uid === target.id)
+    return owner && note ? { owner, note } : undefined
+  }
+
+  function writeCallouts(owner: MapNode, list: Callout[]) {
+    const map = engine.current
+    if (!map) return
+    map.command.originAddHistory()
+    map.execCommand('SET_NODE_DATA', owner, { ymdCallouts: list.length ? list : null })
+    map.command.originAddHistory()
+    calloutLayer.current?.update()
+  }
+
+  function changeCallout(target: CalloutTarget, patch: Record<string, unknown>) {
+    const current = readCallout(target)
+    if (!current || !Object.entries(patch).some(([key, value]) => current.note.data[key] !== value)) return
+    const { owner, note } = current
+    writeCallouts(owner, readCallouts(owner.getData('ymdCallouts')).map(item =>
+      item.data.uid === target.id ? { ...note, data: { ...note.data, ...patch } } : item))
+  }
+
+  function editCallout(target: CalloutTarget) {
+    const current = readCallout(target)
+    if (current) setCalloutText({ target, note: current.note, add: false })
+  }
+
+  function removeCallout(target: CalloutTarget) {
+    const current = readCallout(target)
+    if (!current) return
+    writeCallouts(current.owner, readCallouts(current.owner.getData('ymdCallouts')).filter(item => item.data.uid !== target.id))
+    setSelectedCallout(undefined)
+    host.current?.focus()
+  }
 
   function openHyperlink(url: string) {
     const target = readTopicLink(url)
@@ -408,6 +459,17 @@ function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, upd
       return
     }
     engine.current = map
+    const callouts = installCallouts(map, {
+      select: target => {
+        setSelectedCallout(target)
+        setMenu(undefined)
+        if (!target) host.current?.focus()
+      },
+      edit: editCallout, remove: removeCallout, change: changeCallout, follow: openHyperlink,
+      menu: (callout, x, y) => setMenu({ x, y, callout }),
+      download: note => downloadAttachment(note.data.attachmentUrl, note.data.attachmentName),
+    })
+    calloutLayer.current = callouts
     const removeBranchLayouts = installBranchLayouts(map)
     const removeImageGestures = installTopicImageGestures(map, host.current)
     const onData = (node: MapData) => {
@@ -431,27 +493,22 @@ function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, upd
     }
     const context = (event: MouseEvent, node: MapNode) => {
       event.preventDefault()
+      setSelectedCallout(undefined)
       select(node, map.renderer.activeNodeList)
       setMenu({ x: event.clientX, y: event.clientY, image: isTopicImage(event.target),
         link: event.target instanceof Element && !!event.target.closest('a') && !!node.getData('hyperlink') })
     }
     const scale = (value: number) => setZoom(Math.round(value * 100))
     const syncLinkMode = () => setLinking(map.associativeLine.isCreatingLine)
+    const clearCalloutSelection = () => { setSelectedCallout(undefined); syncLinkMode() }
     const searchInfo = (info: typeof matches) => setMatches(info)
-    const download = (node: MapNode) => {
-      const source = node.getData('attachmentUrl')
-      if (typeof source !== 'string' || !source.startsWith('data:application/octet-stream;base64,')) return
-      const anchor = document.createElement('a')
-      anchor.href = source
-      anchor.download = String(node.getData('attachmentName') ?? '附件')
-      anchor.click()
-    }
+    const download = (node: MapNode) => downloadAttachment(node.getData('attachmentUrl'), node.getData('attachmentName'))
     map.on('data_change', onData)
     map.on('afterExecCommand', sync)
     map.on('node_active', select)
     map.on('node_contextmenu', context)
-    map.on('node_click', syncLinkMode)
-    map.on('draw_click', syncLinkMode)
+    map.on('node_click', clearCalloutSelection)
+    map.on('draw_click', clearCalloutSelection)
     map.on('contextmenu', syncLinkMode)
     map.on('scale', scale)
     map.on('search_info_change', searchInfo)
@@ -462,6 +519,8 @@ function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, upd
     return () => {
       resize.disconnect()
       audio.stop()
+      callouts.dispose()
+      calloutLayer.current = undefined
       removeImageGestures()
       removeBranchLayouts()
       registerFlush()
@@ -469,8 +528,8 @@ function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, upd
       map.off('data_change', onData)
       map.off('node_active', select)
       map.off('node_contextmenu', context)
-      map.off('node_click', syncLinkMode)
-      map.off('draw_click', syncLinkMode)
+      map.off('node_click', clearCalloutSelection)
+      map.off('draw_click', clearCalloutSelection)
       map.off('contextmenu', syncLinkMode)
       map.off('scale', scale)
       map.off('search_info_change', searchInfo)
@@ -481,6 +540,8 @@ function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, upd
     }
   }, [name, path, projection, registerFlush, appearance, initialSheet])
 
+  useEffect(() => { calloutLayer.current?.select(selectedCallout) }, [selectedCallout])
+
   useEffect(() => {
     const map = engine.current
     if (!jump || !map) return
@@ -488,7 +549,8 @@ function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, upd
     map.render(() => {
       if (canceled || engine.current !== map) return
       const tree = map.getData()
-      const uid = jump.topic ?? tree.data.uid
+      const callout = jump.topic ? calloutById(tree, jump.topic) : undefined
+      const uid = callout?.owner ?? jump.topic ?? tree.data.uid
       if (!uid || !findTopic(tree, uid)) {
         setNotice('链接指向的主题已删除或无法定位。')
         return
@@ -498,7 +560,11 @@ function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, upd
         const target = map.renderer.findNodeByUid(uid)
         if (target) {
           target.active()
-          map.renderer.moveNodeToCenter(target, false)
+          setSelectedCallout(callout)
+          if (callout) {
+            calloutLayer.current?.update()
+            calloutLayer.current?.reveal(callout)
+          } else map.renderer.moveNodeToCenter(target, false)
         }
       })
     })
@@ -527,7 +593,7 @@ function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, upd
   useEffect(() => {
     if (!zen && !linking && !searchOpen && !formatOpen && !artOpen) return
     const escape = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape' || event.isComposing || event.defaultPrevented || field || linkEditor || taskNode || audioParent ||
+      if (event.key !== 'Escape' || event.isComposing || event.defaultPrevented || field || linkEditor || taskNode || audioParent || calloutText ||
           event.target instanceof HTMLElement && event.target.closest('.smm-node-edit-wrap, .document-menu')) return
       if (linking) { engine.current?.associativeLine.cancelCreateLine(); setLinking(false) }
       else if (searchOpen) { setQuery(''); setReplace(''); setSearchOpen(false); engine.current?.search.endSearch() }
@@ -541,21 +607,23 @@ function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, upd
     }
     window.addEventListener('keydown', escape)
     return () => window.removeEventListener('keydown', escape)
-  }, [zen, linking, searchOpen, formatOpen, artOpen, field, linkEditor, taskNode, audioParent])
+  }, [zen, linking, searchOpen, formatOpen, artOpen, field, linkEditor, taskNode, audioParent, calloutText])
 
   useEffect(() => {
-    const source = selected.length === 1 ? selected[0] : undefined
-    if (!source || source.isGeneralization || readAudioNote(source.getData('ymdAudio')) || linkEditor || field || taskNode || audioParent) return
+    const current = selectedCallout && readCallout(selectedCallout)
+    const source = current?.owner ?? (selected.length === 1 ? selected[0] : undefined)
+    if (!source || source.isGeneralization || readAudioNote(source.getData('ymdAudio')) || linkEditor || field || taskNode || audioParent || calloutText) return
     const editLink = (event: KeyboardEvent) => {
       if (event.defaultPrevented || event.isComposing || event.altKey || !(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== 'k' ||
           !(event.target instanceof Element) || event.target.closest('input, textarea, select, [contenteditable], dialog, .document-menu') ||
           (event.target !== document.body && !host.current?.contains(event.target))) return
       event.preventDefault()
-      setLinkEditor({ node: source, kind: readTopicLink(source.getData('hyperlink')) ? 'topic' : 'web' })
+      const href = current ? current.note.data.hyperlink : source.getData('hyperlink')
+      setLinkEditor({ node: source, callout: current ? selectedCallout : undefined, kind: readTopicLink(href) ? 'topic' : 'web' })
     }
     window.addEventListener('keydown', editLink)
     return () => window.removeEventListener('keydown', editLink)
-  }, [selected, linkEditor, field, taskNode, audioParent])
+  }, [selected, selectedCallout, linkEditor, field, taskNode, audioParent, calloutText])
 
   useEffect(() => {
     const map = engine.current
@@ -601,11 +669,33 @@ function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, upd
   }
 
   const command = (name: string, ...args: unknown[]) => engine.current?.execCommand(name, ...args)
-  const node = selected[0]
+  const activeCallout = selectedCallout && readCallout(selectedCallout)
+  const contextCallout = typeof menu === 'object' ? menu.callout : undefined
+  const menuCallout = contextCallout && readCallout(contextCallout)
+  const dialogCallout = linkEditor?.callout && readCallout(linkEditor.callout)
+  const node = activeCallout ? undefined : selected[0]
   const audioNote = readAudioNote(node?.getData('ymdAudio'))
-  const canRemove = selected.some(item => !item.isRoot)
+  const canRemove = !!node && selected.some(item => !item.isRoot)
   const canLink = selected.length === 1 && !!node && !node.isGeneralization && !audioNote
   const currentLink = node?.getData('hyperlink')
+
+  function addCallout() {
+    if (!canLink || !node) return
+    const target = { owner: node.uid, id: crypto.randomUUID() }
+    setCalloutText({ target, note: { data: { uid: target.id, text: '标注' } }, add: true })
+  }
+
+  function saveCalloutText(text: string) {
+    if (!calloutText) return
+    const { target, note, add } = calloutText
+    if (add) {
+      const owner = engine.current?.renderer.findNodeByUid(target.owner)
+      if (owner) writeCallouts(owner, [...readCallouts(owner.getData('ymdCallouts')), { data: { ...note.data, text } }])
+    } else changeCallout(target, { text })
+    setCalloutText(undefined)
+    setSelectedCallout(target)
+    requestAnimationFrame(() => calloutLayer.current?.select(target, true))
+  }
 
   function add(sibling: boolean) {
     const map = engine.current
@@ -705,9 +795,10 @@ function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, upd
       .catch(error => setNotice(error instanceof Error ? error.message : '无法另存录音。'))
   }
 
-  function chooseResource(image: boolean) {
-    if (!node || !resourceInput.current) return
-    resourceTarget.current = { node, image }
+  function chooseResource(image: boolean, callout?: CalloutTarget) {
+    const owner = callout ? readCallout(callout)?.owner : node
+    if (!owner || !resourceInput.current) return
+    resourceTarget.current = { node: owner, image, callout }
     resourceInput.current.accept = image ? 'image/png,image/jpeg,image/gif,image/webp,image/avif,image/bmp' : ''
     resourceInput.current.value = ''
     resourceInput.current.click()
@@ -720,11 +811,13 @@ function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, upd
     const selected = () => engine.current?.renderer.activeNodeList.includes(target.node)
     const reader = new FileReader()
     reader.addEventListener('load', () => {
-      if (!selected()) return
+      if (!target.callout && !selected()) return
       const source = String(reader.result)
       if (!target.image) {
         const safeName = file.name.replace(/[<>:"/\\|?*]/g, '_').replace(/&/g, '与')
-        command('SET_NODE_ATTACHMENT', target.node, source.replace(/^data:[^;]*;/, 'data:application/octet-stream;'), safeName)
+        const attachmentUrl = source.replace(/^data:[^;]*;/, 'data:application/octet-stream;')
+        if (target.callout) changeCallout(target.callout, { attachmentUrl, attachmentName: safeName })
+        else command('SET_NODE_ATTACHMENT', target.node, attachmentUrl, safeName)
         return
       }
       if (!/^data:image\/(png|jpeg|gif|webp|avif|bmp);base64,/i.test(source)) { setNotice('图片格式不受支持。'); return }
@@ -752,6 +845,7 @@ function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, upd
     { label: '概要', icon: <ListTree size={16} />, disabled: !canRemove, run: () => command('ADD_GENERALIZATION') },
     { label: '任务', icon: <ClipboardList size={16} />, disabled: !node, separator: true, run: () => setTaskNode(node) },
     { label: '备注', icon: <StickyNote size={16} />, disabled: !node, separator: true, run: () => fieldFor('备注') },
+    { label: '标注', icon: <MessageSquare size={16} />, disabled: !canLink, run: addCallout },
     { label: audioTitle, icon: <Mic size={16} />, disabled: !node || !!audioNote || !!node.isGeneralization || selected.length !== 1,
       run: () => setAudioParent(node) },
     { label: '标签', icon: <Tag size={16} />, disabled: !node, run: () => fieldFor('标签') },
@@ -781,13 +875,25 @@ function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, upd
     } finally { exporting.current = false }
   }
 
+  async function exportDocument(format: string) {
+    const map = engine.current
+    if (!map || exporting.current) return
+    exporting.current = true
+    const callouts = calloutLayer.current
+    try {
+      callouts?.controls(false)
+      await map.export(format, true, sheet?.title ?? mapTitle(name))
+    } catch { setNotice('导出失败。') }
+    finally { callouts?.controls(true); exporting.current = false }
+  }
+
   const exportItems: MenuItem[] = [
     multipleSheets ? { label: 'Xmind 文件', children: [
       { label: '全部画布', run: () => void exportWorkbook(true) },
       { label: '当前画布', run: () => void exportWorkbook(false) },
     ] } : { label: 'Xmind 文件', run: () => void exportWorkbook(false) },
     ...[['png', 'PNG 图片'], ['svg', 'SVG 矢量图'], ['pdf', 'PDF'], ['md', 'Markdown'], ['txt', '纯文本']].map(([format, label]) => ({
-      label, run: () => { void engine.current?.export(format, true, sheet?.title ?? mapTitle(name)).catch(() => setNotice('导出失败。')) },
+      label, run: () => { void exportDocument(format) },
     })),
   ]
   const imageItems: MenuItem[] = node?.getData('image') && engine.current ? [
@@ -810,7 +916,21 @@ function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, upd
       if (!followLink.current(target)) setNotice('反向链接的来源已删除，或无法定位。')
     },
   }))
-  const contextItems: MenuItem[] = typeof menu === 'object' && menu.image && imageItems.length ? imageItems
+  const contextItems: MenuItem[] = contextCallout && menuCallout ? [
+    { label: '编辑标注', run: () => editCallout(contextCallout) },
+    { label: '标注格式', run: () => { setArtOpen(false); setFormatOpen(true) } },
+    { label: '链接', children: [
+      ...(['web', 'topic'] as const).map(kind => ({ label: kind === 'web' ? '网页链接' : '主题链接',
+        run: () => setLinkEditor({ node: menuCallout.owner, kind, callout: contextCallout }) })),
+      ...(menuCallout.note.data.hyperlink ? [{ label: '移除链接', run: () => changeCallout(contextCallout, { hyperlink: '' }) }] : []),
+    ] },
+    { label: '附件', icon: <Paperclip size={16} />, run: () => chooseResource(false, contextCallout) },
+    ...(menuCallout.note.data.attachmentUrl ? [{ label: '移除附件',
+      run: () => changeCallout(contextCallout, { attachmentUrl: '', attachmentName: '' }) }] : []),
+    ...(backlinks.length ? [{ label: '反向链接', children: backlinkItems }] : []),
+    { label: '恢复位置', run: () => changeCallout(contextCallout, { calloutX: null, calloutY: null }) },
+    { label: '删除标注', icon: <Trash2 size={16} />, separator: true, run: () => removeCallout(contextCallout) },
+  ] : typeof menu === 'object' && menu.image && imageItems.length ? imageItems
     : typeof menu === 'object' && menu.link && linkItems.length ? linkItems : audioNote ? [
     { label: '另存录音…', icon: <Download size={16} />, run: () => saveAudioToFile(audioNote) },
     { label: '删除录音', icon: <Trash2 size={16} />, run: () => command('REMOVE_NODE') },
@@ -846,7 +966,8 @@ function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, upd
           <button className="tool-button" aria-haspopup="menu" aria-expanded={menu === 'insert'} onClick={() => setMenu(menu === 'insert' ? undefined : 'insert')}><Plus size={16} />插入</button>
           {menu === 'insert' && <MarkdownMenu items={insertItems} close={closeMenu} />}
         </div>
-        <button className="icon-button" aria-label="删除主题" disabled={!canRemove} onClick={() => command('REMOVE_NODE')}><Trash2 size={16} /></button>
+        <button className="icon-button" aria-label={activeCallout ? '删除标注' : '删除主题'} disabled={!activeCallout && !canRemove}
+          onClick={() => activeCallout && selectedCallout ? removeCallout(selectedCallout) : command('REMOVE_NODE')}><Trash2 size={16} /></button>
       </div>
       <div className="map-toolbar-group map-toolbar-trailing">
         <button ref={artTrigger} className="icon-button" title="贴纸与插图" aria-label="贴纸与插图" aria-expanded={artOpen}
@@ -917,7 +1038,10 @@ function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, upd
         target={topicAcceptsArt(node) ? String(node?.getData('text') || '未命名主题') : undefined}
         apply={art => { if (engine.current && node) applyArt(engine.current, node, art) }}
         close={() => { setArtOpen(false); artTrigger.current?.focus() }} />}
-      {!zen && !artOpen && formatOpen && <MindMapFormat {...{ tab, settings, node, version }} change={changeSettings} onTab={setTab}
+      {!zen && !artOpen && formatOpen && (activeCallout && selectedCallout ? <MindMapCalloutFormat
+        key={selectedCallout.id} note={activeCallout.note} close={() => setFormatOpen(false)}
+        edit={() => editCallout(selectedCallout)} change={patch => changeCallout(selectedCallout, patch)} />
+        : <MindMapFormat {...{ tab, settings, node, version }} change={changeSettings} onTab={setTab}
         structure={value => {
           if (node?.isRoot && value) changeSettings({ layout: value })
           else if (node && branchStructure(node.getData('ymdStructure')) !== value) {
@@ -936,7 +1060,7 @@ function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, upd
             if (key === 'reset') command('REMOVE_CUSTOM_STYLES', node)
             else command('SET_NODE_STYLE', node, key, value)
           }
-        }} />}
+        }} />)}
     </div>
     {typeof menu === 'object' && <MarkdownMenu items={contextItems} close={closeMenu} point={menu} nativeStyle />}
     {audioParent && <MindMapRecorder title={String(audioParent.getData('text') ?? '')}
@@ -947,12 +1071,15 @@ function MapCanvas({ text, name, path, dark, onChange, registerFlush, sheet, upd
         engine.current?.renderer.setNodeDataRender(taskNode, { ymdTask: task })
         setTaskNode(undefined)
       }} />}
+    {calloutText && <MindMapCalloutText initial={calloutText.note.data.text} add={calloutText.add}
+      close={() => setCalloutText(undefined)} save={saveCalloutText} />}
     {linkEditor && <MindMapLink
-      initial={String(linkEditor.node.getData('hyperlink') ?? '')} kind={linkEditor.kind}
-      current={sheetId} source={linkEditor.node.uid}
+      initial={String((linkEditor.callout ? dialogCallout?.note.data.hyperlink : linkEditor.node.getData('hyperlink')) ?? '')} kind={linkEditor.kind}
+      current={sheetId} source={linkEditor.callout ? calloutTopicId(linkEditor.callout.owner, linkEditor.callout.id) : linkEditor.node.uid}
       sheets={linkEditor.kind === 'topic' ? availableLinkSheets() : []}
       close={() => setLinkEditor(undefined)} save={value => {
-        setNodeLink(linkEditor.node, value)
+        if (linkEditor.callout) changeCallout(linkEditor.callout, { hyperlink: value })
+        else setNodeLink(linkEditor.node, value)
         setLinkEditor(undefined)
       }} />}
     <dialog ref={fieldDialog} onCancel={event => { event.preventDefault(); setField(undefined) }}>

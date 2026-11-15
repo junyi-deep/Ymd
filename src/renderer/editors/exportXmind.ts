@@ -1,14 +1,15 @@
 import JSZip from 'jszip'
 import { branchStructure, mapTheme, palettes, type MapData, type MapSheet } from './mapAppearance'
 import { loadAudio, readAudioNote } from './mapAudio'
-import { progressMarkers, shapes, structures, styleKeys, topicLinkExtension } from './xmindFormat'
+import { calloutShapeClasses, progressMarkers, shapes, structures, styleKeys, topicLinkExtension } from './xmindFormat'
 import { isExternalMapLink, readTopicLink, type TopicLink } from './mapTopicLinks'
+import { calloutDefaults, calloutTopicId, readCallouts } from './mapCallouts'
 
 type Sheet = Pick<MapSheet, 'id' | 'title' | 'settings' | 'tree'>
 type Properties = Record<string, string>
 type Topic = {
   id: string; class: 'topic'; title: string; structureClass?: string
-  position?: { x: number; y: number }; branch?: 'folded'
+  position?: { x: number; y: number }; branch?: 'folded'; width?: number
   style?: { id: string; properties: Properties }; href?: string
   notes?: { plain: { content: string } }; labels?: string[]
   image?: { src: string; width: number; height: number; align?: string }; markers?: { markerId: string }[]
@@ -16,7 +17,7 @@ type Topic = {
   boundaries?: { id: string; class: 'boundary'; title: string; range: string }[]
   extensions?: { provider: string; content: ({ duration: number } | { href: string; bidirectional?: true; generated?: true })[];
     resourceRefs: string[] }[]
-  children?: { attached?: Topic[]; detached?: Topic[]; summary?: Topic[] }
+  children?: { attached?: Topic[]; detached?: Topic[]; summary?: Topic[]; callout?: Topic[] }
 }
 
 const pixels = new Set(['fontSize', 'lineWidth', 'borderWidth'])
@@ -49,7 +50,7 @@ export async function exportXmind(sheets: Sheet[], active: string, dark: boolean
     const theme = mapTheme(sheet.settings, dark)
     const palette = palettes[sheet.settings.palette] ?? palettes.ocean
 
-    function topic(node: MapData, depth: number, branch: number): Topic {
+    function topic(node: MapData, depth: number, branch: number, callout?: string): Topic {
       const { data } = node
       const output: Topic = { id: id(), class: 'topic', title: data.text ?? '' }
       topicsById.set(output.id, output)
@@ -62,14 +63,18 @@ export async function exportXmind(sheets: Sheet[], active: string, dark: boolean
         }
         output.extensions = [{ provider: 'org.xmind.ui.audionotes', content: [{ duration: Math.round(audio.duration * 1000) }], resourceRefs: [ref] }]
       }
-      if (data.uid) ids.set(data.uid, output.id)
+      const linkId = callout ?? data.uid
+      if (linkId) ids.set(linkId, output.id)
       const structure = depth === 0 ? branchStructure(sheet.settings.layout) ?? 'mindMap' : branchStructure(data.ymdStructure)
       if (structure) output.structureClass = structures[structure]
       if (data.expand === false && node.children?.length) output.branch = 'folded'
-      if (data.ymdFloating === true && number(data.customLeft) && number(data.customTop)) {
+      if (callout) {
+        if (number(data.calloutX) && number(data.calloutY)) output.position = { x: Number(data.calloutX), y: Number(data.calloutY) }
+        if (number(data.calloutWidth)) output.width = Number(data.calloutWidth)
+      } else if (data.ymdFloating === true && number(data.customLeft) && number(data.customTop)) {
         output.position = { x: Number(data.customLeft) - Number(rootPosition.customLeft ?? 0), y: Number(data.customTop) - Number(rootPosition.customTop ?? 0) }
       }
-      const appearance: Record<string, unknown> = { ...(depth === 0 ? theme.root : depth === 1 ? theme.second : theme.node),
+      const appearance: Record<string, unknown> = { ...(callout ? calloutDefaults : depth === 0 ? theme.root : depth === 1 ? theme.second : theme.node),
         lineWidth: theme.lineWidth, lineColor: sheet.settings.colored && depth ? palette.colors[branch % palette.colors.length] : theme.lineColor,
         ...data }
       const properties: Properties = {}
@@ -77,13 +82,21 @@ export async function exportXmind(sheets: Sheet[], active: string, dark: boolean
         const value = key === 'fontFamily' && appearance[key] === 'system-ui' ? '$system$' : appearance[key]
         if (typeof value === 'string' || number(value)) properties[attribute] = String(value) + (pixels.has(key) && typeof value === 'number' ? 'pt' : '')
       }
-      if (typeof data.shape === 'string' && Object.hasOwn(shapes, data.shape)) properties['shape-class'] = 'org.xmind.topicShape.' + shapes[data.shape]
+      if (callout) {
+        const shape = typeof data.shape === 'string' && Object.hasOwn(calloutShapeClasses, data.shape) ? data.shape : calloutDefaults.shape
+        properties['callout-shape-class'] = calloutShapeClasses[shape]
+      } else if (typeof data.shape === 'string' && Object.hasOwn(shapes, data.shape)) properties['shape-class'] = 'org.xmind.topicShape.' + shapes[data.shape]
       output.style = { id: id(), properties }
       if (typeof data.note === 'string' && data.note) output.notes = { plain: { content: data.note } }
       const attachment = typeof data.attachmentUrl === 'string' && /^data:application\/octet-stream;base64,([A-Za-z0-9+/=]+)$/.exec(data.attachmentUrl)
       if (attachment) {
         const name = String(data.attachmentName ?? '附件').replace(/[<>:"/\\|?*\u0000-\u001f]/g, '_').slice(0, 160).replace(/^[.]+|[. ]+$/g, '')
         output.href = resource('', attachment[1], name || '附件')
+        if (callout && isExternalMapLink(data.hyperlink)) {
+          output.extensions = [...(output.extensions ?? []), {
+            provider: topicLinkExtension, content: [{ href: data.hyperlink }], resourceRefs: [],
+          }]
+        }
       } else if (isExternalMapLink(data.hyperlink)) output.href = data.hyperlink
       const target = readTopicLink(data.hyperlink)
       if (target) links.push({ output, target })
@@ -154,6 +167,11 @@ export async function exportXmind(sheets: Sheet[], active: string, dark: boolean
       if (summaries.length) {
         output.children = { ...output.children, summary }
         output.summaries = summaries
+      }
+      const callouts = readCallouts(data.ymdCallouts)
+      if (data.uid && callouts.length) {
+        const owner = data.uid
+        output.children = { ...output.children, callout: callouts.map(note => topic(note, depth + 1, branch, calloutTopicId(owner, note.data.uid))) }
       }
       return output
     }
