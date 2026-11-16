@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type { Command, Desktop } from '../shared/contracts'
+import type { PitchDesktop } from '../shared/pitch'
 
 const desktop: Desktop = {
   initialize: () => ipcRenderer.invoke('ymd:initialize'),
@@ -38,6 +39,7 @@ const desktop: Desktop = {
   captureMapShot: rect => ipcRenderer.invoke('ymd:captureMapShot', rect),
   outputMapShot: (data, name) => ipcRenderer.invoke('ymd:outputMapShot', data, name),
   saveMapExport: (name, format, data) => ipcRenderer.invoke('ymd:saveMapExport', name, format, data),
+  openPitch: request => ipcRenderer.invoke('ymd:openPitch', request),
   printDocument: (name, html) => ipcRenderer.invoke('ymd:printDocument', name, html),
   saveCopy: (path, text) => ipcRenderer.invoke('ymd:saveCopy', path, text),
   reveal: (path, directory) => ipcRenderer.invoke('ymd:reveal', path, directory),
@@ -58,4 +60,24 @@ const desktop: Desktop = {
   },
 }
 
-contextBridge.exposeInMainWorld('desktop', desktop)
+if (new URLSearchParams(location.search).has('pitch')) {
+  let lastFullscreen: boolean | undefined
+  const fullscreenListeners = new Set<(enabled: boolean) => void>()
+  ipcRenderer.on('ymd:pitch:fullscreenChanged', (_event: unknown, enabled: boolean) => {
+    lastFullscreen = enabled
+    fullscreenListeners.forEach(listener => listener(enabled))
+  })
+  const pitch: PitchDesktop = {
+    load: () => ipcRenderer.invoke('ymd:pitch:load'),
+    fullscreen: enabled => ipcRenderer.invoke('ymd:pitch:fullscreen', enabled),
+    onFullscreen: callback => {
+      fullscreenListeners.add(callback)
+      if (lastFullscreen !== undefined) callback(lastFullscreen)
+      return () => { fullscreenListeners.delete(callback) }
+    },
+    close: () => ipcRenderer.invoke('ymd:pitch:close'),
+    savePowerPoint: (name, data) => ipcRenderer.invoke('ymd:pitch:savePowerPoint', name, data),
+    savePdf: (name, html) => ipcRenderer.invoke('ymd:pitch:savePdf', name, html),
+  }
+  contextBridge.exposeInMainWorld('pitch', pitch)
+} else contextBridge.exposeInMainWorld('desktop', desktop)

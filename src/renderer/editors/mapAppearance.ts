@@ -1,3 +1,4 @@
+import type { PitchOptions } from '../../shared/pitch'
 import type MindMap from 'simple-mind-map'
 import { readAudioNote } from './mapAudio'
 
@@ -32,6 +33,7 @@ export interface MapSettings {
   lineStyle?: 'curve' | 'straight' | 'direct'
   compact?: boolean
   colored: boolean
+  pitch?: PitchOptions
 }
 
 interface StoredStyle {

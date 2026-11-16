@@ -42,6 +42,7 @@
     "marked": "^18.2.0",
     "marked-footnote": "^1.4.0",
     "pele": "^1.13.0",
+    "pptxgenjs": "^4.0.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "simple-mind-map": "^0.14.0-fix.3",

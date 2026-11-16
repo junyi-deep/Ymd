@@ -1,4 +1,5 @@
 import type { MapLocationKind } from './localMapLinks'
+import type { PitchRequest } from './pitch'
 import type { AppShortcut, ShortcutOverrides } from './shortcuts'
 
 export type FileKind = 'markdown' | 'drawing'
@@ -160,6 +161,7 @@ export interface Desktop {
   captureMapShot(rect: MapShotRect): Promise<ArrayBuffer>
   outputMapShot(data: ArrayBuffer, name?: string): Promise<boolean>
   saveMapExport(name: string, format: MapExportKind, data: ArrayBuffer): Promise<boolean>
+  openPitch(request: PitchRequest): Promise<void>
   printDocument(name: string, html: string): Promise<void>
   saveCopy(path: string, text: string): Promise<DocumentFile | null>
   reveal(path: string, directory?: boolean): Promise<void>

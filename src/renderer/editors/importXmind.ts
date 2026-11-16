@@ -1,5 +1,6 @@
 import { Uint8ArrayReader, ZipReader, type FileEntry } from '@zip.js/zip.js'
 import { markdownImageExtension, markdownImageExtensions } from '../../shared/contracts'
+import { pitchExtension, readPitchOptions, readPitchTopic } from '../../shared/pitch'
 import { writeList, projectList, type Block } from './listProjection'
 import { audioTitle, readAudioNote } from './mapAudio'
 import { branchStructure, collectMapAppearance, defaultMapSettings, encodeImportedTopic, type MapData, type MapSheet } from './mapAppearance'
@@ -269,6 +270,8 @@ export async function importXmind(data: ArrayBuffer) {
         })
         if (icons.length) node.data.icon = icons
         const extensions = records(raw.extensions)
+        const pitch = extensions.find(extension => extension.provider === pitchExtension)
+        if (pitch) node.data.ymdPitch = readPitchTopic(pitch.content)
         const numbering = extensions.find(extension => extension.provider === numberingExtension)
         if (numbering) {
           const content = asRecord(numbering.content)
@@ -374,8 +377,9 @@ export async function importXmind(data: ArrayBuffer) {
         if (title) start.data.associativeLineText = { ...asRecord(start.data.associativeLineText), [to]: title }
       }
       const background = color(asRecord(asRecord(rawSheet.style).properties)['svg:fill'])
+      const pitch = records(rawSheet.extensions).find(extension => extension.provider === pitchExtension)
       const settings = { ...defaultMapSettings, layout: layout(rawRoot.structureClass) ?? defaultMapSettings.layout,
-        ...(background ? { background } : {}), colored: false }
+        ...(background ? { background } : {}), ...(pitch ? { pitch: readPitchOptions(pitch.content) } : {}), colored: false }
       const title = string(rawSheet.title) || string(rawSheet.sheetTitle) || tree.data.text || '画布 ' + (sheets.length + 1)
       if (sheets.length && activeSheet && originalSheet === activeSheet) active = sheetId
       sheets.push({ id: sheetId, title, settings, tree })

@@ -1,4 +1,5 @@
 import JSZip from 'jszip'
+import { pitchExtension, readPitchOptions, readPitchTopic } from '../../shared/pitch'
 import { branchStructure, mapTheme, palettes, type MapData, type MapSheet } from './mapAppearance'
 import { loadAudio, readAudioNote } from './mapAudio'
 import { calloutShapeClasses, progressMarkers, shapes, structures, styleKeys, topicLinkExtension } from './xmindFormat'
@@ -71,6 +72,7 @@ export async function exportXmind(sheets: Sheet[], active: string, dark: boolean
       if (linkId) ids.set(linkId, output.id)
       const numbering = readNumbering(data.ymdNumbering)
       if (numbering) output.extensions = [...(output.extensions ?? []), { provider: numberingExtension, content: numbering }]
+      if (data.ymdPitch) output.extensions = [...(output.extensions ?? []), { provider: pitchExtension, content: readPitchTopic(data.ymdPitch) }]
       const task = readTask(data.ymdTask)
       const todo = readTodo(data.ymdTodo)
       if (task) tasks.push({ output, task })
@@ -196,8 +198,13 @@ export async function exportXmind(sheets: Sheet[], active: string, dark: boolean
       const to = ids.get(connection.target)
       return to ? [{ id: id(), class: 'relationship', end1Id: connection.source, end2Id: to, title: connection.title }] : []
     })
+    const extensions = [
+      ...(calendar ? [encodeXmindCalendar(calendar, id)] : []),
+      ...(sheet.settings.pitch ? [{ provider: pitchExtension, content: readPitchOptions(sheet.settings.pitch) }] : []),
+    ]
     return { id: sheetId, class: 'sheet', title: sheet.title, rootTopic, relationships, topicPositioning: 'fixed',
-      ...(calendar ? { nonWorkingDaysSkipping: calendar.enabled ? 'skip' : 'include', extensions: [encodeXmindCalendar(calendar, id)] } : {}),
+      ...(calendar ? { nonWorkingDaysSkipping: calendar.enabled ? 'skip' : 'include' } : {}),
+      ...(extensions.length ? { extensions } : {}),
       style: { id: id(), properties: { 'svg:fill': theme.backgroundColor } } }
   })
   const reverse: { sourceId: string; destination: Topic }[] = []

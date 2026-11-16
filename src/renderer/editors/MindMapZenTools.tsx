@@ -86,6 +86,7 @@ export function MindMapZenTools({ platform, overrides, tool, onTool, appearance,
     ['编辑主题链接', shortcutValue(overrides, 'map-link', platform)],
     ['仅显示分支／显示全部内容', shortcutValue(overrides, 'map-branch', platform)],
     ['导图截图', shortcutValue(overrides, 'map-shot', platform)], ['退出专注', 'Escape'],
+    ['开始演示', shortcutValue(overrides, 'map-pitch', platform)],
   ]
   return <div className="map-zen-tools" role="group" aria-label="专注工具">
     <div className="map-zen-group">

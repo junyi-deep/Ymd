@@ -9,6 +9,7 @@ import { Files, containsPath, fileKind } from './files'
 import { LocalMapLocations } from './localMapLocations'
 import { searchRoots } from './search'
 import { printView } from './printing'
+import { registerPitchWindow } from './pitchWindow'
 import { readReleaseStatus } from './releases'
 import { appShortcuts, inputChord, isShortcutAccelerator, readShortcutOverrides, shortcutAccelerator, shortcutMenuLabel, ShortcutSequence, shortcutsFor, shortcutValue,
   type AppShortcut } from '../shared/shortcuts'
@@ -156,6 +157,7 @@ function handle<A extends unknown[], R>(name: keyof Desktop, run: (...args: A) =
 }
 
 void app.whenReady().then(async () => {
+  registerPitchWindow(rendererUrl, () => window)
   session.defaultSession.setPermissionCheckHandler((contents, permission, _origin, details) => {
     if (permission === 'media') {
       return contents === window?.webContents && details.isMainFrame && details.mediaType === 'audio' && contents?.getURL() === rendererUrl

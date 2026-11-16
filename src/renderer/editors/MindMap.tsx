@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { CalendarRange, Camera, ChevronDown, ClipboardList, CornerUpLeft, Crosshair, Download, Focus, FolderInput, GitBranch, GitFork, ImagePlus, ListTree, Map as MapIcon, Maximize, MessageSquare, Mic, Minus, Paperclip, Plus, Redo2, Search, SlidersHorizontal, Square, SquareCheck, Star, Sticker, StickyNote, Tag, Trash2, Undo2, X } from 'lucide-react'
+import { CalendarRange, Camera, ChevronDown, ClipboardList, CornerUpLeft, Crosshair, Download, Focus, FolderInput, GitBranch, GitFork, ImagePlus, ListTree, Map as MapIcon, Maximize, MessageSquare, Mic, Minus, Paperclip, Plus, Presentation, Redo2, Search, SlidersHorizontal, Square, SquareCheck, Star, Sticker, StickyNote, Tag, Trash2, Undo2, X } from 'lucide-react'
 import DOMPurify from 'dompurify'
 import MindMap from 'simple-mind-map'
 import AssociativeLine from 'simple-mind-map/src/plugins/AssociativeLine.js'
@@ -27,6 +27,7 @@ import { MindMapRecorder } from './MindMapRecorder'
 import { MindMapArt } from './MindMapArt'
 import { MindMapLink, type LinkSheet } from './MindMapLink'
 import { readLocalMapUrl } from '../../shared/localMapLinks'
+import { readPitchOptions, readPitchTopic, type PitchMode, type PitchTopicOptions } from '../../shared/pitch'
 import { inputChord, shortcutLabel, shortcutValue, ShortcutSequence, shortcutsFor, type ShortcutOverrides } from '../../shared/shortcuts'
 import { addTopicImage, applyArt, imagePlacements, installTopicImageGestures, isTopicImage, placeTopicImage, removeTopicImage, resetTopicImage, topicAcceptsArt } from './mapTopicImages'
 import { audioButton, audioTitle, createAudioPlayer, forgetAudio, loadAudio, readAudioNote, storeAudio, type AudioNote } from './mapAudio'
@@ -44,6 +45,8 @@ import { installNumbering } from './mapNumberingLayer'
 import { MindMapNavigation } from './MindMapNavigation'
 import { MindMapShot } from './MindMapShot'
 import { MindMapZenTools, zenAppearances, type ZenAppearance, type ZenTool } from './MindMapZenTools'
+import { MindMapPitchFormat } from './MindMapPitchFormat'
+import { pitchTopicFromMap } from './pitchDeck'
 import { findBranch, installBranchView, setBranchDepth } from './mapBranchView'
 import { exportMapTree, mapExportTitle, type MapExportFormat } from './mapBranchExport'
 import { facetAt, highlightTopics, navigationTopics, taskStatusFacets, type Facet } from './mapNavigation'
@@ -60,7 +63,7 @@ class MapAssociativeLine extends AssociativeLine {
 }
 
 for (const plugin of [MapAssociativeLine, Drag, Export, ExportPDF, KeyboardNavigation, MiniMap, NodeImgAdjust, OuterFrame, RainbowLines, SearchPlugin, Select]) MindMap.usePlugin(plugin)
-MindMap.extendNodeDataNoStylePropList(['ymdMarker', 'ymdFloating', 'ymdTask', 'ymdTodo', 'ymdStructure', 'ymdAudio', 'ymdOriginalImageSize', 'ymdCallouts', 'ymdWorkCalendar', 'ymdNumbering'])
+MindMap.extendNodeDataNoStylePropList(['ymdMarker', 'ymdFloating', 'ymdTask', 'ymdTodo', 'ymdStructure', 'ymdAudio', 'ymdOriginalImageSize', 'ymdCallouts', 'ymdWorkCalendar', 'ymdNumbering', 'ymdPitch'])
 
 type MapNode = NonNullable<MindMap['renderer']['root']>
 type TopicField = '备注' | '标签'
@@ -332,7 +335,8 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, onChange, r
   const [zenAppearance, setZenAppearance] = useState<ZenAppearance>()
   const [zenTool, setZenTool] = useState<ZenTool>()
   const [linking, setLinking] = useState(false)
-  const [menu, setMenu] = useState<'export' | 'insert' | 'backlinks' | { x: number; y: number; image?: boolean; link?: boolean; callout?: CalloutTarget; facet?: Facet }>()
+  const [menu, setMenu] = useState<'export' | 'insert' | 'backlinks' | 'pitch' | { x: number; y: number; image?: boolean; link?: boolean; callout?: CalloutTarget; facet?: Facet }>()
+  const [pitchPanel, setPitchPanel] = useState(false)
   const [artOpen, setArtOpen] = useState(false)
   const [navigation, setNavigation] = useState<{ key: number; facet?: string }>()
   const previousFind = useRef(find)
@@ -395,19 +399,22 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, onChange, r
   }
   const openNavigation = (facet?: string) => {
     setArtOpen(false)
+    setPitchPanel(false)
     setZenTool(undefined)
     setNavigation(current => facet ? { key: (current?.key ?? 0) + 1, facet } : current ?? { key: 0 })
   }
   const toggleArt = () => {
+    setPitchPanel(false)
     setNavigation(undefined)
     setZenTool(undefined)
     setArtOpen(!artOpen)
   }
   const toggleFormat = () => {
     setZenTool(undefined)
-    if (artOpen || searchOpen) {
+    if (artOpen || searchOpen || pitchPanel) {
       setArtOpen(false)
       setNavigation(undefined)
+      setPitchPanel(false)
       setFormatOpen(true)
     } else setFormatOpen(!formatOpen)
   }
@@ -421,6 +428,7 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, onChange, r
       setMenu(undefined)
     }
     setZenTool(undefined)
+    setPitchPanel(false)
     setArtOpen(false)
     setNavigation(undefined)
     setFormatOpen(enabled ? false : formatBeforeZen.current)
@@ -440,6 +448,22 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, onChange, r
     if (message) setNotice(message)
     requestAnimationFrame(() => (shotTrigger.current ?? host.current)?.focus())
   }
+  const openPitch = useCallback((mode: PitchMode, start?: string) => {
+    const map = engine.current
+    if (!map) return
+    map.renderer.textEdit.hideEditTextBox()
+    map.associativeLine.cancelCreateLine()
+    setLinking(false)
+    setMenu(undefined)
+    setNotice('')
+    const full = map.getData()
+    const uid = branchView.current?.uid
+    const source = uid ? findBranch(full, uid)?.tree ?? full : full
+    const title = sheet?.title ?? mapTitle(name)
+    void window.desktop.openPitch({
+      title, root: pitchTopicFromMap(source), start, mode, options: readPitchOptions(currentSettings.current.pitch),
+    }).catch(error => setNotice(error instanceof Error ? error.message : '无法启动演示。'))
+  }, [name, sheet?.title])
   const changeBranch = useCallback((uid?: string, restoreFocus = true) => {
     const map = engine.current
     const scope = branchView.current
@@ -609,6 +633,7 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, onChange, r
 
   function toggleGantt(visible: boolean) {
     if (visible) changeBranch(undefined, false)
+    if (visible) setPitchPanel(false)
     if (visible) {
       engine.current?.renderer.textEdit.hideEditTextBox()
       engine.current?.associativeLine.cancelCreateLine()
@@ -894,6 +919,11 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, onChange, r
         setArtOpen(false)
         ;(artTrigger.current ?? host.current)?.focus()
       }
+      else if (pitchPanel) {
+        event.preventDefault()
+        setPitchPanel(false)
+        host.current?.focus()
+      }
       else if (zen && zenTool) {
         event.preventDefault()
         setZenTool(undefined)
@@ -916,7 +946,7 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, onChange, r
     window.addEventListener('keydown', escape)
     return () => window.removeEventListener('keydown', escape)
   }, [gantt, zen, zenTool, linking, searchOpen, formatOpen, artOpen, calendarOpen, field, linkEditor, taskTopic, audioParent, calloutText, shotOpen,
-    branch, changeBranch])
+    branch, changeBranch, pitchPanel])
 
   useEffect(() => {
     const current = selectedCallout && readCallout(selectedCallout)
@@ -932,13 +962,14 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, onChange, r
       if (event.key === 'Escape') { sequence.reset(); return }
       const onCanvas = event.target === document.body || host.current?.contains(event.target)
       const chord = inputChord({ key: event.key, code: event.code, control: event.ctrlKey, alt: event.altKey, meta: event.metaKey, shift: event.shiftKey }, platform)
-      const match = chord && sequence.take(chord, bindings.filter(item => item.id === 'map-shot' ||
+      const match = chord && sequence.take(chord, bindings.filter(item => item.id === 'map-shot' || item.id === 'map-pitch' ||
         (item.id === 'map-branch' ? !!branch || focusableBranch && onCanvas : linkable && onCanvas)), event.repeat)
       if (!match) return
       event.preventDefault()
       event.stopPropagation()
       if (match === 'pending') return
       if (match === 'map-shot') { openShot(); return }
+      if (match === 'map-pitch') { openPitch('fullscreen'); return }
       if (match === 'map-branch') { changeBranch(branch ? undefined : source?.uid); return }
       if (!source) return
       const href = current ? current.note.data.hyperlink : source.getData('hyperlink')
@@ -947,7 +978,7 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, onChange, r
     window.addEventListener('keydown', mapShortcut, true)
     return () => window.removeEventListener('keydown', mapShortcut, true)
   }, [gantt, selected, selectedCallout, linkEditor, field, taskTopic, audioParent, calloutText, calendarOpen, shotOpen, keyOverrides, platform, openShot,
-    branch, changeBranch])
+    branch, changeBranch, openPitch])
 
   useEffect(() => {
     const map = engine.current
@@ -998,6 +1029,15 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, onChange, r
   const menuCallout = contextCallout && readCallout(contextCallout)
   const dialogCallout = linkEditor?.callout && readCallout(linkEditor.callout)
   const node = activeCallout ? undefined : selected[0]
+  const pitchNode = node && !node.isGeneralization ? node : engine.current?.renderer.root
+  const pitchTopic = pitchPanel && pitchNode ? pitchTopicFromMap(pitchNode.nodeData) : undefined
+  const changePitchTopic = (patch: Partial<PitchTopicOptions>) => {
+    const map = engine.current
+    if (!map || !pitchNode) return
+    map.command.originAddHistory()
+    map.execCommand('SET_NODE_DATA', pitchNode, { ymdPitch: { ...readPitchTopic(pitchNode.getData('ymdPitch')), ...patch } })
+    map.command.originAddHistory()
+  }
   const audioNote = readAudioNote(node?.getData('ymdAudio'))
   const canRemove = !!node && selected.some(item => !item.isRoot)
   const canLink = selected.length === 1 && !!node && !node.isGeneralization && !audioNote
@@ -1228,6 +1268,7 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, onChange, r
   }
 
   const shotKey = shortcutValue(keyOverrides, 'map-shot', platform)
+  const pitchKey = shortcutValue(keyOverrides, 'map-pitch', platform)
   const shotShortcut = shotKey ? shortcutLabel(shotKey, platform) : undefined
   const branchKey = shortcutValue(keyOverrides, 'map-branch', platform)
   const branchShortcut = branchKey ? shortcutLabel(branchKey, platform) : undefined
@@ -1334,6 +1375,19 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, onChange, r
         <button ref={ganttTrigger} className="tool-button" aria-pressed={gantt} onClick={() => toggleGantt(!gantt)}>
           <CalendarRange size={16} />甘特图</button>
         {!gantt && <>
+        <div className="menu-anchor map-pitch-trigger">
+          <button type="button" className="icon-button" aria-label="开始演示"
+            title={pitchKey ? '开始演示 (' + shortcutLabel(pitchKey, platform) + ')' : '开始演示'}
+            onClick={() => openPitch('fullscreen')}><Presentation size={17} /></button>
+          <button type="button" className="icon-button map-pitch-more" aria-label="演示选项" aria-haspopup="menu"
+            aria-expanded={menu === 'pitch'} onClick={() => setMenu(menu === 'pitch' ? undefined : 'pitch')}><ChevronDown size={13} /></button>
+          {menu === 'pitch' && <MarkdownMenu close={closeMenu} items={[
+            { label: '在窗口中播放', run: () => openPitch('window') },
+            { label: '演讲者视图', run: () => openPitch('presenter') },
+            { label: '从当前主题播放', disabled: !node || !!node.isGeneralization, run: () => openPitch('fullscreen', node?.uid) },
+            { label: '演示格式', separator: true, run: () => { setNavigation(undefined); setArtOpen(false); setPitchPanel(!pitchPanel) } },
+          ]} />}
+        </div>
         <button ref={artTrigger} className="icon-button" title="贴纸与插图" aria-label="贴纸与插图" aria-expanded={artOpen}
           onClick={toggleArt}><Sticker size={17} /></button>
         <button ref={navigationTrigger} className="icon-button" title="查找主题" aria-label="查找主题" aria-expanded={searchOpen}
@@ -1345,7 +1399,7 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, onChange, r
           {menu === 'export' && <MarkdownMenu items={exportItems} close={closeMenu} />}
         </div>
         <button ref={zenTrigger} className="icon-button" title="专注模式" aria-label="专注模式" onClick={() => toggleZen(true)}><Focus size={17} /></button>
-        <button className="tool-button" aria-pressed={formatOpen && !artOpen && !searchOpen} onClick={toggleFormat}>
+        <button className="tool-button" aria-pressed={formatOpen && !artOpen && !searchOpen && !pitchPanel} onClick={toggleFormat}>
           <SlidersHorizontal size={16} />格式</button></>}
       </div>
     </div>}
@@ -1411,7 +1465,10 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, onChange, r
         target={topicAcceptsArt(node) ? String(node?.getData('text') || '未命名主题') : undefined}
         apply={art => { if (engine.current && node) applyArt(engine.current, node, art) }}
         close={() => { setArtOpen(false); (artTrigger.current ?? host.current)?.focus() }} />}
-      {!artOpen && !searchOpen && formatOpen && (activeCallout && selectedCallout ? <MindMapCalloutFormat
+      {pitchPanel && <MindMapPitchFormat options={readPitchOptions(settings.pitch)} topic={pitchTopic} root={!!pitchNode?.isRoot}
+        change={patch => changeSettings({ pitch: { ...readPitchOptions(currentSettings.current.pitch), ...patch } })}
+        changeTopic={changePitchTopic} close={() => { setPitchPanel(false); host.current?.focus() }} />}
+      {!artOpen && !searchOpen && !pitchPanel && formatOpen && (activeCallout && selectedCallout ? <MindMapCalloutFormat
         key={selectedCallout.id} note={activeCallout.note} close={() => setFormatOpen(false)}
         edit={() => editCallout(selectedCallout)} change={patch => changeCallout(selectedCallout, patch)} />
         : <MindMapFormat {...{ tab, settings, node, selected, version }} dark={zen ? zenDark : dark} branchDepth={branch?.depth}
