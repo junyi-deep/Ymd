@@ -93,7 +93,12 @@ declare module 'simple-mind-map' {
       moveNodeToCenter(node: MapNode, resetScale?: boolean): void
       setNodeDataRender(node: MapNode, data: Record<string, unknown>): void
     }
-    view: { scale: number; enlarge(): void; narrow(): void; fit(): void; reset(): void; translateXY(x: number, y: number): void }
+    view: {
+      scale: number
+      enlarge(): void; narrow(): void; fit(): void; reset(): void; translateXY(x: number, y: number): void
+      getTransformData(): { transform: Record<string, number>; state: { scale: number; x: number; y: number; sx: number; sy: number } }
+      setTransformData(view: ReturnType<MindMap['view']['getTransformData']>): void
+    }
     miniMap: {
       calculationMiniMap(width: number, height: number): { svgHTML: string; viewBoxStyle: Record<string, string> }
       onViewBoxMousedown(event: { clientX: number; clientY: number }): void

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { CalendarRange, Camera, ChevronDown, ChevronsLeft, ClipboardList, CornerUpLeft, Crosshair, Download, Focus, FolderInput, GitBranch, GitFork, ImagePlus, ListTree, Map as MapIcon, Maximize, MessageSquare, Mic, Minus, Paperclip, Plus, Redo2, Search, SlidersHorizontal, Square, SquareCheck, Star, Sticker, StickyNote, Tag, Trash2, Undo2, X } from 'lucide-react'
+import { CalendarRange, Camera, ChevronDown, ClipboardList, CornerUpLeft, Crosshair, Download, Focus, FolderInput, GitBranch, GitFork, ImagePlus, ListTree, Map as MapIcon, Maximize, MessageSquare, Mic, Minus, Paperclip, Plus, Redo2, Search, SlidersHorizontal, Square, SquareCheck, Star, Sticker, StickyNote, Tag, Trash2, Undo2, X } from 'lucide-react'
 import DOMPurify from 'dompurify'
 import MindMap from 'simple-mind-map'
 import AssociativeLine from 'simple-mind-map/src/plugins/AssociativeLine.js'
@@ -43,6 +43,7 @@ import { editNumbering, type NumberingEdit } from './mapNumbering'
 import { installNumbering } from './mapNumberingLayer'
 import { MindMapNavigation } from './MindMapNavigation'
 import { MindMapShot } from './MindMapShot'
+import { MindMapZenTools, zenAppearances, type ZenAppearance, type ZenTool } from './MindMapZenTools'
 import { facetAt, highlightTopics, navigationTopics, taskStatusFacets, type Facet } from './mapNavigation'
 
 class MapAssociativeLine extends AssociativeLine {
@@ -326,6 +327,8 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, onChange, r
   const [zoom, setZoom] = useState(100)
   const [version, setVersion] = useState(0)
   const [zen, setZen] = useState(false)
+  const [zenAppearance, setZenAppearance] = useState<ZenAppearance>()
+  const [zenTool, setZenTool] = useState<ZenTool>()
   const [linking, setLinking] = useState(false)
   const [menu, setMenu] = useState<'export' | 'insert' | 'backlinks' | { x: number; y: number; image?: boolean; link?: boolean; callout?: CalloutTarget; facet?: Facet }>()
   const [artOpen, setArtOpen] = useState(false)
@@ -351,6 +354,9 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, onChange, r
   const host = useRef<HTMLDivElement>(null)
   const navigationTrigger = useRef<HTMLButtonElement>(null)
   const shotTrigger = useRef<HTMLButtonElement>(null)
+  const zenTrigger = useRef<HTMLButtonElement>(null)
+  const viewBeforeZen = useRef<ReturnType<MindMap['view']['getTransformData']> | undefined>(undefined)
+  const formatBeforeZen = useRef(false)
   const artTrigger = useRef<HTMLButtonElement>(null)
   const ganttTrigger = useRef<HTMLButtonElement>(null)
   const resourceInput = useRef<HTMLInputElement>(null)
@@ -370,6 +376,7 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, onChange, r
   followLink.current = followTopicLink
   currentSettings.current = settings
   const searchOpen = navigation !== undefined
+  const zenDark = zenAppearance ? zenAppearance.endsWith('dark') : dark
   const topics = useMemo(() => searchOpen && engine.current ? navigationTopics(engine.current.renderer.renderTree) : [], [searchOpen, version])
   const highlight = useCallback((ids: ReadonlySet<string> | null) => {
     highlighted.current = ids
@@ -377,11 +384,40 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, onChange, r
   }, [])
   const closeNavigation = () => {
     setNavigation(undefined)
-    navigationTrigger.current?.focus()
+    ;(navigationTrigger.current ?? host.current)?.focus()
   }
   const openNavigation = (facet?: string) => {
     setArtOpen(false)
+    setZenTool(undefined)
     setNavigation(current => facet ? { key: (current?.key ?? 0) + 1, facet } : current ?? { key: 0 })
+  }
+  const toggleArt = () => {
+    setNavigation(undefined)
+    setZenTool(undefined)
+    setArtOpen(!artOpen)
+  }
+  const toggleFormat = () => {
+    setZenTool(undefined)
+    if (artOpen || searchOpen) {
+      setArtOpen(false)
+      setNavigation(undefined)
+      setFormatOpen(true)
+    } else setFormatOpen(!formatOpen)
+  }
+  function toggleZen(enabled: boolean) {
+    if (enabled) {
+      engine.current?.renderer.textEdit.hideEditTextBox()
+      engine.current?.associativeLine.cancelCreateLine()
+      viewBeforeZen.current = engine.current?.view.getTransformData()
+      formatBeforeZen.current = formatOpen
+      setLinking(false)
+      setMenu(undefined)
+    }
+    setZenTool(undefined)
+    setArtOpen(false)
+    setNavigation(undefined)
+    setFormatOpen(enabled ? false : formatBeforeZen.current)
+    setZen(enabled)
   }
   const openShot = useCallback(() => {
     if (!engine.current) return
@@ -657,7 +693,12 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, onChange, r
     map.on('node_tree_render_end', reapplyFilter)
     map.on('node_attachmentClick', download)
     registerFlush(flush)
-    const resize = new ResizeObserver(() => map.resize())
+    const resize = new ResizeObserver(() => {
+      map.resize()
+      if (host.current?.closest('[data-zen="true"]')) {
+        map.render(() => { if (host.current?.closest('[data-zen="true"]')) map.view.fit() })
+      }
+    })
     resize.observe(host.current)
     return () => {
       resize.disconnect()
@@ -723,9 +764,30 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, onChange, r
     if (!map) return
     const palette = palettes[settings.palette]
     map.updateConfig({ rainbowLinesConfig: { open: settings.colored, colorsList: palette.colors } })
-    map.setThemeConfig(mapTheme(settings, dark))
+    const appearance = zen && zenAppearance ? zenAppearances[zenAppearance] : undefined
+    map.setThemeConfig(mapTheme(appearance ? { ...settings, background: appearance.background } : settings, zen ? zenDark : dark))
     setZoom(Math.round(map.view.scale * 100))
-  }, [dark, settings])
+  }, [dark, settings, zen, zenAppearance, zenDark])
+  useEffect(() => {
+    const map = engine.current
+    if (!map || !zen && !viewBeforeZen.current) return
+    let canceled = false
+    const frame = requestAnimationFrame(() => {
+      map.resize()
+      map.render(() => {
+        if (canceled || engine.current !== map) return
+        if (zen) {
+          map.view.fit()
+          host.current?.focus()
+        } else {
+          if (viewBeforeZen.current) map.view.setTransformData(viewBeforeZen.current)
+          viewBeforeZen.current = undefined
+          zenTrigger.current?.focus()
+        }
+      })
+    })
+    return () => { canceled = true; cancelAnimationFrame(frame) }
+  }, [zen])
   useEffect(() => {
     if (field) fieldDialog.current?.showModal()
     else if (fieldDialog.current?.open) fieldDialog.current.close()
@@ -735,7 +797,6 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, onChange, r
     previousFind.current = find
     if (shotOpen) return
     setGantt(false)
-    setZen(false)
     openNavigation()
   }, [find, shotOpen])
 
@@ -756,14 +817,26 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, onChange, r
       else if (artOpen) {
         event.preventDefault()
         setArtOpen(false)
-        artTrigger.current?.focus()
+        ;(artTrigger.current ?? host.current)?.focus()
       }
-      else if (zen) setZen(false)
+      else if (zen && zenTool) {
+        event.preventDefault()
+        setZenTool(undefined)
+      }
+      else if (zen && formatOpen) {
+        event.preventDefault()
+        setFormatOpen(false)
+        host.current?.focus()
+      }
+      else if (zen) {
+        event.preventDefault()
+        toggleZen(false)
+      }
       else if (formatOpen) setFormatOpen(false)
     }
     window.addEventListener('keydown', escape)
     return () => window.removeEventListener('keydown', escape)
-  }, [gantt, zen, linking, searchOpen, formatOpen, artOpen, calendarOpen, field, linkEditor, taskTopic, audioParent, calloutText, shotOpen])
+  }, [gantt, zen, zenTool, linking, searchOpen, formatOpen, artOpen, calendarOpen, field, linkEditor, taskTopic, audioParent, calloutText, shotOpen])
 
   useEffect(() => {
     const current = selectedCallout && readCallout(selectedCallout)
@@ -1134,7 +1207,8 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, onChange, r
   const initialTask = readTask(taskSource?.data.ymdTask)
   const closeMenu = () => setMenu(undefined)
 
-  return <div className="map-editor xmind-workspace" data-zen={zen} data-shot-open={shotOpen || undefined}>
+  return <div className="map-editor xmind-workspace" data-zen={zen} data-zen-tone={zen ? zenDark ? 'dark' : 'light' : undefined}
+    data-shot-open={shotOpen || undefined}>
     {!zen && <div className="map-toolbar" aria-label="思维导图工具栏" ref={element => { element?.toggleAttribute('inert', shotOpen) }}>
       <div className="map-toolbar-group">
         <button className="icon-button" title="撤销" aria-label="撤销" onClick={() => command('BACK')}><Undo2 size={17} /></button>
@@ -1155,7 +1229,7 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, onChange, r
           <CalendarRange size={16} />甘特图</button>
         {!gantt && <>
         <button ref={artTrigger} className="icon-button" title="贴纸与插图" aria-label="贴纸与插图" aria-expanded={artOpen}
-          onClick={() => { setNavigation(undefined); setArtOpen(!artOpen) }}><Sticker size={17} /></button>
+          onClick={toggleArt}><Sticker size={17} /></button>
         <button ref={navigationTrigger} className="icon-button" title="查找主题" aria-label="查找主题" aria-expanded={searchOpen}
           onClick={() => searchOpen ? closeNavigation() : openNavigation()}><Search size={17} /></button>
         <button ref={shotTrigger} className="icon-button" aria-label="导图截图"
@@ -1164,10 +1238,9 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, onChange, r
           <button className="tool-button" aria-haspopup="menu" aria-expanded={menu === 'export'} onClick={() => setMenu(menu === 'export' ? undefined : 'export')}><Download size={16} />导出</button>
           {menu === 'export' && <MarkdownMenu items={exportItems} close={closeMenu} />}
         </div>
-        <button className="icon-button" title="专注模式" aria-label="专注模式" onClick={() => setZen(true)}><Focus size={17} /></button>
-        <button className="tool-button" aria-pressed={formatOpen && !artOpen && !searchOpen} onClick={() => {
-          if (artOpen || searchOpen) { setArtOpen(false); setNavigation(undefined); setFormatOpen(true) } else setFormatOpen(!formatOpen)
-        }}><SlidersHorizontal size={16} />格式</button></>}
+        <button ref={zenTrigger} className="icon-button" title="专注模式" aria-label="专注模式" onClick={() => toggleZen(true)}><Focus size={17} /></button>
+        <button className="tool-button" aria-pressed={formatOpen && !artOpen && !searchOpen} onClick={toggleFormat}>
+          <SlidersHorizontal size={16} />格式</button></>}
       </div>
     </div>}
     <input ref={resourceInput} type="file" hidden onChange={event => attach(event.target.files?.[0])} />
@@ -1184,6 +1257,12 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, onChange, r
                 !event.target.closest('button, input, textarea, [contenteditable]')) event.currentTarget.focus()
           }}
           onContextMenu={event => event.preventDefault()} />
+        {zen && <MindMapZenTools platform={platform} overrides={keyOverrides} tool={zenTool}
+          onTool={setZenTool} appearance={zenAppearance ?? (dark ? 'dark' : 'light')}
+          onAppearance={value => { setZenAppearance(value); setZenTool(undefined) }}
+          artOpen={artOpen} formatOpen={formatOpen && !artOpen && !searchOpen}
+          onArt={toggleArt} onFormat={toggleFormat}
+          exit={() => toggleZen(false)} />}
         {linking && <div className="map-action-status" role="status">选择关联线的目标主题 <kbd>Esc 取消</kbd></div>}
         {notice && <div className="map-action-status" role="status">{notice}<button className="icon-button" aria-label="关闭提示" onClick={() => setNotice('')}><X size={14} /></button></div>}
         {overview && miniMap && <div className="map-minimap" aria-label="导图概览"
@@ -1203,7 +1282,6 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, onChange, r
               onClick={() => setMenu(menu === 'backlinks' ? undefined : 'backlinks')}><CornerUpLeft size={15} />反向链接</button>
             {menu === 'backlinks' && <MarkdownMenu items={backlinkItems} close={closeMenu} upward />}
           </div>}
-          {zen && <button className="tool-button" onClick={() => setZen(false)}><ChevronsLeft size={15} />退出专注</button>}
           <button className="icon-button" aria-label="导图概览" aria-pressed={overview} onClick={() => setOverview(!overview)}><MapIcon size={16} /></button>
           <button className="icon-button" aria-label="回到中心主题" title="回到中心主题" onClick={() => {
             const root = engine.current?.renderer.root
@@ -1216,15 +1294,15 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, onChange, r
         </div>
         {shotOpen && <MindMapShot title={sheet?.title ?? mapTitle(name)} close={closeShot} />}
       </div>
-      {!zen && navigation && <MindMapNavigation key={navigation.key} topics={topics} initialFacet={navigation.facet}
+      {navigation && <MindMapNavigation key={navigation.key} topics={topics} initialFacet={navigation.facet}
         titleMatches={titleMatches} currentTopic={selected.length === 1 ? selected[0].getData().uid : undefined}
         search={engine.current?.search} count={matches} close={closeNavigation} highlight={highlight}
         locate={id => command('GO_TARGET_NODE', id)} focusRequest={find} />}
-      {!zen && artOpen && <MindMapArt
+      {artOpen && <MindMapArt
         target={topicAcceptsArt(node) ? String(node?.getData('text') || '未命名主题') : undefined}
         apply={art => { if (engine.current && node) applyArt(engine.current, node, art) }}
-        close={() => { setArtOpen(false); artTrigger.current?.focus() }} />}
-      {!zen && !artOpen && !searchOpen && formatOpen && (activeCallout && selectedCallout ? <MindMapCalloutFormat
+        close={() => { setArtOpen(false); (artTrigger.current ?? host.current)?.focus() }} />}
+      {!artOpen && !searchOpen && formatOpen && (activeCallout && selectedCallout ? <MindMapCalloutFormat
         key={selectedCallout.id} note={activeCallout.note} close={() => setFormatOpen(false)}
         edit={() => editCallout(selectedCallout)} change={patch => changeCallout(selectedCallout, patch)} />
         : <MindMapFormat {...{ tab, settings, node, selected, version }} change={changeSettings} onTab={setTab} editNumbering={updateNumbering}
