@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import type { Command, Desktop, VersionStatus } from '../shared/contracts'
+import type { Command, Desktop, Entry, Preferences, RecoveryEntry, VersionStatus } from '../shared/contracts'
 import type { PitchDesktop } from '../shared/pitch'
 
 const desktop: Desktop = {
@@ -17,6 +17,33 @@ const desktop: Desktop = {
   chooseXmind: () => ipcRenderer.invoke('ymd:chooseXmind'),
   createImportedMarkdown: (directory, name, text) => ipcRenderer.invoke('ymd:createImportedMarkdown', directory, name, text),
   read: path => ipcRenderer.invoke('ymd:read', path),
+  readDocumentState: path => ipcRenderer.invoke('ymd:readDocumentState', path),
+  watchDocuments: paths => ipcRenderer.invoke('ymd:watchDocuments', paths),
+  newWindow: path => ipcRenderer.invoke('ymd:newWindow', path),
+  onDocumentChanged: callback => {
+    const listener = (_: unknown, path: string) => callback(path)
+    ipcRenderer.on('ymd:documentChanged', listener)
+    return () => ipcRenderer.removeListener('ymd:documentChanged', listener)
+  },
+  onPreferences: callback => {
+    const listener = (_: unknown, preferences: Preferences) => callback(preferences)
+    ipcRenderer.on('ymd:preferences', listener)
+    return () => ipcRenderer.removeListener('ymd:preferences', listener)
+  },
+  onWorkspaceChange: callback => {
+    const listener = (_: unknown, workspace: { library: Entry; recent: Entry[] }) => callback(workspace)
+    ipcRenderer.on('ymd:workspaceChanged', listener)
+    return () => ipcRenderer.removeListener('ymd:workspaceChanged', listener)
+  },
+  onRecoveryList: callback => {
+    const listener = (_: unknown, recoveries: RecoveryEntry[]) => callback(recoveries)
+    ipcRenderer.on('ymd:recoveryList', listener)
+    return () => ipcRenderer.removeListener('ymd:recoveryList', listener)
+  },
+  recordDraft: (path, draft) => ipcRenderer.invoke('ymd:recordDraft', path, draft),
+  restoreDraft: id => ipcRenderer.invoke('ymd:restoreDraft', id),
+  discardDraft: id => ipcRenderer.invoke('ymd:discardDraft', id),
+  cancelClose: () => ipcRenderer.invoke('ymd:cancelClose'),
   create: (directory, kind) => ipcRenderer.invoke('ymd:create', directory, kind),
   createFolder: directory => ipcRenderer.invoke('ymd:createFolder', directory),
   mutateTree: mutation => ipcRenderer.invoke('ymd:mutateTree', mutation),
@@ -32,6 +59,8 @@ const desktop: Desktop = {
   importMarkdownImages: (path, images) => ipcRenderer.invoke('ymd:importMarkdownImages', path, images),
   pasteMarkdownClipboard: () => ipcRenderer.invoke('ymd:pasteMarkdownClipboard'),
   readMarkdownImage: (path, source) => ipcRenderer.invoke('ymd:readMarkdownImage', path, source),
+  readPreviewImage: source => ipcRenderer.invoke('ymd:readPreviewImage', source),
+  savePreviewImage: (name, format, data) => ipcRenderer.invoke('ymd:savePreviewImage', name, format, data),
   markdownContextMenu: (x, y, items) => ipcRenderer.invoke('ymd:markdownContextMenu', x, y, items),
   exportPdf: (name, html) => ipcRenderer.invoke('ymd:exportPdf', name, html),
   saveXmind: (name, data) => ipcRenderer.invoke('ymd:saveXmind', name, data),

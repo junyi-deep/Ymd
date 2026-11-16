@@ -55,6 +55,9 @@ export interface TreeChange {
   error?: string
 }
 
+export interface RecoveryDraft { text: string; version: string }
+export interface RecoveryEntry { id: string; path: string; updated: number }
+
 export interface DocumentFile extends Entry {
   kind: FileKind
   text: string
@@ -117,7 +120,7 @@ export const defaultPreferences: Preferences = {
   markdownOutline: { position: 'right', numbering: 'none', visible: false },
   markdownPageWidth: 'normal', outlinePageWidth: 'normal', outlineRemainderVisible: true, mapRemainderVisible: true,
   codeBlocks: { lineNumbers: false, wrap: false },
-  autoSave: false, remoteImages: false, autoCheckUpdates: false, autoDownloadUpdates: false, searchEngine: 'google', shortcuts: {},
+  autoSave: true, remoteImages: false, autoCheckUpdates: false, autoDownloadUpdates: false, searchEngine: 'google', shortcuts: {},
 }
 
 export function windowMaterialFor(preferences: Preferences, platform: string, windowsAcrylic: boolean, macReducesTransparency: boolean) {
@@ -151,7 +154,8 @@ export function markdownImageExtension(name: string, type = '') {
 }
 
 export interface Desktop {
-  initialize(): Promise<{ library: Entry; recent: Entry[]; preferences: Preferences; platform: string; windowsAcrylic: boolean; macReducesTransparency: boolean; version: string; updateProxy: UpdateProxy; release: VersionStatus }>
+  initialize(): Promise<{ library: Entry; recent: Entry[]; preferences: Preferences; platform: string; windowsAcrylic: boolean; macReducesTransparency: boolean; version: string; updateProxy: UpdateProxy; release: VersionStatus;
+    initialFile?: DocumentFile; recoveries: RecoveryEntry[] }>
   list(path: string): Promise<Entry[]>
   chooseLibraryDirectory(): Promise<Entry | null>
   resetLibraryDirectory(): Promise<Entry>
@@ -165,10 +169,21 @@ export interface Desktop {
   chooseXmind(): Promise<{ name: string; data: ArrayBuffer } | null>
   createImportedMarkdown(directory: string, name: string, text: string): Promise<DocumentFile>
   read(path: string): Promise<DocumentFile>
+  readDocumentState(path: string): Promise<DocumentFile | null>
+  watchDocuments(paths: string[]): Promise<void>
+  newWindow(path?: string): Promise<void>
+  onDocumentChanged(callback: (path: string) => void): () => void
+  onPreferences(callback: (preferences: Preferences) => void): () => void
+  onWorkspaceChange(callback: (workspace: { library: Entry; recent: Entry[] }) => void): () => void
+  onRecoveryList(callback: (recoveries: RecoveryEntry[]) => void): () => void
+  recordDraft(path: string, draft: RecoveryDraft | null): Promise<void>
+  restoreDraft(id: string): Promise<{ file: DocumentFile; draft: RecoveryDraft; missing: boolean } | null>
+  discardDraft(id: string): Promise<void>
+  cancelClose(): Promise<void>
   create(directory: string, kind: FileKind): Promise<DocumentFile>
   createFolder(directory: string): Promise<Entry>
   mutateTree(mutation: TreeMutation): Promise<TreeChange[] | null>
-  save(path: string, text: string, version: string): Promise<{ version: string; modified: number } | { conflict: true }>
+  save(path: string, text: string, version: string | null): Promise<{ version: string; modified: number } | { conflict: true }>
   duplicate(path: string, directory: string, text: string): Promise<DocumentFile>
   rename(path: string, name: string, version: string): Promise<DocumentFile>
   move(path: string, version: string): Promise<DocumentFile | null>
@@ -180,6 +195,8 @@ export interface Desktop {
   importMarkdownImages(path: string, images: MarkdownImageUpload[]): Promise<MarkdownImageAttachment[]>
   pasteMarkdownClipboard(): Promise<void>
   readMarkdownImage(path: string, source: string): Promise<string | null>
+  readPreviewImage(source: string): Promise<string>
+  savePreviewImage(name: string, format: 'png' | 'svg', data: ArrayBuffer): Promise<boolean>
   markdownContextMenu(x: number, y: number, items: ContextMenuItem[]): Promise<number | null>
   exportPdf(name: string, html: string): Promise<boolean>
   saveXmind(name: string, data: ArrayBuffer): Promise<boolean>
@@ -197,7 +214,7 @@ export interface Desktop {
   installUpdate(): Promise<void>
   setUpdateProxy(value: UpdateProxyInput): Promise<UpdateProxy>
   onUpdateStatus(callback: (status: VersionStatus) => void): () => void
-  setPreferences(preferences: Preferences): Promise<Preferences>
+  setPreferences(preferences: Partial<Preferences>): Promise<Preferences>
   setShortcutRecording(active: boolean): Promise<void>
   finishClose(): Promise<void>
   onCommand(callback: (command: Command) => void): () => void

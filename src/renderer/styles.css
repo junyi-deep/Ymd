@@ -852,3 +852,34 @@ dialog button.primary { background: var(--accent); color: var(--accent-ink); }
 .update-progress progress { flex: 1; min-width: 100px; height: 9px; accent-color: var(--accent); }
 
 .md-code-body:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+dialog footer .conflict-load { background: #296244; color: #fff; }
+dialog footer .conflict-overwrite { background: #9b3438; color: #fff; }
+.recovery-row { display: flex; align-items: center; gap: 5px; padding: 6px 0; border-bottom: 1px solid var(--line); }
+.recovery-row > span { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+
+.mermaid-tools { display: flex; align-items: center; gap: 5px; justify-self: end; }
+.mermaid-tools .icon-button { min-width: 28px; min-height: 27px; }
+.md-image { position: relative; }
+.md-image .md-visual-open {
+  position: absolute; inset: 4px 4px auto auto; width: 27px; height: 27px;
+  background: var(--page); border: 1px solid var(--line); opacity: 0;
+}
+.md-image:is(:hover,:focus-within) .md-visual-open { opacity: 1; }
+.media-dialog { width: min(1080px, calc(100vw - 34px)); max-width: none; height: min(800px, calc(100vh - 40px)); max-height: none; padding: 0; overflow: hidden; }
+.media-dialog[open] { display: flex; flex-direction: column; }
+.media-dialog > header { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 44px; padding: 7px 11px 7px 15px; border-bottom: 1px solid var(--line); }
+.media-dialog > header h2 { margin: 0; font-size: 1.1rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.media-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 3px; padding: 5px 11px; }
+.media-toolbar-spacer { flex: 1; }
+.media-stage { position: relative; flex: 1; min-height: 0; overflow: hidden; background: var(--soft); cursor: grab; touch-action: none; user-select: none; }
+.media-stage:active { cursor: grabbing; }
+.media-stage[data-cropping="true"] { cursor: crosshair; }
+.media-stage:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.media-image { position: absolute; max-width: none; max-height: none; pointer-events: none; }
+.media-thumb { position: absolute; right: 13px; bottom: 13px; border: 1px solid var(--line); border-radius: 3px; background: var(--page); box-sizing: content-box; cursor: crosshair; }
+.media-thumb img { width: 100%; height: 100%; }
+.media-thumb span { position: absolute; pointer-events: none; border: 1px solid var(--accent); background: color-mix(in srgb, var(--accent) 13%, transparent); }
+.media-crop-area { position: absolute; pointer-events: none; border: 1px solid #fff; outline: 1px solid var(--accent); box-shadow: 0 0 0 100vmax #18203061; }
+.media-notice { padding: 8px 14px; }
+@media print { .md-visual-open, .mermaid-tools { display: none; } }

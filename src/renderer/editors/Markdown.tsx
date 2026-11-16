@@ -4,6 +4,8 @@ import { MarkdownMenu, type MenuItem } from './MarkdownMenu'
 import { contextItems, insertMermaid, tabInList, typographyKeys } from './markdownCommands'
 import { markdownPlainText } from './markdownHtml'
 import { chooseMarkdownImages, editImageReference, imageContextItems, isImageNode, MarkdownImage, markdownImageIntake, readImageReference, type ImageResizeRequest } from './markdownImages'
+import { MediaViewer } from './MediaViewer'
+import { mediaPreviewEvent, type MediaPreview } from './mediaPreview'
 import { MarkdownImageSize } from './MarkdownImageSize'
 import { codeBlockPreferences, renderedBlocks } from './renderedBlocks'
 import { insertTable, markdownTable } from './markdownTable'
@@ -191,6 +193,13 @@ interface Props {
 
 export function MarkdownEditor({ text, name, path, modified, platform, remoteImages, searchEngine, keyOverrides, outline, updateOutline, width, codeBlocks, setWidth, registerFlush, onChange, find, jump, reveal, saveCopy, duplicate, move, trash, shortcuts, exportPdf, printDocument, pinned, starred, togglePin, toggleStar, report }: Props) {
   const host = useRef<HTMLDivElement>(null)
+  const [media, setMedia] = useState<MediaPreview>()
+  useEffect(() => {
+    const element = host.current!
+    const show = (event: Event) => setMedia((event as CustomEvent<MediaPreview>).detail)
+    element.addEventListener(mediaPreviewEvent, show)
+    return () => element.removeEventListener(mediaPreviewEvent, show)
+  }, [])
   const view = useRef<EditorView>(null)
   const change = useRef(onChange)
   const initial = useRef(text)
@@ -468,6 +477,7 @@ export function MarkdownEditor({ text, name, path, modified, platform, remoteIma
         {menu === 'status' && <MarkdownMenu items={statusItems} close={close} upward />}
       </div>
     </footer>
+    {media && <MediaViewer request={media} close={() => setMedia(undefined)} />}
     {imageResize && <MarkdownImageSize request={imageResize} close={() => setImageResize(undefined)} />}
     <dialog ref={tableDialog} aria-label="插入表格">
       <form onSubmit={event => {

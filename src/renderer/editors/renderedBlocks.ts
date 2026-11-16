@@ -2,6 +2,10 @@ import { EditorState, Facet, StateField, type Range } from '@codemirror/state'
 import { syntaxTree } from '@codemirror/language'
 import { Decoration, EditorView, WidgetType, type DecorationSet } from '@codemirror/view'
 import type { CodeBlockPreferences } from '../../shared/contracts'
+import { createElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
+import { Scan } from 'lucide-react'
+import { diagramPreview, openMediaPreview } from './mediaPreview'
 import { CodePreview } from './markdownCodePreview'
 import { displayMath, renderBlockPreview } from './markdownPreviewMedia'
 
@@ -23,7 +27,10 @@ class RenderedBlock extends WidgetType {
     const content = document.createElement('div')
     content.className = 'mermaid-content'
     content.textContent = diagram ? '正在绘制 Mermaid 图…' : '正在渲染公式…'
-    figure.append(edit, content)
+    const tools = document.createElement('div')
+    tools.className = 'mermaid-tools'
+    tools.append(edit)
+    figure.append(tools, content)
     edit.addEventListener('click', () => {
       const position = view.posAtDOM(figure)
       const line = view.state.doc.lineAt(position)
@@ -32,7 +39,17 @@ class RenderedBlock extends WidgetType {
       view.focus()
     })
 
-    void renderBlockPreview(content, this.code, this.kind).catch(error => {
+    void renderBlockPreview(content, this.code, this.kind).then(() => {
+      const svg = diagram && content.querySelector('svg')
+      if (!svg) return
+      const button = document.createElement('button')
+      button.type = 'button'
+      button.className = 'icon-button'
+      button.title = button.ariaLabel = '查看 Mermaid 图'
+      button.innerHTML = renderToStaticMarkup(createElement(Scan, { size: 16, 'aria-hidden': true }))
+      button.addEventListener('click', () => openMediaPreview(figure, diagramPreview(svg)))
+      tools.append(button)
+    }).catch(error => {
       content.classList.add('mermaid-error')
       content.textContent = (diagram ? 'Mermaid 无法渲染。' : '公式无法渲染。') + (error instanceof Error ? error.message : '')
     }).finally(() => { if (figure.isConnected) view.requestMeasure() })

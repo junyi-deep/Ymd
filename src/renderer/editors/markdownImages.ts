@@ -48,7 +48,7 @@ export class MarkdownImage extends WidgetType {
   }
 
   toDOM(view: EditorView) {
-    return createMarkdownImage(this.file, this.reference, this.loadRemote, this.standalone, () => view.requestMeasure())
+    return createMarkdownImage(this.file, this.reference, this.loadRemote, this.standalone, () => view.requestMeasure(), true)
   }
 }
 

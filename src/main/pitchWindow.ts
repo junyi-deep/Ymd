@@ -28,7 +28,7 @@ function readRequest(input: PitchRequest): PitchRequest {
     start: input.start && ids.has(input.start) ? input.start : undefined }
 }
 
-export function registerPitchWindow(editorUrl: string, editorWindow: () => BrowserWindow | null) {
+export function registerPitchWindow(editorUrl: string, editorWindow: (contents: Electron.WebContents) => BrowserWindow | null) {
   const url = new URL(editorUrl)
   url.searchParams.set('pitch', '1')
   const stageUrl = url.href
@@ -53,7 +53,7 @@ export function registerPitchWindow(editorUrl: string, editorWindow: () => Brows
     return current
   }
   ipcMain.handle('ymd:openPitch', async (event, input: PitchRequest) => {
-    const owner = editorWindow()
+    const owner = editorWindow(event.sender)
     if (!owner || event.sender !== owner.webContents || event.senderFrame?.url !== editorUrl) throw new Error('无效的窗口请求。')
     const request = readRequest(input)
     if (current) {

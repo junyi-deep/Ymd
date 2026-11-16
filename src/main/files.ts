@@ -338,16 +338,26 @@ export class Files {
     return this.resolve(directory, true)
   }
 
-  save(file: string, text: string, version: string) {
-    const queue = this.writes.get(file)
+  async authorizeMissing(file: string): Promise<DocumentFile> {
+    if (!path.isAbsolute(file) || await realpath(path.dirname(file)) !== path.dirname(file)) throw new Error('原目录已移动，无法恢复到原位置。')
+    const kind = fileKind(file)
+    if (!kind) throw new Error('不支持的恢复文件类型。')
+    this.singles.add(file)
+    return { path: file, name: path.basename(file), kind, text: '', version: '', modified: 0 }
+  }
+
+  save(file: string, text: string, version: string | null) {
+    const key = process.platform === 'win32' ? file.toLowerCase() : file
+    const queue = this.writes.get(key)
     const write = async () => {
       if (!fileKind(file)) throw new Error('文件类型不受支持。')
       let canonical: string
       try {
         canonical = await this.resolve(file)
       } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { conflict: true } as const
-        throw error
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+        if (version !== null || !this.singles.has(file) || await realpath(path.dirname(file)) !== path.dirname(file)) return { conflict: true } as const
+        canonical = file
       }
       const dir = path.dirname(canonical)
       const data = Buffer.from(text)
@@ -360,6 +370,12 @@ export class Files {
             if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false
             throw error
           }
+        }
+        if (version === null) {
+          await writeFile(temp, data, { flag: 'wx', mode: 0o600, flush: true })
+          try { await link(temp, canonical) }
+          catch (error) { if ((error as NodeJS.ErrnoException).code === 'EEXIST') return { conflict: true } as const; throw error }
+          return { version: versionOf(data), modified: (await stat(canonical)).mtimeMs }
         }
         if (!await check()) return { conflict: true } as const
         const mode = (await stat(canonical)).mode & 0o777
@@ -378,9 +394,9 @@ export class Files {
       }
     }
     const pending = (queue ?? Promise.resolve()).catch(() => {}).then(write)
-    this.writes.set(file, pending)
+    this.writes.set(key, pending)
     return pending.finally(() => {
-      if (this.writes.get(file) === pending) this.writes.delete(file)
+      if (this.writes.get(key) === pending) this.writes.delete(key)
     })
   }
 }

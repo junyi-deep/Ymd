@@ -1,11 +1,15 @@
 import DOMPurify from 'dompurify'
+import { createElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
+import { Scan } from 'lucide-react'
+import { openMediaPreview } from './mediaPreview'
 import { applyImageSizing, imageHasSizing, isEmbeddedMarkdownImage, isRemoteMarkdownImage,
   type ImageSizing } from './markdownImageSyntax'
 
 export type PreviewImage = { source: string; label: string; title?: string; sizing: ImageSizing }
 
 export function createMarkdownImage(file: string, { label, source, title, sizing }: PreviewImage,
-  loadRemote: boolean, standalone: boolean, onLoad?: () => void) {
+  loadRemote: boolean, standalone: boolean, onLoad?: () => void, viewer = false) {
   const wrapper = document.createElement('span')
   const fallback = label || '图像'
   wrapper.className = 'md-image'
@@ -20,6 +24,18 @@ export function createMarkdownImage(file: string, { label, source, title, sizing
     if (onLoad) image.addEventListener('load', onLoad, { once: true })
     image.addEventListener('error', () => { wrapper.textContent = fallback + ' · 无法读取图像' }, { once: true })
     wrapper.replaceChildren(image)
+    if (viewer) image.addEventListener('load', () => {
+      const button = document.createElement('button')
+      button.type = 'button'
+      button.className = 'icon-button md-visual-open'
+      button.title = button.ariaLabel = '查看图片'
+      button.innerHTML = renderToStaticMarkup(createElement(Scan, { size: 16, 'aria-hidden': true }))
+      button.addEventListener('click', event => {
+        event.stopPropagation()
+        openMediaPreview(wrapper, { type: 'image', title: label || '图片', src: image.currentSrc || url })
+      })
+      wrapper.append(button)
+    }, { once: true })
     image.src = url
   }
   if (isRemoteMarkdownImage(source)) {

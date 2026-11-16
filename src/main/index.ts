@@ -1,6 +1,7 @@
-import { app, BrowserWindow, clipboard, ClipboardItem, dialog, ipcMain, Menu, nativeImage, nativeTheme, net, protocol, session, shell } from 'electron'
-import type { IpcMainInvokeEvent, MediaAccessPermissionRequest, MenuItemConstructorOptions } from 'electron'
+import { app, BrowserWindow, clipboard, ClipboardItem, dialog, ipcMain, Menu, nativeImage, nativeTheme, net, protocol, screen, session, shell } from 'electron'
+import type { IpcMainInvokeEvent, WebContents, MediaAccessPermissionRequest, MenuItemConstructorOptions } from 'electron'
 import { mkdir, readdir, readFile, writeFile, rename, open } from 'node:fs/promises'
+import { renameSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { defaultPreferences, mapExportExtensions, markdownImageExtensions, paneWidths, searchEngines, windowMaterialFor } from '../shared/contracts'
@@ -10,6 +11,8 @@ import { LocalMapLocations } from './localMapLocations'
 import { searchRoots } from './search'
 import { printView } from './printing'
 import { registerPitchWindow } from './pitchWindow'
+import { DocumentWatcher } from './documentWatcher'
+import { Recovery } from './recovery'
 import { Releases } from './releases'
 import { appShortcuts, inputChord, isShortcutAccelerator, readShortcutOverrides, shortcutAccelerator, shortcutMenuLabel, ShortcutSequence, shortcutsFor, shortcutValue,
   type AppShortcut } from '../shared/shortcuts'
@@ -19,15 +22,25 @@ const dev = !app.isPackaged && process.argv.includes('--dev')
 const rendererRoot = path.join(__dirname, '../renderer')
 const rendererUrl = dev ? 'http://127.0.0.1:5173/' : 'ymd://app/'
 protocol.registerSchemesAsPrivileged([{ scheme: 'ymd', privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true } }])
-let window: BrowserWindow | null = null
+type EditorWindow = {
+  window: BrowserWindow; initialFile?: DocumentFile; closing: boolean; search?: AbortController
+  recording: boolean; keys: ShortcutSequence; documents: Set<string>; watchRevision: number
+  draftRevisions: Map<string, symbol>
+  resolveClose?: (closed: boolean) => void
+}
+const editors = new Map<number, EditorWindow>()
+let lastEditor: EditorWindow | undefined
+let quitAllowed = false
+let quitPending = false
+let windowSize = { width: 1220, height: 800 }
+let sizeFile: string | undefined
+let sizeTimer: NodeJS.Timeout | undefined
+let recovery: Recovery
+const documentsWatcher = new DocumentWatcher((id, file) => editors.get(id)?.window.webContents.send('ymd:documentChanged', file))
 let preferences = defaultPreferences
-let closing = false
-let searchController: AbortController | undefined
 const windowsAcrylic = process.platform === 'win32' && Number(process.getSystemVersion().split('.')[2]) >= 22621
 const macVibrancy = 'hud'
 let preferenceWrite: Promise<unknown> = Promise.resolve()
-let recordingShortcut = false
-const appKeySequence = new ShortcutSequence()
 let appBindings = shortcutsFor('app', preferences.shortcuts, process.platform)
 
 function normalizePreferences(value: Partial<Preferences> | null): Preferences {
@@ -58,7 +71,7 @@ function normalizePreferences(value: Partial<Preferences> | null): Preferences {
     codeBlocks: { lineNumbers: value?.codeBlocks?.lineNumbers === true, wrap: value?.codeBlocks?.wrap === true },
     animations: value?.animations !== false,
     documentTheme: value?.documentTheme === 'paper' || value?.documentTheme === 'mono' ? value.documentTheme : 'classic',
-    autoSave: value?.autoSave === true,
+    autoSave: value?.autoSave !== false,
     remoteImages: value?.remoteImages === true,
     autoCheckUpdates: value?.autoCheckUpdates === true,
     autoDownloadUpdates: value?.autoDownloadUpdates === true,
@@ -72,38 +85,76 @@ const windowMaterial = (value = preferences) => windowMaterialFor(value, process
 const windowColor = () => nativeTheme.shouldUseDarkColors ? '#222323' : '#fdfdfd'
 const overlayColors = () => ({ color: windowColor(), symbolColor: nativeTheme.shouldUseDarkColors ? '#ededee' : '#222528' })
 
-function applyBackground() {
+function editorFor(contents?: WebContents | null) {
+  if (!contents) return
+  const owner = BrowserWindow.fromWebContents(contents)
+  return owner && editors.get(owner.id) || undefined
+}
+
+function broadcast(channel: string, value: unknown) {
+  for (const editor of editors.values()) {
+    if (!editor.window.webContents.isDestroyed()) editor.window.webContents.send(channel, value)
+  }
+}
+
+function applyBackground(target?: BrowserWindow) {
   nativeTheme.themeSource = preferences.theme
   const material = windowMaterial()
-  if (process.platform === 'darwin') window?.setVibrancy(material === 'vibrancy' ? macVibrancy : null)
-  if (windowsAcrylic) {
-    window?.setBackgroundMaterial(material === 'acrylic' ? 'acrylic' : 'none')
-    window?.setTitleBarOverlay(overlayColors())
+  for (const window of target ? [target] : [...editors.values()].map(editor => editor.window)) {
+    if (process.platform === 'darwin') window.setVibrancy(material === 'vibrancy' ? macVibrancy : null)
+    if (windowsAcrylic) {
+      window.setBackgroundMaterial(material === 'acrylic' ? 'acrylic' : 'none')
+      window.setTitleBarOverlay(overlayColors())
+    }
+    window.setBackgroundColor(material === 'solid' ? windowColor() : '#00000000')
+    if (process.platform === 'darwin') window.webContents.send('ymd:reducedTransparency', macReducesTransparency())
   }
-  window?.setBackgroundColor(material === 'solid' ? windowColor() : '#00000000')
-  if (process.platform === 'darwin') window?.webContents.send('ymd:reducedTransparency', macReducesTransparency())
 }
 
-function command(name: Command) {
-  window?.webContents.send('ymd:command', name)
+function command(name: Command, editor = editorFor(BrowserWindow.getFocusedWindow()?.webContents) ?? lastEditor) {
+  if (editor && !editor.window.webContents.isDestroyed()) editor.window.webContents.send('ymd:command', name)
 }
 
-function setShortcutRecording(active: boolean) {
-  recordingShortcut = active
-  appKeySequence.reset()
-  window?.webContents.setIgnoreMenuShortcuts(active)
+function setShortcutRecording(editor: EditorWindow, active: boolean) {
+  editor.recording = active
+  editor.keys.reset()
+  editor.window.webContents.setIgnoreMenuShortcuts(active)
+}
+
+function flushWindowSize() {
+  if (!sizeTimer || !sizeFile) return
+  clearTimeout(sizeTimer)
+  sizeTimer = undefined
+  try {
+    writeFileSync(sizeFile + '.tmp', JSON.stringify(windowSize), { flush: true })
+    renameSync(sizeFile + '.tmp', sizeFile)
+  } catch {}
+}
+
+async function closeEditors(except?: EditorWindow) {
+  for (const editor of [...editors.values()]) {
+    if (editor === except || editor.window.isDestroyed()) continue
+    const closed = await new Promise<boolean>(resolve => {
+      editor.resolveClose = resolve
+      editor.window.show()
+      editor.window.focus()
+      editor.window.close()
+    })
+    if (!closed) return false
+  }
+  return true
 }
 
 function installMenu() {
   appBindings = shortcutsFor('app', preferences.shortcuts, process.platform)
-  appKeySequence.reset()
+  for (const editor of editors.values()) editor.keys.reset()
   const entry = (id: AppShortcut): MenuItemConstructorOptions => {
     const value = shortcutValue(preferences.shortcuts, id, process.platform)
     return { label: shortcutMenuLabel(appShortcuts[id].label, value, process.platform), accelerator: shortcutAccelerator(value), click: () => command(id) }
   }
   Menu.setApplicationMenu(Menu.buildFromTemplate([
     ...(process.platform === 'darwin' ? [{ role: 'appMenu' } as const] : []),
-    { label: '文件', submenu: [entry('new-file'), entry('open-file'), entry('import-xmind'), entry('new-drawing'), entry('save'),
+    { label: '文件', submenu: [{ label: '新建窗口', click: () => createWindow() }, entry('new-file'), entry('open-file'), entry('import-xmind'), entry('new-drawing'), entry('save'),
       { type: 'separator' }, entry('preferences'), { role: 'close' }] },
     { label: '编辑', submenu: [{ role: 'undo' }, { role: 'redo' }, { type: 'separator' }, { role: 'cut' }, { role: 'copy' },
       { role: 'paste' }, { role: 'selectAll' }, entry('find'), entry('search')] },
@@ -111,13 +162,13 @@ function installMenu() {
   ]))
 }
 
-function createWindow() {
-  closing = false
+function createWindow(initialFile?: DocumentFile) {
   nativeTheme.themeSource = preferences.theme
   const material = windowMaterial()
-  window = new BrowserWindow({
-    width: 1220,
-    height: 800,
+  const workArea = screen.getPrimaryDisplay().workAreaSize
+  const window = new BrowserWindow({
+    width: Math.max(660, Math.min(windowSize.width, workArea.width)),
+    height: Math.max(510, Math.min(windowSize.height, workArea.height)),
     minWidth: 660,
     minHeight: 510,
     title: 'Ymd',
@@ -133,51 +184,79 @@ function createWindow() {
     visualEffectState: process.platform === 'darwin' ? 'active' : undefined,
     webPreferences: { preload: path.join(__dirname, '../preload/index.js'), contextIsolation: true, sandbox: true, nodeIntegration: false },
   })
-  applyBackground()
-  window.on('blur', () => appKeySequence.reset())
-  window.webContents.on('did-start-navigation', () => setShortcutRecording(false))
+  const editor: EditorWindow = { window, initialFile, closing: false, recording: false,
+    keys: new ShortcutSequence(), documents: new Set(), watchRevision: 0, draftRevisions: new Map() }
+  editors.set(window.id, editor)
+  lastEditor = editor
+  applyBackground(window)
+  window.on('focus', () => { lastEditor = editor })
+  window.on('blur', () => editor.keys.reset())
+  window.on('resize', () => {
+    if (window.isMaximized() || window.isFullScreen() || window.isMinimized()) return
+    const { width, height } = window.getNormalBounds()
+    if (width < 660 || height < 510) return
+    windowSize = { width, height }
+    clearTimeout(sizeTimer)
+    sizeTimer = setTimeout(flushWindowSize, 250)
+  })
+  window.webContents.on('render-process-gone', () => { void recovery.wait() })
+  window.webContents.on('did-start-navigation', () => setShortcutRecording(editor, false))
   window.webContents.on('before-input-event', (event, input) => {
-    if (recordingShortcut || input.type !== 'keyDown' || input.isComposing) return
+    if (editor.recording || input.type !== 'keyDown' || input.isComposing) return
     const chord = inputChord(input, process.platform)
     if (!chord) {
-      if (input.key === 'Escape') appKeySequence.reset()
+      if (input.key === 'Escape') editor.keys.reset()
       return
     }
-    const matched = appKeySequence.take(chord, appBindings, input.isAutoRepeat)
+    const matched = editor.keys.take(chord, appBindings, input.isAutoRepeat)
     if (!matched) return
     event.preventDefault()
-    if (matched !== 'pending') command(matched as AppShortcut)
+    if (matched !== 'pending') command(matched as AppShortcut, editor)
   })
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
   window.webContents.on('will-navigate', (event, url) => { if (url !== rendererUrl) event.preventDefault() })
   window.on('close', event => {
-    if (closing || window?.webContents.isCrashed() || window?.webContents.isLoadingMainFrame()) return
+    if (editor.closing || quitAllowed || window.webContents.isCrashed() || window.webContents.isLoadingMainFrame()) return
     event.preventDefault()
-    command('close')
+    command('close', editor)
   })
-  window.on('closed', () => { searchController?.abort(); window = null })
+  const id = window.id
+  window.on('closed', () => {
+    editor.search?.abort()
+    documentsWatcher.remove(id)
+    editors.delete(id)
+    if (lastEditor === editor) lastEditor = [...editors.values()].at(-1)
+    editor.resolveClose?.(true)
+    flushWindowSize()
+    void recovery.wait()
+  })
   void window.loadURL(rendererUrl)
 }
 
-function handle<A extends unknown[], R>(name: keyof Desktop, run: (...args: A) => R) {
+function handleEditor<A extends unknown[], R>(name: keyof Desktop, run: (editor: EditorWindow, ...args: A) => R) {
   ipcMain.handle('ymd:' + name, (event: IpcMainInvokeEvent, ...args: A) => {
-    if (event.sender !== window?.webContents || event.senderFrame?.url !== rendererUrl) throw new Error('无效的窗口请求。')
-    return run(...args)
+    const editor = editorFor(event.sender)
+    if (!editor || event.senderFrame !== event.sender.mainFrame || event.senderFrame.url !== rendererUrl) throw new Error('无效的窗口请求。')
+    return run(editor, ...args)
   })
 }
 
+function handle<A extends unknown[], R>(name: keyof Desktop, run: (...args: A) => R) {
+  handleEditor(name, (_editor, ...args: A) => run(...args))
+}
+
 void app.whenReady().then(async () => {
-  registerPitchWindow(rendererUrl, () => window)
+  registerPitchWindow(rendererUrl, contents => editorFor(contents)?.window ?? null)
   session.defaultSession.setPermissionCheckHandler((contents, permission, _origin, details) => {
     if (permission === 'media') {
-      return contents === window?.webContents && details.isMainFrame && details.mediaType === 'audio' && contents?.getURL() === rendererUrl
+      return !!editorFor(contents) && details.isMainFrame && details.mediaType === 'audio' && contents?.getURL() === rendererUrl
     }
     return permission !== 'display-capture'
   })
   session.defaultSession.setPermissionRequestHandler((contents, permission, reply, details) => {
     if (permission === 'media') {
       const types = (details as MediaAccessPermissionRequest).mediaTypes
-      reply(contents === window?.webContents && details.isMainFrame && details.requestingUrl === rendererUrl &&
+      reply(!!editorFor(contents) && details.isMainFrame && details.requestingUrl === rendererUrl &&
         types?.length === 1 && types[0] === 'audio')
       return
     }
@@ -194,7 +273,14 @@ void app.whenReady().then(async () => {
     return net.fetch(pathToFileURL(target).href)
   })
   const data = app.getPath('userData')
-  const releases = new Releases(data, status => window?.webContents.send('ymd:updateStatus', status))
+  sizeFile = path.join(data, 'window-size.json')
+  try {
+    const size = JSON.parse(await readFile(sizeFile, 'utf8'))
+    if (Number.isInteger(size.width) && size.width >= 660 && Number.isInteger(size.height) && size.height >= 510) windowSize = size
+  } catch {}
+  recovery = new Recovery(path.join(data, 'recovery'))
+  await recovery.load()
+  const releases = new Releases(data, status => broadcast('ymd:updateStatus', status))
   await releases.network.load()
   const settings = path.join(data, 'preferences.json')
   const recentFile = path.join(data, 'recent.json')
@@ -222,6 +308,7 @@ void app.whenReady().then(async () => {
       await rename(recentFile + '.tmp', recentFile)
       recent = next
       files.retainRoots(roots())
+      broadcast('ymd:workspaceChanged', { library, recent })
       return recent
     })
     recentWrite = task
@@ -271,34 +358,99 @@ void app.whenReady().then(async () => {
   async function updateLibrary(directory?: string) {
     const selected = directory ? await files.authorizeDirectory(directory) : await files.library(defaultLibrary)
     await storePreferences(current => ({ ...current, libraryDirectory: directory ? selected.path : undefined }))
-    searchController?.abort()
+    for (const editor of editors.values()) editor.search?.abort()
     library = selected
     files.retainRoots(roots())
+    broadcast('ymd:workspaceChanged', { library, recent })
+    broadcast('ymd:preferences', preferences)
     return library
   }
 
-  handle('initialize', () => ({ library, recent, preferences, platform: process.platform, windowsAcrylic,
-    macReducesTransparency: macReducesTransparency(), version: app.getVersion(), updateProxy: releases.network.publicProxy(), release: releases.status }))
+  handleEditor('initialize', editor => {
+    const initialFile = editor.initialFile
+    editor.initialFile = undefined
+    return { library, recent, preferences, platform: process.platform, windowsAcrylic, initialFile,
+      recoveries: recovery.list(), macReducesTransparency: macReducesTransparency(), version: app.getVersion(),
+      updateProxy: releases.network.publicProxy(), release: releases.status }
+  })
+  handle('newWindow', async (file?: string) => {
+    if (quitPending) return
+    const initial = file === undefined ? undefined : await files.read(file, true)
+    createWindow(initial)
+  })
+  handleEditor('watchDocuments', async (editor, paths: string[]) => {
+    if (!Array.isArray(paths) || paths.length > 1000 || paths.some(file => typeof file !== 'string' || !path.isAbsolute(file))) return
+    const revision = ++editor.watchRevision
+    const filesToWatch = await Promise.all(paths.map(async file => editor.documents.has(file)
+      ? file : files.authorizedFile(file).catch(() => undefined)))
+    if (revision !== editor.watchRevision || editor.window.isDestroyed()) return
+    editor.documents = new Set(filesToWatch.filter(file => file !== undefined))
+    documentsWatcher.set(editor.window.id, editor.documents)
+  })
+  handle('readDocumentState', async (file: string) => {
+    try { return await files.read(file, true) }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null; throw error }
+  })
+  handleEditor('recordDraft', async (editor, file: string, draft: Parameters<Desktop['recordDraft']>[1]) => {
+    if (typeof file !== 'string' || !fileKind(file) || draft !== null &&
+        (typeof draft?.text !== 'string' || typeof draft?.version !== 'string')) return
+    const revision = Symbol()
+    editor.draftRevisions.set(file, revision)
+    const canonical = editor.documents.has(file) ? file : await files.authorizedFile(file).catch(() => undefined)
+    if (editor.draftRevisions.get(file) !== revision) return
+    editor.draftRevisions.delete(file)
+    if (canonical && !editor.window.isDestroyed()) recovery.schedule(editor.window.id, canonical, draft)
+  })
+  handleEditor('restoreDraft', async (editor, id: string) => {
+    const saved = recovery.get(id)
+    if (!saved) return null
+    let file: DocumentFile
+    let missing = false
+    try { file = await files.authorizeFile(saved.path) }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+      file = await files.authorizeMissing(saved.path)
+      missing = true
+    }
+    editor.documents.add(file.path)
+    const draft = { text: saved.text, version: saved.version }
+    if (missing || file.text !== draft.text) {
+      await recovery.preserve(editor.window.id, file.path, draft)
+    }
+    return { file, draft, missing }
+  })
+  handle('discardDraft', async (id: string) => {
+    await recovery.discard(id)
+    broadcast('ymd:recoveryList', recovery.list())
+  })
   handle('checkForUpdates', () => releases.check())
   handle('downloadUpdate', () => releases.download())
   handle('setUpdateProxy', (proxy: Parameters<Desktop['setUpdateProxy']>[0]) => releases.network.save(proxy))
-  handle('installUpdate', async () => {
-    await preferenceWrite
-    await releases.install()
-    closing = true
-    app.quit()
+  handleEditor('installUpdate', async editor => {
+    if (quitPending) return
+    quitPending = true
+    try {
+      if (!await closeEditors(editor)) throw new Error('已取消在关闭窗口后安装更新。')
+      await preferenceWrite
+      await recovery.wait()
+      await releases.install()
+      for (const file of editor.documents) recovery.schedule(editor.window.id, file, null)
+      await recovery.wait()
+      quitAllowed = true
+      app.quit()
+    } finally { quitPending = false }
   })
   handle('openLibraryDirectory', async () => {
     const message = await shell.openPath(library.path)
     if (message) throw new Error(message)
   })
   handle('list', (directory: string) => files.list(directory))
-  handle('chooseLibraryDirectory', async () => {
+  handleEditor('chooseLibraryDirectory', async ({ window }) => {
     const result = await dialog.showOpenDialog(window!, { defaultPath: library.path, properties: ['openDirectory'] })
     return result.canceled ? null : updateLibrary(result.filePaths[0])
   })
   handle('resetLibraryDirectory', () => updateLibrary())
-  handle('chooseLocalDirectory', async () => {
+  handleEditor('chooseLocalDirectory', async ({ window }) => {
     const result = await dialog.showOpenDialog(window!, { properties: ['openDirectory'] })
     if (result.canceled) return null
     const entry = await files.authorizeDirectory(result.filePaths[0])
@@ -310,13 +462,13 @@ void app.whenReady().then(async () => {
     return entry ? [entry, ...items.filter(item => item.path !== file)] : items
   }))
   handle('removeRecent', (file: string) => writeRecent(items => items.filter(item => item.path !== file)))
-  handle('cancelSearch', () => { searchController?.abort() })
-  handle('search', async (input: string) => {
-    searchController?.abort()
+  handleEditor('cancelSearch', editor => { editor.search?.abort() })
+  handleEditor('search', async (editor, input: string) => {
+    editor.search?.abort()
     const query = typeof input === 'string' ? input.trim().slice(0, 256) : ''
     if (!query || /[\r\n\0]/.test(query)) return []
     const controller = new AbortController()
-    searchController = controller
+    editor.search = controller
     const executable = process.platform === 'win32' ? 'rg.exe' : 'rg'
     const binary = app.isPackaged ? path.join(process.resourcesPath, 'ripgrep', executable)
       : path.join(app.getAppPath(), 'node_modules/@vscode/ripgrep-universal/bin', `${process.platform}-${process.arch}`, executable)
@@ -329,10 +481,10 @@ void app.whenReady().then(async () => {
       }))
       return await searchRoots(binary, authorized.filter(entry => entry !== undefined), query, controller.signal)
     } finally {
-      if (searchController === controller) searchController = undefined
+      if (editor.search === controller) editor.search = undefined
     }
   })
-  handle('chooseFile', async (kind?: FileKind) => {
+  handleEditor('chooseFile', async ({ window }, kind?: FileKind) => {
     const filters = kind === 'markdown' ? [{ name: 'Markdown', extensions: ['md'] }]
       : kind === 'drawing' ? [{ name: 'Excalidraw', extensions: ['excalidraw'] }]
       : [{ name: 'Markdown 与 Excalidraw', extensions: ['md', 'excalidraw'] }]
@@ -354,7 +506,7 @@ void app.whenReady().then(async () => {
   handle('read', (file: string) => files.read(file, true))
   handle('create', (directory: string, kind: FileKind) => files.create(directory, kind))
   handle('createFolder', (directory: string) => files.createFolder(directory))
-  async function mutateTree(mutation: TreeMutation): Promise<TreeChange[] | null> {
+  async function mutateTree(window: BrowserWindow, mutation: TreeMutation): Promise<TreeChange[] | null> {
     if (!mutation || !['copy', 'import', 'move', 'trash', 'rename'].includes(mutation.operation) ||
       !Array.isArray(mutation.entries) || !mutation.entries.length || mutation.entries.length > 1000 ||
       mutation.entries.some(entry => !entry || typeof entry.path !== 'string' || !path.isAbsolute(entry.path) ||
@@ -430,13 +582,13 @@ void app.whenReady().then(async () => {
       files.retainRoots(roots())
     }
   }
-  handle('mutateTree', (mutation: TreeMutation) => {
-    treeWrite = treeWrite.catch(() => null).then(() => mutateTree(mutation))
+  handleEditor('mutateTree', ({ window }, mutation: TreeMutation) => {
+    treeWrite = treeWrite.catch(() => null).then(() => mutateTree(window, mutation))
     return treeWrite
   })
-  handle('save', (file: string, text: string, version: string) => {
-    if (typeof text !== 'string' || typeof version !== 'string') throw new Error('文件内容无效。')
-    return files.save(file, text, version)
+  handle('save', (file: string, text: string, version: string | null) => {
+    if (typeof text !== 'string' || version !== null && typeof version !== 'string') throw new Error('文件内容无效。')
+    return files.save(file, text, version).then(result => { if (!('conflict' in result)) documentsWatcher.changed(file); return result })
   })
   handle('duplicate', async (file: string, directory: string, text: string) => {
     if (typeof text !== 'string') throw new Error('文件内容无效。')
@@ -453,7 +605,7 @@ void app.whenReady().then(async () => {
     return document
   }
   handle('rename', async (file: string, name: string, version: string) => moveRecent(file, await files.renameDocument(file, name, version)))
-  handle('move', async (file: string, version: string) => {
+  handleEditor('move', async ({ window }, file: string, version: string) => {
     const canonical = await files.authorizedFile(file)
     const result = await dialog.showOpenDialog(window!, { defaultPath: path.dirname(canonical), properties: ['openDirectory'] })
     if (result.canceled) return null
@@ -480,10 +632,10 @@ void app.whenReady().then(async () => {
     if (!['https:', 'http:', 'mailto:'].includes(url.protocol)) throw new Error('链接类型不受支持。')
     await shell.openExternal(url.href)
   })
-  handle('chooseLocalMapLocation', (kind: Parameters<LocalMapLocations['choose']>[1], previous?: string) =>
+  handleEditor('chooseLocalMapLocation', ({ window }, kind: Parameters<LocalMapLocations['choose']>[1], previous?: string) =>
     localMapLocations.choose(window!, kind, previous))
-  handle('openLocalMapLocation', (url: string) => localMapLocations.open(window!, url))
-  handle('chooseMarkdownImages', async (file: string) => {
+  handleEditor('openLocalMapLocation', ({ window }, url: string) => localMapLocations.open(window!, url))
+  handleEditor('chooseMarkdownImages', async ({ window }, file: string) => {
     const canonical = await files.authorizedFile(file)
     const result = await dialog.showOpenDialog(window!, {
       defaultPath: path.dirname(canonical), properties: ['openFile', 'multiSelections'],
@@ -492,12 +644,57 @@ void app.whenReady().then(async () => {
     return result.canceled ? [] : files.importImageFiles(canonical, result.filePaths)
   })
   handle('importMarkdownImages', (file: string, images: MarkdownImageUpload[]) => files.importImageBytes(file, images))
-  handle('pasteMarkdownClipboard', () => window?.webContents.paste())
+  handleEditor('pasteMarkdownClipboard', ({ window }) => window.webContents.paste())
   handle('readMarkdownImage', (file: string, source: string) => {
     if (typeof source !== 'string') throw new Error('图片路径无效。')
     return files.readImage(file, source)
   })
-  handle('markdownContextMenu', (x: number, y: number, items: ContextMenuItem[]) => new Promise<number | null>(resolve => {
+  handle('readPreviewImage', async (source: string) => {
+    if (typeof source !== 'string' || source.length > 8192) throw new Error('图片地址无效。')
+    let url = new URL(source)
+    const signal = AbortSignal.timeout(20_000)
+    for (let redirects = 0; redirects <= 4; redirects++) {
+      if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password) throw new Error('图片地址无效。')
+      const response = await net.fetch(url.href, { credentials: 'omit', redirect: 'manual', signal })
+      if (response.status >= 300 && response.status < 400) {
+        const next = response.headers.get('location')
+        await response.body?.cancel()
+        if (!next) break
+        url = new URL(next, url)
+        continue
+      }
+      const type = response.headers.get('content-type')?.split(';')[0].trim().toLowerCase()
+      if (!response.ok || !response.body || !type || !Object.values(markdownImageExtensions).some(value => value === type)) {
+        await response.body?.cancel()
+        throw new Error('网络图片无法下载或格式不受支持。')
+      }
+      const chunks: Buffer[] = []
+      let length = 0
+      const reader = response.body.getReader()
+      try {
+        for (;;) {
+          const { value, done } = await reader.read()
+          if (done) break
+          length += value.byteLength
+          if (length > 15 * 1024 * 1024) { await reader.cancel(); throw new Error('网络图片超过 15 MB。') }
+          chunks.push(Buffer.from(value))
+        }
+      } finally { reader.releaseLock() }
+      return 'data:' + type + ';base64,' + Buffer.concat(chunks).toString('base64')
+    }
+    throw new Error('图片重定向次数过多。')
+  })
+  handleEditor('savePreviewImage', async ({ window }, name: string, format: 'png' | 'svg', data: ArrayBuffer) => {
+    if (typeof name !== 'string' || !['png', 'svg'].includes(format) || !(data instanceof ArrayBuffer) ||
+        !data.byteLength || data.byteLength > 64 * 1024 * 1024) throw new Error('导出图片无效或太大。')
+    const title = name.replace(/[<>:"/\\|?*\x00-\x1f]/g, '').trim().replace(/^[.]+|[. ]+$/g, '').slice(0, 100) || '图片'
+    const result = await dialog.showSaveDialog(window, { defaultPath: title + '.' + format,
+      filters: [{ name: format.toUpperCase(), extensions: [format] }] })
+    if (result.canceled || !result.filePath) return false
+    await writeFile(result.filePath, Buffer.from(data))
+    return true
+  })
+  handleEditor('markdownContextMenu', ({ window }, x: number, y: number, items: ContextMenuItem[]) => new Promise<number | null>(resolve => {
     if (!window || !Number.isFinite(x) || !Number.isFinite(y) || !Array.isArray(items)) { resolve(null); return }
     const template = (rows: ContextMenuItem[], depth = 0): MenuItemConstructorOptions[] => rows.slice(0, 30).flatMap(item => {
       if (!item || typeof item.label !== 'string') return []
@@ -513,14 +710,14 @@ void app.whenReady().then(async () => {
     })
     Menu.buildFromTemplate(template(items)).popup({ window, x: Math.max(0, Math.round(x)), y: Math.max(0, Math.round(y)), callback: () => resolve(null) })
   }))
-  handle('exportPdf', async (name: string, html: string) => {
+  handleEditor('exportPdf', async ({ window }, name: string, html: string) => {
     const result = await dialog.showSaveDialog(window!, { defaultPath: path.parse(name).name + '.pdf', filters: [{ name: 'PDF', extensions: ['pdf'] }] })
     if (result.canceled || !result.filePath || !window) return false
     const data = await printView(name, html, view => view.webContents.printToPDF({ printBackground: true }))
     await writeFile(result.filePath, data)
     return true
   })
-  handle('chooseXmind', async () => {
+  handleEditor('chooseXmind', async ({ window }) => {
     const selected = await dialog.showOpenDialog(window!, { properties: ['openFile'], filters: [{ name: 'Xmind', extensions: ['xmind'] }] })
     if (selected.canceled || !selected.filePaths.length) return null
     const file = selected.filePaths[0]
@@ -546,7 +743,7 @@ void app.whenReady().then(async () => {
     }
   })
   handle('createImportedMarkdown', (directory: string, name: string, text: string) => files.createImportedMarkdown(directory, name, text))
-  handle('saveXmind', async (name: string, data: ArrayBuffer) => {
+  handleEditor('saveXmind', async ({ window }, name: string, data: ArrayBuffer) => {
     if (typeof name !== 'string' || !(data instanceof ArrayBuffer) || data.byteLength < 4 ||
         new DataView(data).getUint32(0) !== 0x504b0304) throw new Error('Xmind 文件内容无效。')
     const title = name.replace(/[<>:"/\\|?*\u0000-\u001f]/g, '_').replace(/[. ]+$/, '').slice(0, 120) || '思维导图'
@@ -556,7 +753,7 @@ void app.whenReady().then(async () => {
     await writeFile(destination, Buffer.from(data), { flush: true })
     return true
   })
-  handle('saveAudioNote', async (data: ArrayBuffer) => {
+  handleEditor('saveAudioNote', async ({ window }, data: ArrayBuffer) => {
     if (!(data instanceof ArrayBuffer) || data.byteLength < 4 ||
         new DataView(data).getUint32(0) !== 0x1a45dfa3) throw new Error('录音文件内容无效。')
     const result = await dialog.showSaveDialog(window!, { defaultPath: '录音备注.webm', filters: [{ name: 'WebM 音频', extensions: ['webm'] }] })
@@ -565,7 +762,7 @@ void app.whenReady().then(async () => {
     await writeFile(destination, Buffer.from(data), { flush: true })
     return true
   })
-  handle('saveMapExport', async (name: string, format: MapExportKind, data: ArrayBuffer) => {
+  handleEditor('saveMapExport', async ({ window }, name: string, format: MapExportKind, data: ArrayBuffer) => {
     if (typeof name !== 'string' || typeof format !== 'string' || !Object.hasOwn(mapExportExtensions, format) || !(data instanceof ArrayBuffer) ||
         !data.byteLength || data.byteLength > 64 * 1024 * 1024) throw new Error('导图文件内容无效或过大。')
     const title = name.replace(/[<>:"/\\|?*\u0000-\u001f]/g, '_').trim().replace(/[. ]+$/, '').slice(0, 120) || '思维导图'
@@ -578,7 +775,7 @@ void app.whenReady().then(async () => {
     await writeFile(destination, Buffer.from(data), { flush: true })
     return true
   })
-  handle('captureMapShot', async (rect: MapShotRect) => {
+  handleEditor('captureMapShot', async ({ window }, rect: MapShotRect) => {
     const owner = window!
     const [width, height] = owner.getContentSize()
     if (!rect || ![rect.x, rect.y, rect.width, rect.height].every(Number.isSafeInteger) ||
@@ -588,7 +785,7 @@ void app.whenReady().then(async () => {
     if (image.isEmpty()) throw new Error('无法截取导图画布。')
     return Uint8Array.from(image.toPNG({ scaleFactor: Math.max(1, ...image.getScaleFactors()) })).buffer
   })
-  handle('outputMapShot', async (data: ArrayBuffer, name?: string) => {
+  handleEditor('outputMapShot', async ({ window }, data: ArrayBuffer, name?: string) => {
     if (!(data instanceof ArrayBuffer) || data.byteLength < 24 || data.byteLength > 40 * 1024 * 1024 ||
         (name !== undefined && typeof name !== 'string')) throw new Error('截图内容无效或过大。')
     const header = new DataView(data)
@@ -617,7 +814,7 @@ void app.whenReady().then(async () => {
       else reject(new Error(reason || '无法打印文档。'))
     })
   })))
-  handle('saveCopy', async (file: string, text: string) => {
+  handleEditor('saveCopy', async ({ window }, file: string, text: string) => {
     const kind = fileKind(file)
     if (!kind || typeof text !== 'string') throw new Error('文件内容无效。')
     const extension = kind === 'markdown' ? '.md' : '.excalidraw'
@@ -635,25 +832,44 @@ void app.whenReady().then(async () => {
   })
   handle('reveal', async (file: string, directory?: boolean) =>
     shell.showItemInFolder(await (directory ? files.authorizedDirectory(file) : files.authorizedFile(file))))
-  handle('setPreferences', async (value: Preferences) => {
+  handle('setPreferences', async (value: Partial<Preferences>) => {
     let changedShortcuts = false
     let changedBackground = false
     const updated = await storePreferences(current => {
-      const next = normalizePreferences({ ...value, libraryDirectory: current.libraryDirectory })
+      const next = normalizePreferences({ ...current, ...value, libraryDirectory: current.libraryDirectory })
       changedShortcuts = JSON.stringify(current.shortcuts) !== JSON.stringify(next.shortcuts)
       changedBackground = current.theme !== next.theme || windowMaterial(current) !== windowMaterial(next)
       return next
     })
     if (changedShortcuts) installMenu()
     if (changedBackground) applyBackground()
+    broadcast('ymd:preferences', updated)
     return updated
   })
-  handle('setShortcutRecording', (active: boolean) => setShortcutRecording(active === true))
-  handle('finishClose', () => { closing = true; window?.close() })
+  handleEditor('setShortcutRecording', (editor, active: boolean) => setShortcutRecording(editor, active === true))
+  handleEditor('cancelClose', editor => { editor.resolveClose?.(false); editor.resolveClose = undefined })
+  handleEditor('finishClose', async editor => {
+    await recovery.wait()
+    editor.closing = true
+    editor.window.close()
+  })
   installMenu()
   createWindow()
-  nativeTheme.on('updated', applyBackground)
-  app.on('activate', () => { if (!window) createWindow() })
+  nativeTheme.on('updated', () => applyBackground())
+  app.on('activate', () => { if (!editors.size && !quitPending) createWindow() })
 })
 
-app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit() })
+app.on('before-quit', event => {
+  flushWindowSize()
+  if (quitAllowed || !editors.size) return
+  event.preventDefault()
+  if (quitPending) return
+  quitPending = true
+  void closeEditors().then(async closed => {
+    if (!closed) return
+    await recovery.wait()
+    quitAllowed = true
+    app.quit()
+  }).finally(() => { quitPending = false })
+})
+app.on('window-all-closed', () => { if (process.platform !== 'darwin' && !quitPending) app.quit() })

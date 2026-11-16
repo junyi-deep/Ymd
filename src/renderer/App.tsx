@@ -1,6 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState, type CSSProperties, type MouseEvent, type ReactNode } from 'react'
 import { ArrowLeft, Check, ChevronRight, CircleAlert, Copy, FilePlus2, FileText, FolderInput, Home, ListChecks, ListTree, Network, PanelLeft, LocateFixed, Pencil, Pin, Plus, Save, Search, Settings2, Shapes, Star, Trash2, X } from 'lucide-react'
-import { defaultPreferences, defaultUpdateProxy, windowMaterialFor, type Command, type DocumentFile, type EditorMode, type Entry, type FileKind, type Preferences, type Scope, type SearchHit, type TreeChange, type TreeMutation, type UpdateProxyInput, type VersionStatus } from '../shared/contracts'
+import { defaultPreferences, defaultUpdateProxy, windowMaterialFor, type Command, type DocumentFile, type EditorMode, type Entry, type FileKind, type Preferences, type RecoveryEntry, type Scope, type SearchHit, type TreeChange, type TreeMutation, type UpdateProxyInput, type VersionStatus } from '../shared/contracts'
 import { FileTreeRow, FilesTree, type TreeDrag, type TreeRename } from './FilesTree'
 import { SearchDialog } from './SearchDialog'
 import { Settings } from './Settings'
@@ -31,7 +31,9 @@ function IconButton({ label, children, click, disabled }: { label: string; child
 
 type Prompt =
   | { type: 'close'; path?: string; install?: boolean }
-  | { type: 'reload' | 'trash'; session: Session }
+  | { type: 'conflict'; path: string }
+  | { type: 'recovery' }
+  | { type: 'trash'; session: Session }
   | { type: 'tree-trash'; entries: Entry[] }
 
 export function App() {
@@ -66,6 +68,10 @@ export function App() {
   const [revision, setRevision] = useState(0)
   const [find, setFind] = useState(0)
   const [prompt, setPrompt] = useState<Prompt>()
+  const [recoveries, setRecoveries] = useState<RecoveryEntry[]>([])
+  const deferredConflicts = useRef(new Map<string, Session['disk']>())
+  const refreshDocuments = useRef<(path?: string) => void>(() => {})
+  const autoSaveTimers = useRef(new Map<string, { text: string; version: string; timer: number }>())
   const [notice, setNotice] = useState('')
   const [busy, setBusy] = useState(false)
   const [importing, setImporting] = useState(false)
@@ -89,7 +95,7 @@ export function App() {
     const next = { ...lastPreferences.current, ...patch }
     lastPreferences.current = next
     setPreferences(next)
-    run(async () => { await window.desktop.setPreferences(next) })
+    run(async () => { await window.desktop.setPreferences(patch) })
   }
 
   async function checkForUpdates(manual = true) {
@@ -120,19 +126,43 @@ export function App() {
       if (result.release.update) setRelease(result.release)
       setPreferences(result.preferences)
       lastPreferences.current = result.preferences
+      setRecoveries(result.recoveries)
+      if (result.recoveries.length) setPrompt({ type: 'recovery' })
+      if (result.initialFile) {
+        const file = result.initialFile
+        sessions.open(file, file.path.startsWith(result.library.path + (result.platform === 'win32' ? '\\' : '/')) ? 'library' : 'local')
+        if (file.kind === 'markdown' && loadMapAppearance(file.path).imported) sessions.patch(file.path, { mode: 'map' })
+      }
     })
     const query = matchMedia('(prefers-color-scheme: dark)')
     const onTheme = () => setSystemDark(query.matches)
-    const onFocus = () => setRevision(value => value + 1)
+    const onFocus = () => {
+      setRevision(value => value + 1)
+      const paths = sessions.latest.current.map(document => document.path)
+      void window.desktop.watchDocuments(paths).catch(() => {})
+      refreshDocuments.current()
+    }
     query.addEventListener('change', onTheme)
     const unsubscribeTransparency = window.desktop.onReducedTransparency(setMacReducesTransparency)
     window.addEventListener('focus', onFocus)
     const unsubscribeUpdate = window.desktop.onUpdateStatus(setRelease)
+    const unsubscribeDocuments = window.desktop.onDocumentChanged(path => refreshDocuments.current(path))
+    const unsubscribePreferences = window.desktop.onPreferences(next => { lastPreferences.current = next; setPreferences(next) })
+    const unsubscribeRecovery = window.desktop.onRecoveryList(setRecoveries)
+    const unsubscribeWorkspace = window.desktop.onWorkspaceChange(next => {
+      setLibrary(next.library)
+      setRecent(next.recent)
+      setRevision(value => value + 1)
+    })
     const unsubscribe = window.desktop.onCommand(command => commandRef.current(command))
     return () => {
       unsubscribe()
       unsubscribeTransparency()
       unsubscribeUpdate()
+      unsubscribeDocuments()
+      unsubscribePreferences()
+      unsubscribeRecovery()
+      unsubscribeWorkspace()
       query.removeEventListener('change', onTheme)
       window.removeEventListener('focus', onFocus)
     }
@@ -193,11 +223,53 @@ export function App() {
     if (!prompt && modal.current?.open) modal.current.close()
   }, [prompt])
 
+  refreshDocuments.current = path => {
+    for (const document of sessions.latest.current) {
+      if (path && document.path !== path) continue
+      void sessions.refresh(document.path, active?.path === document.path ? () => flushEditor.current?.() : undefined)
+        .catch(error => { if (path) setNotice(message(error)) })
+    }
+  }
+  const watchedDocuments = sessions.documents.map(document => document.path).join('\0')
   useEffect(() => {
-    if (!preferences.autoSave || !active || active.conflict || active.text === active.saved) return
-    const timer = window.setTimeout(() => run(() => sessions.save(active.path)), 900)
-    return () => window.clearTimeout(timer)
-  }, [preferences.autoSave, active?.path, active?.version, active?.text, active?.conflict])
+    void window.desktop.watchDocuments(watchedDocuments ? watchedDocuments.split('\0') : [])
+      .then(() => refreshDocuments.current()).catch(() => {})
+  }, [watchedDocuments])
+
+  useEffect(() => {
+    const timers = autoSaveTimers.current
+    for (const [path, pending] of timers) {
+      const document = sessions.documents.find(item => item.path === path)
+      if (!preferences.autoSave || !document || document.conflict || document.text === document.saved ||
+          document.text !== pending.text || document.version !== pending.version) {
+        window.clearTimeout(pending.timer)
+        timers.delete(path)
+      }
+    }
+    if (!preferences.autoSave) return
+    for (const document of sessions.documents) {
+      if (document.conflict || document.text === document.saved || timers.has(document.path)) continue
+      const timer = window.setTimeout(() => {
+        timers.delete(document.path)
+        run(() => sessions.save(document.path))
+      }, 1000)
+      timers.set(document.path, { text: document.text, version: document.version, timer })
+    }
+  }, [sessions.documents, preferences.autoSave])
+
+  useEffect(() => {
+    if (prompt) return
+    const conflict = sessions.documents.find(document => document.conflict && document.text !== document.saved &&
+      (!deferredConflicts.current.has(document.path) || deferredConflicts.current.get(document.path) !== document.disk))
+    if (conflict) setPrompt({ type: 'conflict', path: conflict.path })
+  }, [sessions.documents, prompt])
+
+  function dismissPrompt() {
+    if (prompt?.type === 'close') void window.desktop.cancelClose()
+    if (prompt?.type === 'conflict') deferredConflicts.current.set(prompt.path,
+      sessions.latest.current.find(document => document.path === prompt.path)?.disk)
+    setPrompt(undefined)
+  }
 
   function within(entry: Entry, path: string) {
     const normalize = (value: string) => platform === 'win32' ? value.toLowerCase() : value
@@ -341,13 +413,19 @@ export function App() {
       updateInstallInFlight.current = true
       setBusy(true)
       run(async () => {
-        try { await window.desktop.installUpdate(); setPrompt(undefined) }
+        try {
+          await window.desktop.installUpdate()
+          setPrompt(undefined)
+        }
         finally { updateInstallInFlight.current = false; setBusy(false) }
       })
       return
     }
     if (path) { outlineSessions.current.delete(path); sessions.close(path) }
-    else run(() => window.desktop.finishClose())
+    else run(async () => {
+      await Promise.all(sessions.latest.current.map(document => sessions.journal(document.path, null)))
+      await window.desktop.finishClose()
+    })
     setPrompt(undefined)
   }
 
@@ -369,6 +447,7 @@ export function App() {
       try {
         for (const document of sessions.latest.current) {
           if ((!path || path === document.path) && !await sessions.save(document.path)) {
+            void window.desktop.cancelClose()
             setPrompt(undefined)
             sessions.open(document, document.scope)
             setSettings(false)
@@ -383,7 +462,10 @@ export function App() {
   }
 
   commandRef.current = command => {
-    if (command === 'close') requestClose()
+    if (command === 'close') {
+      if (prompt || searchOpen) { void window.desktop.cancelClose(); return }
+      requestClose()
+    }
     if (prompt) return
     if (command === 'search') setSearchOpen(value => !value)
     if (searchOpen) return
@@ -594,6 +676,7 @@ export function App() {
     { label: '删除', icon: <Trash2 size={16} />, disabled: !chosen.length, run: () => setPrompt({ type: 'tree-trash', entries: chosen }) },
   ]
   const treeItems: MenuItem[] = treeMenu?.kind === 'batch' ? batchItems : treeMenu?.kind === 'open' ? [
+    { label: '新建窗口', run: () => run(() => window.desktop.newWindow()) },
     { label: '打开文件…', icon: <FileText size={16} />, run: openFile },
     { label: '打开文件夹…', icon: <FolderInput size={16} />, run: openDirectory },
   ] : treeMenu?.kind === 'entry' && treeMenu.target ? (() => {
@@ -602,7 +685,8 @@ export function App() {
       run: () => run(() => window.desktop.reveal(target.path, target.kind === 'directory')) }]
     if (target.kind === 'directory') items.unshift({ label: '新建', icon: <Plus size={16} />, children: newItems(target) })
     else {
-      items.unshift({ label: '打开', run: () => openPath(target.path) })
+      items.unshift({ label: '打开', run: () => openPath(target.path) },
+        { label: '在新窗口打开', run: () => run(() => window.desktop.newWindow(target.path)) })
       items.push({ label: marks.pinned.includes(target.path) ? '取消置顶' : '置顶', icon: <Pin size={16} />, run: () => marks.toggle('pinned', target.path) })
       items.push({ label: marks.starred.includes(target.path) ? '取消收藏' : '收藏', icon: <Star size={16} />, run: () => marks.toggle('starred', target.path) })
     }
@@ -730,7 +814,7 @@ export function App() {
         </aside>}
         <main className="workspace">
           {active?.conflict && <div className="alert"><CircleAlert size={17} /><span>磁盘上的文件已变化。草稿仍在编辑器中。</span>
-            <button onClick={() => setPrompt({ type: 'reload', session: active })}>重新载入</button>
+            <button onClick={() => setPrompt({ type: 'conflict', path: active.path })}>处理冲突</button>
             <button onClick={() => run(async () => {
               const file = await window.desktop.saveCopy(active.path, active.text)
               if (file) { setRecent(await window.desktop.listRecent()); showFile(file) }
@@ -739,6 +823,7 @@ export function App() {
           {!active ? <div className="home">
             <h1>我的文档</h1>
             <p>创建文档或打开已有的本机文件。</p>
+            {recoveries.length > 0 && <button className="tool-button" onClick={() => setPrompt({ type: 'recovery' })}>恢复未保存的文档</button>}
             <div className="home-actions">
               <button onClick={() => create()}><FilePlus2 size={21} /><span>新建文档</span>{homeHint('new-file')}</button>
               <button onClick={() => create('drawing')}><Shapes size={21} /><span>新建绘图</span>{homeHint('new-drawing')}</button>
@@ -804,7 +889,7 @@ export function App() {
     {treeMenu && !settings && <MarkdownMenu key={treeMenu.kind + ':' + (treeMenu.target?.path ?? '')}
       items={treeItems} close={() => setTreeMenu(undefined)} point={treeMenu} anchor={treeMenu.anchor} nativeStyle />}
     {searchOpen && <SearchDialog documents={sessions.documents} onOpen={openFromSearch} onClose={() => setSearchOpen(false)} />}
-    <dialog ref={modal} onCancel={event => { event.preventDefault(); if (!busy) setPrompt(undefined) }} onClose={() => setNotice('')}>
+    <dialog ref={modal} onCancel={event => { event.preventDefault(); if (!busy) dismissPrompt() }} onClose={() => setNotice('')}>
       {prompt?.type === 'tree-trash' && <div>
         <h2>移到回收站</h2>
         <p>{prompt.entries.length === 1 ? '将「' + prompt.entries[0].name + '」移到系统回收站。' : '将选中的 ' + prompt.entries.length + ' 项移到系统回收站。'}</p>
@@ -815,7 +900,7 @@ export function App() {
       {prompt?.type === 'close' && <div>
         <h2>保留更改</h2><p>{prompt.install ? '重启安装前是否保存未保存的文档？' : '还有未保存的文档。关闭前需要保存吗？'}</p>
         {notice && <p className="form-error" role="alert">{notice}</p>}
-        <footer><button onClick={() => setPrompt(undefined)} disabled={busy}>取消</button><button onClick={() => finishClose(prompt.path, prompt.install)} disabled={busy}>舍弃</button>
+        <footer><button onClick={dismissPrompt} disabled={busy}>取消</button><button onClick={() => finishClose(prompt.path, prompt.install)} disabled={busy}>舍弃</button>
           <button className="primary" onClick={() => saveAndClose(prompt.path, prompt.install)} disabled={busy}>保存</button></footer>
       </div>}
       {prompt?.type === 'trash' && <div>
@@ -839,13 +924,61 @@ export function App() {
             } finally { setBusy(false) }
           })}>移到回收站</button></footer>
       </div>}
-      {prompt?.type === 'reload' && <div><h2>重新载入文件</h2><p>载入磁盘上的版本会替换当前草稿。</p>
-        {notice && <p className="form-error" role="alert">{notice}</p>}
-        <footer><button onClick={() => setPrompt(undefined)} disabled={busy}><ArrowLeft size={14} />返回</button>
-          <button className="primary" disabled={busy} onClick={() => run(async () => {
+      {prompt?.type === 'conflict' && (() => {
+        const document = sessions.documents.find(item => item.path === prompt.path)
+        if (!document) return null
+        return <div>
+          <h2>文件内容冲突</h2>
+          <p>「{document.name}」{document.disk === null ? '已从磁盘移除' : '有外部更改'}。请选择要保留的版本。</p>
+          {notice && <p className="form-error" role="alert">{notice}</p>}
+          <footer>
+            <button disabled={busy} onClick={dismissPrompt}>稍后处理</button>
+            <button className="conflict-load" disabled={busy || !document.disk} onClick={() => run(async () => {
+              setBusy(true)
+              try {
+                if (await sessions.reload(document.path)) setPrompt(undefined)
+                else { await sessions.refresh(document.path); setNotice('磁盘文件已移除。') }
+              } finally { setBusy(false) }
+            })}>加载磁盘版本</button>
+            <button className="conflict-overwrite" disabled={busy || document.disk === undefined} onClick={() => run(async () => {
+              setBusy(true)
+              try {
+                const ok = await sessions.save(document.path, { version: document.disk?.version ?? null })
+                if (ok) setPrompt(undefined)
+                else setNotice('磁盘版本再次变更，请重新确认。')
+              } finally { setBusy(false) }
+            })}>用当前内容覆盖</button>
+          </footer>
+        </div>
+      })()}
+      {prompt?.type === 'recovery' && <div>
+        <h2>恢复未保存的文档</h2>
+        {recoveries.map(entry => <div className="recovery-row" key={entry.id}>
+          <span title={entry.path}>{entry.path.split(/[\\/]/).at(-1)}</span>
+          <button className="tool-button" disabled={busy} onClick={() => run(async () => {
             setBusy(true)
-            try { await sessions.reload(prompt.session); setPrompt(undefined) } finally { setBusy(false) }
-          })}>重新载入</button></footer></div>}
+            try {
+              if (sessions.latest.current.some(document => document.path === entry.path && document.saved !== document.text)) {
+                setNotice('请先保存当前窗口里同名文档的更改。')
+                return
+              }
+              const restored = await window.desktop.restoreDraft(entry.id)
+              if (restored) {
+                showFile(restored.file)
+                await sessions.restore(restored.file, restored.draft, restored.missing, scopeOf(restored.file.path))
+                await window.desktop.discardDraft(entry.id)
+                setPrompt(undefined)
+              }
+            } finally { setBusy(false) }
+          })}>恢复</button>
+          <button className="tool-button" disabled={busy} onClick={() => run(async () => {
+            await window.desktop.discardDraft(entry.id)
+            if (recoveries.length === 1) setPrompt(undefined)
+          })}>丢弃</button>
+        </div>)}
+        {notice && <p className="form-error" role="alert">{notice}</p>}
+        <footer><button disabled={busy} onClick={dismissPrompt}>稍后处理</button></footer>
+      </div>}
     </dialog>
   </div>
 }
