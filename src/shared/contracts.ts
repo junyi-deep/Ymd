@@ -42,6 +42,8 @@ export interface Entry {
   kind: FileKind | 'directory'
 }
 
+export const documentHistoryLimit = 10
+
 export interface TreeMutation {
   operation: 'copy' | 'import' | 'move' | 'trash' | 'rename'
   entries: (Entry & { version?: string; text?: string })[]
@@ -155,7 +157,7 @@ export function markdownImageExtension(name: string, type = '') {
 
 export interface Desktop {
   initialize(): Promise<{ library: Entry; recent: Entry[]; preferences: Preferences; platform: string; windowsAcrylic: boolean; macReducesTransparency: boolean; version: string; updateProxy: UpdateProxy; release: VersionStatus;
-    initialFile?: DocumentFile; recoveries: RecoveryEntry[] }>
+    initialFile?: DocumentFile; recoveries: RecoveryEntry[]; documentHistory: Entry[] }>
   list(path: string): Promise<Entry[]>
   chooseLibraryDirectory(): Promise<Entry | null>
   resetLibraryDirectory(): Promise<Entry>
@@ -163,6 +165,9 @@ export interface Desktop {
   listRecent(): Promise<Entry[]>
   touchRecent(path: string): Promise<Entry[]>
   removeRecent(path: string): Promise<Entry[]>
+  recordDocumentOpen(path: string): Promise<void>
+  openHistoryDocument(path: string): Promise<DocumentFile | null>
+  onDocumentHistory(callback: (entries: Entry[]) => void): () => void
   search(query: string): Promise<SearchHit[]>
   cancelSearch(): Promise<void>
   chooseFile(kind?: FileKind): Promise<DocumentFile | null>

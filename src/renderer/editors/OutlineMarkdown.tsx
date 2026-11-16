@@ -63,6 +63,12 @@ export const OutlineMarkdown = memo(function OutlineMarkdown({ text, path, remot
     const template = document.createElement('template')
     template.innerHTML = source ? sanitizeMarkdownHtml(parser.parser(lexer.lex(source))) : '&nbsp;'
     const output = template.content
+    for (const table of output.querySelectorAll('table')) {
+      const viewport = document.createElement('div')
+      viewport.className = 'outline-table-scroll'
+      table.replaceWith(viewport)
+      viewport.append(table)
+    }
     for (const placeholder of output.querySelectorAll<HTMLElement>('[data-preview-image]')) {
       const image = images.get(placeholder.dataset.previewImage ?? '')
       if (!image) continue

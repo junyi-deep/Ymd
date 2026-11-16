@@ -4,7 +4,7 @@ import { mkdir, readdir, readFile, writeFile, rename, open } from 'node:fs/promi
 import { renameSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { defaultPreferences, mapExportExtensions, markdownImageExtensions, paneWidths, searchEngines, windowMaterialFor } from '../shared/contracts'
+import { defaultPreferences, documentHistoryLimit, mapExportExtensions, markdownImageExtensions, paneWidths, searchEngines, windowMaterialFor } from '../shared/contracts'
 import type { Command, ContextMenuItem, Desktop, DocumentFile, Entry, FileKind, MapExportKind, MapShotRect, MarkdownImageUpload, Preferences, TreeChange, TreeMutation } from '../shared/contracts'
 import { Files, containsPath, fileKind } from './files'
 import { LocalMapLocations } from './localMapLocations'
@@ -343,6 +343,46 @@ void app.whenReady().then(async () => {
     files.retainRoots(roots())
   }
 
+  const historyFile = path.join(data, 'document-history.json')
+  const storedHistory = await readFile(historyFile, 'utf8').catch(() => undefined)
+  let documentHistory = recent.filter(entry => entry.kind !== 'directory').slice(0, documentHistoryLimit)
+  if (storedHistory !== undefined) {
+    let parsed: unknown
+    try { parsed = JSON.parse(storedHistory) } catch {}
+    if (Array.isArray(parsed)) {
+      const entries = await Promise.all(parsed.slice(0, documentHistoryLimit).map(file =>
+        typeof file === 'string' && path.isAbsolute(file) ? files.authorizeFileEntry(file).catch(() => null) : null))
+      const available = entries.filter(entry => entry !== null)
+      documentHistory = [...new Map(available.map(entry => [entry.path, entry])).values()]
+    }
+  }
+  let historyWrite = Promise.resolve()
+  function updateDocumentHistory(change: (entries: Entry[]) => Entry[] | Promise<Entry[]>) {
+    const task = historyWrite.catch(() => {}).then(async () => {
+      const changed = await change(documentHistory)
+      if (changed === documentHistory) return
+      const next = [...new Map(changed.map(entry => [entry.path, entry])).values()].slice(0, documentHistoryLimit)
+      if (next.length === documentHistory.length && next.every((entry, index) => entry === documentHistory[index])) return
+      await writeFile(historyFile + '.tmp', JSON.stringify(next.map(entry => entry.path)), { flush: true })
+      await rename(historyFile + '.tmp', historyFile)
+      documentHistory = next
+      broadcast('ymd:documentHistory', next)
+    })
+    historyWrite = task
+    return task
+  }
+
+  function relocateRecentEntries(entries: Entry[], changes: TreeChange[]) {
+    return entries.flatMap(entry => {
+      const change = changes.find(change => !change.error && (change.source.path === entry.path ||
+        change.source.kind === 'directory' && containsPath(change.source.path, entry.path)))
+      if (!change) return [entry]
+      if (!change.target) return []
+      const updatedPath = path.join(change.target.path, path.relative(change.source.path, entry.path))
+      return [{ ...entry, path: updatedPath, name: path.basename(updatedPath) }]
+    })
+  }
+
   function storePreferences(update: (current: Preferences) => Preferences) {
     const task = preferenceWrite.catch(() => {}).then(async () => {
       const next = update(preferences)
@@ -370,7 +410,7 @@ void app.whenReady().then(async () => {
     const initialFile = editor.initialFile
     editor.initialFile = undefined
     return { library, recent, preferences, platform: process.platform, windowsAcrylic, initialFile,
-      recoveries: recovery.list(), macReducesTransparency: macReducesTransparency(), version: app.getVersion(),
+      recoveries: recovery.list(), documentHistory, macReducesTransparency: macReducesTransparency(), version: app.getVersion(),
       updateProxy: releases.network.publicProxy(), release: releases.status }
   })
   handle('newWindow', async (file?: string) => {
@@ -432,6 +472,7 @@ void app.whenReady().then(async () => {
     try {
       if (!await closeEditors(editor)) throw new Error('已取消在关闭窗口后安装更新。')
       await preferenceWrite
+      await historyWrite.catch(() => {})
       await recovery.wait()
       await releases.install()
       for (const file of editor.documents) recovery.schedule(editor.window.id, file, null)
@@ -462,6 +503,22 @@ void app.whenReady().then(async () => {
     return entry ? [entry, ...items.filter(item => item.path !== file)] : items
   }))
   handle('removeRecent', (file: string) => writeRecent(items => items.filter(item => item.path !== file)))
+  handle('recordDocumentOpen', (file: string) => updateDocumentHistory(async entries => {
+    if (entries[0]?.path === file) return entries
+    const canonical = await files.authorizedFile(file)
+    const kind = fileKind(canonical)
+    if (!kind) return entries
+    return [{ path: canonical, name: path.basename(canonical), kind }, ...entries.filter(entry => entry.path !== canonical)]
+  }))
+  handle('openHistoryDocument', async (file: string) => {
+    if (!documentHistory.some(entry => entry.path === file)) return null
+    try { return await files.read(file, true) }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+      await updateDocumentHistory(entries => entries.filter(entry => entry.path !== file))
+      return null
+    }
+  })
   handleEditor('cancelSearch', editor => { editor.search?.abort() })
   handleEditor('search', async (editor, input: string) => {
     editor.search?.abort()
@@ -560,22 +617,18 @@ void app.whenReady().then(async () => {
           changes.push({ source, error: error instanceof Error ? error.message : String(error) })
         }
       }
-      if (!copying) await writeRecent(items => {
-        const updated = items.flatMap(entry => {
-          const change = changes.find(change => !change.error && (change.source.path === entry.path ||
-            change.source.kind === 'directory' && containsPath(change.source.path, entry.path)))
-          if (!change) return [entry]
-          if (!change.target) return []
-          const updatedPath = path.join(change.target.path, path.relative(change.source.path, entry.path))
-          return [{ ...entry, path: updatedPath, name: path.basename(updatedPath) }]
-        })
-        for (const change of changes) {
-          const target = change.target
-          if (target && !containsPath(library.path, target.path) &&
-              !updated.some(entry => entry.path === target.path || entry.kind === 'directory' && containsPath(entry.path, target.path))) updated.unshift(target)
-        }
-        return [...new Map(updated.map(entry => [entry.path, entry])).values()]
-      }).catch(error => { console.warn('无法保存最近打开记录。', error) })
+      if (!copying) {
+        await writeRecent(items => {
+          const updated = relocateRecentEntries(items, changes)
+          for (const change of changes) {
+            const target = change.target
+            if (target && !containsPath(library.path, target.path) &&
+                !updated.some(entry => entry.path === target.path || entry.kind === 'directory' && containsPath(entry.path, target.path))) updated.unshift(target)
+          }
+          return [...new Map(updated.map(entry => [entry.path, entry])).values()]
+        }).catch(error => { console.warn('无法保存最近打开记录。', error) })
+        await updateDocumentHistory(entries => relocateRecentEntries(entries, changes)).catch(error => { console.warn('无法保存文档历史。', error) })
+      }
       return changes
     } finally {
       if (destination) temporaryRoots.delete(destination)
@@ -601,6 +654,8 @@ void app.whenReady().then(async () => {
         const next = items.filter(entry => entry.path !== oldPath && entry.path !== document.path)
         return containsPath(library.path, document.path) ? next : [record, ...next]
       }).catch(error => { console.warn('无法保存最近打开记录。', error) })
+      await updateDocumentHistory(entries => entries.map(entry => entry.path === oldPath ? record : entry))
+        .catch(error => { console.warn('无法保存文档历史。', error) })
     }
     return document
   }
@@ -625,6 +680,8 @@ void app.whenReady().then(async () => {
     await shell.trashItem(canonical)
     if (recent.some(entry => entry.path === canonical)) await writeRecent(items => items.filter(entry => entry.path !== canonical))
       .catch(error => { console.warn('无法保存最近打开记录。', error) })
+    await updateDocumentHistory(entries => entries.filter(entry => entry.path !== canonical))
+      .catch(error => { console.warn('无法保存文档历史。', error) })
   })
   handle('openExternal', async (input: string) => {
     if (typeof input !== 'string' || input.length > 4096) throw new Error('链接无效。')
@@ -849,6 +906,7 @@ void app.whenReady().then(async () => {
   handleEditor('setShortcutRecording', (editor, active: boolean) => setShortcutRecording(editor, active === true))
   handleEditor('cancelClose', editor => { editor.resolveClose?.(false); editor.resolveClose = undefined })
   handleEditor('finishClose', async editor => {
+    await historyWrite.catch(() => {})
     await recovery.wait()
     editor.closing = true
     editor.window.close()

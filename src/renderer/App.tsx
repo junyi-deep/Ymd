@@ -42,6 +42,7 @@ export function App() {
   const active = sessions.active
   const [library, setLibrary] = useState<Entry>()
   const [recent, setRecent] = useState<Entry[]>([])
+  const [documentHistory, setDocumentHistory] = useState<Entry[]>([])
   const [treeMenu, setTreeMenu] = useState<{ kind: 'create' | 'open' | 'entry' | 'batch'; target?: Entry; x: number; y: number; recent?: boolean; anchor?: HTMLButtonElement }>()
   const [batch, setBatch] = useState<Map<string, Entry>>()
   const [renamingEntry, setRenamingEntry] = useState<{ entry: Entry; name: string }>()
@@ -118,6 +119,7 @@ export function App() {
       const result = await window.desktop.initialize()
       setLibrary(result.library)
       setRecent(result.recent)
+      setDocumentHistory(result.documentHistory)
       setWindowsAcrylic(result.windowsAcrylic)
       setMacReducesTransparency(result.macReducesTransparency)
       setPlatform(result.platform)
@@ -130,8 +132,7 @@ export function App() {
       if (result.recoveries.length) setPrompt({ type: 'recovery' })
       if (result.initialFile) {
         const file = result.initialFile
-        sessions.open(file, file.path.startsWith(result.library.path + (result.platform === 'win32' ? '\\' : '/')) ? 'library' : 'local')
-        if (file.kind === 'markdown' && loadMapAppearance(file.path).imported) sessions.patch(file.path, { mode: 'map' })
+        showFile(file, file.path.startsWith(result.library.path + (result.platform === 'win32' ? '\\' : '/')) ? 'library' : 'local')
       }
     })
     const query = matchMedia('(prefers-color-scheme: dark)')
@@ -149,6 +150,7 @@ export function App() {
     const unsubscribeDocuments = window.desktop.onDocumentChanged(path => refreshDocuments.current(path))
     const unsubscribePreferences = window.desktop.onPreferences(next => { lastPreferences.current = next; setPreferences(next) })
     const unsubscribeRecovery = window.desktop.onRecoveryList(setRecoveries)
+    const unsubscribeHistory = window.desktop.onDocumentHistory(setDocumentHistory)
     const unsubscribeWorkspace = window.desktop.onWorkspaceChange(next => {
       setLibrary(next.library)
       setRecent(next.recent)
@@ -162,6 +164,7 @@ export function App() {
       unsubscribeDocuments()
       unsubscribePreferences()
       unsubscribeRecovery()
+      unsubscribeHistory()
       unsubscribeWorkspace()
       query.removeEventListener('change', onTheme)
       window.removeEventListener('focus', onFocus)
@@ -290,6 +293,7 @@ export function App() {
     sessions.open(file, scope)
     if (openMap) sessions.patch(file.path, { mode: 'map' })
     setSettings(false)
+    void window.desktop.recordDocumentOpen(file.path).catch(() => {})
   }
 
   async function readMapDocument(path: string): Promise<DocumentFile> {
@@ -575,12 +579,14 @@ export function App() {
     })
   }
 
-  function openPath(path: string, scope?: Scope) {
+  function openPath(path: string, scope?: Scope, fromHistory = false) {
     const intent = ++openIntent.current
     run(async () => {
       const existing = sessions.latest.current.find(session => session.path === path)
-      const document = existing ?? await window.desktop.read(path)
-      if (intent === openIntent.current) showFile(document, scope)
+      const document = existing ?? await (fromHistory ? window.desktop.openHistoryDocument(path) : window.desktop.read(path))
+      if (intent !== openIntent.current) return
+      if (document) showFile(document, scope)
+      else setNotice('这个文档已不在原位置。')
     })
   }
 
@@ -694,7 +700,7 @@ export function App() {
       items.push({ label: '创建副本', icon: <Copy size={16} />, run: () => mutateEntries('copy', [target]) })
       items.push({ label: '移动到…', icon: <FolderInput size={16} />, run: () => mutateEntries('move', [target]) })
     } else {
-      items.unshift({ label: '导入到文档库', icon: <FolderInput size={16} />, run: () => mutateEntries('import', [target]) })
+      items.unshift({ label: '导入到我的文档', icon: <FolderInput size={16} />, run: () => mutateEntries('import', [target]) })
     }
     items.push({ label: '重命名', icon: <Pencil size={16} />, run: () => setRenamingEntry({ entry: target,
       name: target.kind === 'directory' ? target.name : target.name.replace(/\.[^.]+$/, '') }) })
@@ -716,44 +722,46 @@ export function App() {
         <IconButton label="切换侧栏" click={() => { if (settings) setSettings(false); else setSidebar(!sidebar) }}><PanelLeft size={17} /></IconButton>
         <IconButton label="主页" click={home}><Home size={17} /></IconButton>
       </div>
-      <div className="title-path flex min-w-0 items-center gap-2">
-        {settings ? <span>设置</span> : active
-          ? <><span className="source-label">{activeScope === 'library' ? '我的文档' : '本机文件'}</span>
-            <ChevronRight size={14} />
-            {rename?.session.path === active.path
-              ? <input className="document-rename" aria-label="文档名称" autoFocus value={rename.name}
-                  onFocus={event => event.currentTarget.select()} onChange={event => setRename({ ...rename, name: event.target.value })}
-                  onBlur={() => setRename(undefined)} onKeyDown={event => {
-                    if (event.nativeEvent.isComposing) return
-                    if (event.key === 'Escape') { event.stopPropagation(); setRename(undefined) }
-                    if (event.key === 'Enter') renameActive()
-                  }} />
-              : <button className="document-name" title={active.path} aria-label={'重命名 ' + active.name}
-                  onDoubleClick={() => setRename({ session: active, name: active.name.replace(/\.[^.]+$/, '') })}
-                  onKeyDown={event => {
-                    if (event.key === 'F2' || event.key === 'Enter') {
-                      event.preventDefault()
-                      setRename({ session: active, name: active.name.replace(/\.[^.]+$/, '') })
-                    }
-                  }}>{active.name}</button>}
-            {dirty && <span className="unsaved-dot" title="未保存" />}</>
-          : <strong>Ymd</strong>}
-      </div>
-      {!settings && active?.kind === 'markdown' && <div className="segments mode-switch" aria-label="编辑模式">
-        {modes.map(({ value, label, icon: Icon }) => <button key={value} type="button" title={label} aria-label={label}
-          aria-pressed={active.mode === value} onClick={() => { flushEditor.current?.(); sessions.patch(active.path, { mode: value as EditorMode }) }}>
-          <Icon size={14} /><span>{label}</span></button>)}
-      </div>}
-      <div className="title-actions ml-auto flex items-center gap-1">
-        {!settings && <>
-          {active && <IconButton label={dirty ? '保存' : '已保存'} click={() => commandRef.current('save')} disabled={!dirty && active.mode !== 'map'}>
-            {dirty ? <Save size={17} /> : <Check size={17} />}
-          </IconButton>}
-          {active && <IconButton label="在文件管理器中显示" click={() => run(() => window.desktop.reveal(active.path))}><LocateFixed size={16} /></IconButton>}
-          <IconButton label="搜索文档" click={() => commandRef.current('search')}><Search size={18} /></IconButton>
-          <IconButton label="新建文档" click={() => create()}><Plus size={19} /></IconButton>
-          <IconButton label="新建绘图" click={() => create('drawing')}><Shapes size={17} /></IconButton>
-        </>}
+      <div className="titlebar-content">
+        <div className="title-path flex min-w-0 items-center gap-2">
+          {settings ? <span>设置</span> : active
+            ? <><span className="source-label">{activeScope === 'library' ? '我的文档' : '本机文件'}</span>
+              <ChevronRight size={14} />
+              {rename?.session.path === active.path
+                ? <input className="document-rename" aria-label="文档名称" autoFocus value={rename.name}
+                    onFocus={event => event.currentTarget.select()} onChange={event => setRename({ ...rename, name: event.target.value })}
+                    onBlur={() => setRename(undefined)} onKeyDown={event => {
+                      if (event.nativeEvent.isComposing) return
+                      if (event.key === 'Escape') { event.stopPropagation(); setRename(undefined) }
+                      if (event.key === 'Enter') renameActive()
+                    }} />
+                : <button className="document-name" title={active.path} aria-label={'重命名 ' + active.name}
+                    onDoubleClick={() => setRename({ session: active, name: active.name.replace(/\.[^.]+$/, '') })}
+                    onKeyDown={event => {
+                      if (event.key === 'F2' || event.key === 'Enter') {
+                        event.preventDefault()
+                        setRename({ session: active, name: active.name.replace(/\.[^.]+$/, '') })
+                      }
+                    }}>{active.name}</button>}
+              {dirty && <span className="unsaved-dot" title="未保存" />}</>
+            : <strong>Ymd</strong>}
+        </div>
+        {!settings && active?.kind === 'markdown' && <div className="segments mode-switch" aria-label="编辑模式">
+          {modes.map(({ value, label, icon: Icon }) => <button key={value} type="button" title={label} aria-label={label}
+            aria-pressed={active.mode === value} onClick={() => { flushEditor.current?.(); sessions.patch(active.path, { mode: value as EditorMode }) }}>
+            <Icon size={14} /><span>{label}</span></button>)}
+        </div>}
+        <div className="title-actions ml-auto flex items-center gap-1">
+          {!settings && <>
+            {active && <IconButton label={dirty ? '保存' : '已保存'} click={() => commandRef.current('save')} disabled={!dirty && active.mode !== 'map'}>
+              {dirty ? <Save size={17} /> : <Check size={17} />}
+            </IconButton>}
+            {active && <IconButton label="在文件管理器中显示" click={() => run(() => window.desktop.reveal(active.path))}><LocateFixed size={16} /></IconButton>}
+            <IconButton label="搜索文档" click={() => commandRef.current('search')}><Search size={18} /></IconButton>
+            <IconButton label="新建文档" click={() => create()}><Plus size={19} /></IconButton>
+            <IconButton label="新建绘图" click={() => create('drawing')}><Shapes size={17} /></IconButton>
+          </>}
+        </div>
       </div>
     </header>
     <div className="window-body">
@@ -766,7 +774,6 @@ export function App() {
         onChange={updatePreferences} /> : <>
         {sidebar && <aside className="sidebar">
           <div className="sidebar-scroll">
-            <button className="tree-row home-link" onClick={home}><Home size={18} /><span>主页</span></button>
             {markedSection('置顶', marks.pinned, Pin)}
             {markedSection('收藏', marks.starred, Star)}
             <section>
@@ -820,7 +827,7 @@ export function App() {
               if (file) { setRecent(await window.desktop.listRecent()); showFile(file) }
             })}>另存副本</button>
           </div>}
-          {!active ? <div className="home">
+          {!active ? <div className="home-screen"><div className="home">
             <h1>我的文档</h1>
             <p>创建文档或打开已有的本机文件。</p>
             {recoveries.length > 0 && <button className="tool-button" onClick={() => setPrompt({ type: 'recovery' })}>恢复未保存的文档</button>}
@@ -830,7 +837,21 @@ export function App() {
               <button onClick={openFile}><FileText size={21} /><span>打开本机文件</span>{homeHint('open-file')}</button>
               <button onClick={importWorkbook} disabled={importing || !library}><FolderInput size={21} /><span>{importing ? '正在导入 Xmind…' : '导入 Xmind'}</span>{homeHint('import-xmind')}</button>
             </div>
-          </div> : <Suspense fallback={<div className="startup">正在加载编辑器…</div>}>
+            <section className="home-recent" aria-labelledby="home-recent-title">
+              <h2 id="home-recent-title">最近打开</h2>
+              {documentHistory.length ? <ul>
+                {documentHistory.map(entry => {
+                  const Icon = entry.kind === 'drawing' ? Shapes : FileText
+                  const parent = entry.path.slice(0, -entry.name.length).replace(/[\\/]$/, '')
+                  const location = scopeOf(entry.path) === 'library' ? '我的文档' + parent.slice(library.path.length) : parent
+                  return <li key={entry.path}><button type="button" className="tree-row" title={entry.path}
+                    onClick={() => openPath(entry.path, undefined, true)}>
+                    <Icon size={17} aria-hidden="true" /><span><strong>{entry.name}</strong><small>{location}</small></span>
+                  </button></li>
+                })}
+              </ul> : <p>还没有最近打开的文档。</p>}
+            </section>
+          </div></div> : <Suspense fallback={<div className="startup">正在加载编辑器…</div>}>
             {active.kind === 'drawing'
               ? <DrawingEditor key={active.path + ':' + active.reload} text={active.text} dark={dark} onChange={edit} />
               : active.mode === 'markdown'

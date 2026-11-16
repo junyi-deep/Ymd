@@ -11,6 +11,13 @@ const desktop: Desktop = {
   listRecent: () => ipcRenderer.invoke('ymd:listRecent'),
   touchRecent: path => ipcRenderer.invoke('ymd:touchRecent', path),
   removeRecent: path => ipcRenderer.invoke('ymd:removeRecent', path),
+  recordDocumentOpen: path => ipcRenderer.invoke('ymd:recordDocumentOpen', path),
+  openHistoryDocument: path => ipcRenderer.invoke('ymd:openHistoryDocument', path),
+  onDocumentHistory: callback => {
+    const listener = (_: unknown, entries: Entry[]) => callback(entries)
+    ipcRenderer.on('ymd:documentHistory', listener)
+    return () => ipcRenderer.removeListener('ymd:documentHistory', listener)
+  },
   search: query => ipcRenderer.invoke('ymd:search', query),
   cancelSearch: () => ipcRenderer.invoke('ymd:cancelSearch'),
   chooseFile: kind => ipcRenderer.invoke('ymd:chooseFile', kind),
