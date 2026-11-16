@@ -3,7 +3,7 @@ import type { IpcMainInvokeEvent, MediaAccessPermissionRequest, MenuItemConstruc
 import { mkdir, readdir, readFile, writeFile, rename, open } from 'node:fs/promises'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { defaultPreferences, mapExportExtensions, markdownImageExtensions, searchEngines, windowMaterialFor } from '../shared/contracts'
+import { defaultPreferences, mapExportExtensions, markdownImageExtensions, paneWidths, searchEngines, windowMaterialFor } from '../shared/contracts'
 import type { Command, ContextMenuItem, Desktop, DocumentFile, Entry, FileKind, MapExportKind, MapShotRect, MarkdownImageUpload, Preferences, TreeChange, TreeMutation } from '../shared/contracts'
 import { Files, containsPath, fileKind } from './files'
 import { LocalMapLocations } from './localMapLocations'
@@ -32,6 +32,8 @@ let appBindings = shortcutsFor('app', preferences.shortcuts, process.platform)
 
 function normalizePreferences(value: Partial<Preferences> | null): Preferences {
   const transparency = value?.windowTransparency
+  const width = (raw: unknown, { min, max }: { min: number; max: number }) =>
+    typeof raw === 'number' && Number.isFinite(raw) ? Math.min(max, Math.max(min, Math.round(raw))) : undefined
   return {
     theme: value?.theme === 'dark' || value?.theme === 'light' ? value.theme : 'system',
     size: value?.size === 'small' || value?.size === 'large' ? value.size : 'normal',
@@ -42,11 +44,14 @@ function normalizePreferences(value: Partial<Preferences> | null): Preferences {
     recentLimit: typeof value?.recentLimit === 'number' && Number.isFinite(value.recentLimit)
       ? Math.min(100, Math.max(1, Math.round(value.recentLimit))) : defaultPreferences.recentLimit,
     markdownOutline: {
+      width: width(value?.markdownOutline?.width, paneWidths.outline),
       position: value?.markdownOutline?.position === 'left' ? 'left' : 'right',
       numbering: value?.markdownOutline?.numbering === 'flat' || value?.markdownOutline?.numbering === 'hierarchical'
         ? value.markdownOutline.numbering : 'none',
       visible: value?.markdownOutline?.visible === true,
     },
+    sidebarWidth: width(value?.sidebarWidth, paneWidths.sidebar),
+    markdownPageWidth: value?.markdownPageWidth === 'narrow' || value?.markdownPageWidth === 'wide' ? value.markdownPageWidth : 'normal',
     animations: value?.animations !== false,
     documentTheme: value?.documentTheme === 'paper' || value?.documentTheme === 'mono' ? value.documentTheme : 'classic',
     autoSave: value?.autoSave === true,

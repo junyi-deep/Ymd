@@ -13,8 +13,8 @@ import OuterFrame from 'simple-mind-map/src/plugins/OuterFrame.js'
 import RainbowLines from 'simple-mind-map/src/plugins/RainbowLines.js'
 import SearchPlugin from 'simple-mind-map/src/plugins/Search.js'
 import Select from 'simple-mind-map/src/plugins/Select.js'
-import { UnsupportedList } from './Outline'
-import { projectList, writeList, type Block } from './listProjection'
+import { OutlineMarkdown, outlineReferences } from './OutlineMarkdown'
+import { listMarker, projectList, projectionRemainder, writeList, type Block } from './listProjection'
 import type { DocumentFile, Entry } from '../../shared/contracts'
 import { MindMapFormat } from './MindMapFormat'
 import { MindMapTask, taskBadge, taskTopics, todoBadge } from './MindMapTask'
@@ -78,9 +78,10 @@ function downloadAttachment(source: unknown, name: unknown) {
 
 function fromMap(nodes: MapData[], imported = false): Block[] {
   const branches = documentTopics(nodes)
-  const marker = branches.find(node => /^[-+*]$/.test(String(node.data.ymdMarker)))?.data.ymdMarker ?? '-'
+  const marker = branches.find(node => listMarker.test(String(node.data.ymdMarker)))?.data.ymdMarker ?? '-'
   return branches.map((node, index) => ({
-    id: node.data.uid ?? String(index), text: imported ? encodeImportedTopic(node.data.text ?? '') : node.data.text ?? '', marker: String(marker),
+    id: node.data.uid ?? String(index), text: imported ? encodeImportedTopic(node.data.text ?? '') : node.data.text ?? '',
+    marker: listMarker.test(String(node.data.ymdMarker)) ? String(node.data.ymdMarker) : String(marker),
     children: fromMap(node.children ?? [], imported),
   }))
 }
@@ -92,7 +93,7 @@ function hasAudio(tree: MapData, id: string): boolean {
 interface MapEditorProps {
   text: string; name: string; path: string; dark: boolean; onChange: (text: string) => void
   find: number
-  platform: string; keyOverrides: ShortcutOverrides
+  platform: string; keyOverrides: ShortcutOverrides; remoteImages: boolean
   registerFlush: (flush?: () => void) => void
   importWorkbook: () => void
   importing: boolean
@@ -311,7 +312,7 @@ export default function MindMapEditor(props: MapEditorProps) {
   </div>
 }
 
-function MapCanvas({ text, name, path, dark, platform, keyOverrides, onChange, registerFlush, sheet, updateSheet, multipleSheets, saveXmind, createSheet,
+function MapCanvas({ text, name, path, dark, platform, keyOverrides, remoteImages, onChange, registerFlush, sheet, updateSheet, multipleSheets, saveXmind, createSheet,
   linkWorkbook, jump, followTopicLink, readMapDocument, linkDocuments, find }: MapEditorProps & {
   sheet?: MapSheet
   updateSheet: (id: string, settings: MapSettings, tree: MapData) => void
@@ -322,7 +323,12 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, onChange, r
   jump?: TopicLink
   followTopicLink: (link: TopicLink) => boolean | Promise<boolean>
 }) {
-  const [projection] = useState(() => projectList(text))
+  const [{ projection, remainder, remainderLinks }] = useState(() => {
+    const projection = projectList(text)
+    const remainder = sheet ? '' : projectionRemainder(projection)
+    const references = remainder && outlineReferences(text)
+    return { projection, remainder, remainderLinks: references ? JSON.parse(references) : undefined }
+  })
   const [appearance] = useState(() => loadMapAppearance(path))
   const [initialSheet] = useState(sheet)
   const [settings, setSettings] = useState(sheet?.settings ?? appearance.settings)
@@ -669,11 +675,11 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, onChange, r
   }
 
   useEffect(() => {
-    if ((!projection && !initialSheet) || !host.current) return
+    if (!host.current) return
     const root: MapData = initialSheet ? structuredClone(initialSheet.tree)
-      : mainMap(name, projection!.blocks, appearance)
+      : mainMap(name, projection.blocks, appearance)
     const initialSettings = initialSheet?.settings ?? appearance.settings
-    let previous = projection ? writeList(projection, projection.blocks) : ''
+    let previous = text
     const audio = createAudioPlayer(host.current, setNotice)
     let map: MindMap
     try {
@@ -735,7 +741,7 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, onChange, r
       setCalendar(readWorkCalendar(node.data.ymdWorkCalendar))
       const audioId = audio.activeId
       if (audioId && !hasAudio(node, audioId)) audio.stop()
-      if (!initialSheet && projection) {
+      if (!initialSheet) {
         const next = writeList(projection, fromMap(node.children ?? [], !!appearance.imported))
         if (next !== previous) { previous = next; change.current(next) }
       }
@@ -1007,7 +1013,6 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, onChange, r
     }
   }, [overview])
 
-  if (!projection && !initialSheet) return <UnsupportedList />
   if (error) return <div className="editor-empty"><h2>无法加载思维导图</h2><p>{error}</p></div>
 
   function changeSettings(patch: Partial<MapSettings>) {
@@ -1494,6 +1499,10 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, onChange, r
         }} />)}
     </div>
     </div>
+    {remainder && !zen && !branch && !gantt && <section className="map-remainder" aria-label="文档正文"
+      onClick={event => { if (event.target instanceof Element && event.target.closest('a')) event.preventDefault() }}>
+      <OutlineMarkdown text={remainder} className="outline-markdown" links={remainderLinks} {...{ path, remoteImages }} />
+    </section>}
     {typeof menu === 'object' && <MarkdownMenu items={contextItems} close={closeMenu} point={menu} nativeStyle />}
     {audioParent && <MindMapRecorder title={String(audioParent.getData('text') ?? '')}
       close={() => setAudioParent(undefined)} save={(audio, duration) => addRecordedAudio(audioParent, audio, duration)} />}

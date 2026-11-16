@@ -1,4 +1,4 @@
-import { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
+import { useDeferredValue, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { BetweenHorizontalStart, Check, ChevronsLeft, ChevronsRight, Code2, Copy, Eye, FileDown, FileText, FolderInput, Info, Keyboard, ListTree, LocateFixed, MoreHorizontal, Pin, Printer, Search, Star, Trash2 } from 'lucide-react'
 import { MarkdownMenu, type MenuItem } from './MarkdownMenu'
 import { contextItems, insertMermaid, typographyKeys } from './markdownCommands'
@@ -14,8 +14,9 @@ import { ensureSyntaxTree, syntaxTree } from '@codemirror/language'
 import { openSearchPanel, search, searchKeymap } from '@codemirror/search'
 import { Compartment, EditorState, Prec, type Range } from '@codemirror/state'
 import { Decoration, drawSelection, EditorView, highlightSpecialChars, keymap, ViewPlugin, WidgetType, type DecorationSet, type ViewUpdate } from '@codemirror/view'
-import type { ContextMenuItem, MarkdownOutlinePreferences, SearchEngine } from '../../shared/contracts'
+import type { ContextMenuItem, MarkdownOutlinePreferences, MarkdownPageWidth, SearchEngine } from '../../shared/contracts'
 import type { ShortcutOverrides } from '../../shared/shortcuts'
+import { PaneResize } from '../PaneResize'
 
 const inlineStyles: Record<string, string> = {
   StrongEmphasis: 'md-bold', Emphasis: 'md-italic', Strikethrough: 'md-strike',
@@ -72,14 +73,20 @@ function liveMarkdown(view: EditorView, path: string, loadRemote: boolean) {
       const heading = /^(?:ATX|Setext)Heading([1-6])$/.exec(name)
       const css = inlineStyles[name]
       if (css) mark(from, to, css)
-      if (heading) line(sourceLine.from, 'md-heading md-h' + heading[1])
+      if (heading) {
+        line(sourceLine.from, 'md-heading md-h' + heading[1])
+        // CodeMirror samples short, plain-text lines to estimate its offscreen height.
+        mark(sourceLine.from, sourceLine.to, 'md-heading-text')
+      }
       if (name === 'QuoteMark') line(sourceLine.from, 'md-quote')
       if (name === 'FencedCode' || name === 'Table') {
         const last = state.doc.lineAt(to).number
         const firstVisible = state.doc.lineAt(viewport.from).number
         const lastVisible = state.doc.lineAt(viewport.to).number
         for (let index = Math.max(firstVisible, sourceLine.number); index <= Math.min(lastVisible, last); index++) {
-          line(state.doc.line(index).from, name === 'Table' ? 'md-table' : 'md-code-block')
+          const styled = state.doc.line(index)
+          line(styled.from, name === 'Table' ? 'md-table' : 'md-code-block')
+          if (name === 'FencedCode') mark(styled.from, styled.to, 'md-code-text')
         }
       }
       if (name === 'HorizontalRule' && !activeLine(from)) {
@@ -142,7 +149,6 @@ const live = (path: string, loadRemote: boolean) => ViewPlugin.fromClass(class {
 }, { decorations: plugin => plugin.decorations })
 
 type StatusKind = 'words' | 'lines' | 'modified'
-type Width = 'narrow' | 'normal' | 'wide'
 type OpenMenu = 'outline-numbering' | 'more' | 'status'
 type Heading = { pos: number; level: number; title: string }
 const outlineNumberings = [
@@ -159,6 +165,8 @@ interface Props {
   searchEngine: SearchEngine
   keyOverrides: ShortcutOverrides
   outline: MarkdownOutlinePreferences
+  width: MarkdownPageWidth
+  setWidth: (width: MarkdownPageWidth) => void
   updateOutline: (patch: Partial<MarkdownOutlinePreferences>) => void
   registerFlush: (flush?: () => void) => void
   onChange: (text: string) => void
@@ -179,7 +187,7 @@ interface Props {
   report: (error: unknown) => void
 }
 
-export function MarkdownEditor({ text, name, path, modified, platform, remoteImages, searchEngine, keyOverrides, outline, updateOutline, registerFlush, onChange, find, jump, reveal, saveCopy, duplicate, move, trash, shortcuts, exportPdf, printDocument, pinned, starred, togglePin, toggleStar, report }: Props) {
+export function MarkdownEditor({ text, name, path, modified, platform, remoteImages, searchEngine, keyOverrides, outline, updateOutline, width, setWidth, registerFlush, onChange, find, jump, reveal, saveCopy, duplicate, move, trash, shortcuts, exportPdf, printDocument, pinned, starred, togglePin, toggleStar, report }: Props) {
   const host = useRef<HTMLDivElement>(null)
   const view = useRef<EditorView>(null)
   const change = useRef(onChange)
@@ -189,12 +197,14 @@ export function MarkdownEditor({ text, name, path, modified, platform, remoteIma
   const [menu, setMenu] = useState<OpenMenu>()
   const [headings, setHeadings] = useState<Heading[]>([])
   const [status, setStatus] = useState<StatusKind>('words')
-  const [width, setWidth] = useState<Width>('normal')
   const [reading, setReading] = useState(false)
   const [info, setInfo] = useState(false)
   const [imageResize, setImageResize] = useState<ImageResizeRequest>()
   const infoDialog = useRef<HTMLDialogElement>(null)
   const tableDialog = useRef<HTMLDialogElement>(null)
+  const [tableRows, setTableRows] = useState('3')
+  const [tableColumns, setTableColumns] = useState('2')
+  const [tableHover, setTableHover] = useState<{ rows: number; columns: number }>()
   const outlineTrigger = useRef<HTMLButtonElement>(null)
   const numberingTrigger = useRef<HTMLButtonElement>(null)
   const [numberingPoint, setNumberingPoint] = useState<{ x: number; y: number }>()
@@ -202,7 +212,18 @@ export function MarkdownEditor({ text, name, path, modified, platform, remoteIma
   const renderMode = useRef(new Compartment())
   const keyMode = useRef(new Compartment())
   change.current = onChange
-  const showTable = () => tableDialog.current?.showModal()
+  const showTable = () => {
+    setTableHover(undefined)
+    tableDialog.current?.showModal()
+  }
+  const addTable = (rows: number, columns: number) => {
+    if (!view.current || !Number.isInteger(rows) || rows < 1 || rows > 100 ||
+        !Number.isInteger(columns) || columns < 1 || columns > 30) return
+    setTableRows(String(rows))
+    setTableColumns(String(columns))
+    tableDialog.current?.close()
+    insertTable(view.current, rows, columns)
+  }
   const writingKeys = () => typographyKeys(keyOverrides, platform, showTable, editor => chooseMarkdownImages(editor, path, report))
 
   useEffect(() => {
@@ -379,7 +400,8 @@ export function MarkdownEditor({ text, name, path, modified, platform, remoteIma
         {menu === 'more' && <MarkdownMenu items={docItems} close={close} />}
       </div>
     </div>
-    <div className="document-editing" data-outline={outline.visible ? outline.position : undefined}>
+    <div className="document-editing" data-outline={outline.visible ? outline.position : undefined}
+      style={{ '--outline-user-width': outline.width === undefined ? undefined : outline.width + 'px' } as CSSProperties}>
       {outline.visible && <aside id="markdown-outline" className="document-outline" aria-label="Markdown 标题目录">
         <header><strong>目录</strong><div className="outline-header-actions">
           <button ref={numberingTrigger} className="icon-button" title="目录编号" aria-label="目录编号" aria-haspopup="menu"
@@ -404,6 +426,7 @@ export function MarkdownEditor({ text, name, path, modified, platform, remoteIma
             if (!reading) editor.focus()
           }}>{heading.number && <span className="outline-heading-number">{heading.number}</span>}<span className="outline-heading-title">{heading.title}</span></button>)}</nav>
         {!headings.length && <p>还没有标题</p>}
+        <PaneResize pane="outline" side={outline.position} apply={width => updateOutline({ width })} />
       </aside>}
       <div className="markdown-surface" ref={host} onClick={event => {
         if (event.defaultPrevented) return
@@ -448,17 +471,25 @@ export function MarkdownEditor({ text, name, path, modified, platform, remoteIma
     <dialog ref={tableDialog} aria-label="插入表格">
       <form onSubmit={event => {
         event.preventDefault()
-        const values = new FormData(event.currentTarget)
-        const rows = Number(values.get('rows'))
-        const columns = Number(values.get('columns'))
-        if (!view.current || !Number.isInteger(rows) || rows < 1 || rows > 100 ||
-            !Number.isInteger(columns) || columns < 1 || columns > 30) return
-        tableDialog.current?.close()
-        insertTable(view.current, rows, columns)
+        addTable(Number(tableRows), Number(tableColumns))
       }}>
         <h2>插入表格</h2>
-        <label>行数（含表头）<input name="rows" type="number" min="1" max="100" defaultValue="3" required autoFocus /></label>
-        <label>列数<input name="columns" type="number" min="1" max="30" defaultValue="2" required /></label>
+        <div className="table-dimensions">
+          <label>行数（含表头）<input name="rows" type="number" min="1" max="100" value={tableHover?.rows ?? tableRows} required autoFocus
+            onChange={event => { setTableHover(undefined); setTableRows(event.target.value) }} /></label>
+          <label>列数<input name="columns" type="number" min="1" max="30" value={tableHover?.columns ?? tableColumns} required
+            onChange={event => { setTableHover(undefined); setTableColumns(event.target.value) }} /></label>
+        </div>
+        <div className="table-size-grid" aria-label="用鼠标选择表格大小" onPointerLeave={() => setTableHover(undefined)}>
+          {Array.from({ length: 80 }, (_, index) => {
+            const rows = Math.floor(index / 10) + 1
+            const columns = index % 10 + 1
+            const selected = rows <= (tableHover?.rows ?? Number(tableRows)) && columns <= (tableHover?.columns ?? Number(tableColumns))
+            return <button key={index} type="button" tabIndex={-1} aria-label={rows + ' 行 ' + columns + ' 列'}
+              title={rows + ' 行 ' + columns + ' 列'} data-selected={selected}
+              onPointerEnter={() => setTableHover({ rows, columns })} onClick={() => addTable(rows, columns)} />
+          })}
+        </div>
         <footer>
           <button type="button" onClick={() => tableDialog.current?.close()}>取消</button>
           <button type="submit" className="primary">插入</button>

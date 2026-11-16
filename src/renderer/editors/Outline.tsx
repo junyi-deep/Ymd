@@ -1,16 +1,11 @@
 import { useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type KeyboardEvent, type MouseEvent } from 'react'
-import { ChevronRight, ListTree, Plus, Redo2, Undo2 } from 'lucide-react'
+import { ChevronRight, Plus, Redo2, Undo2 } from 'lucide-react'
 import type { Links } from 'marked'
 import { MarkdownMenu } from './MarkdownMenu'
 import { OutlineMarkdown, outlineReferences } from './OutlineMarkdown'
-import { locateBlock, newBlock, writeList, type Block } from './listProjection'
+import { locateBlock, newBlock, projectionRemainder, writeList, type Block } from './listProjection'
 import { blockPath, editBlockText, flattenBlocks, moveBranches, openOutline, readBranches, removeBranches, selectedBranches, writeBranches,
   type OutlineCaret, type OutlineDrop, type OutlineFrame, type OutlineSession } from './outlineEditing'
-
-export function UnsupportedList() {
-  return <div className="editor-empty"><ListTree size={23} /><h2>此文档无法编辑为树</h2>
-    <p>在 Markdown 模式中整理成一个顶层无序列表。标题和列表前后的正文可以保留。</p></div>
-}
 
 const historyLimit = 100
 const typingTypes = new Set(['insertText', 'deleteContentBackward', 'deleteContentForward'])
@@ -21,11 +16,11 @@ export function OutlineEditor({ text, name, path, platform, remoteImages, sessio
   text: string; name: string; path: string; platform: string; remoteImages: boolean; sessions: Map<string, OutlineSession>; onChange: (text: string) => void
 }) {
   const [session] = useState(() => openOutline(sessions.get(path), text))
-  const [blocks, setBlocks] = useState(() => session?.blocks ?? [])
+  const [blocks, setBlocks] = useState(() => session.blocks)
   const [editing, setEditing] = useState<string>()
   const [selected, setSelected] = useState<string[]>([])
-  const [scope, setScope] = useState(session?.scope)
-  const [collapsed, setCollapsed] = useState(() => session?.collapsed ?? new Set<string>())
+  const [scope, setScope] = useState(session.scope)
+  const [collapsed, setCollapsed] = useState(() => session.collapsed)
   const [drop, setDrop] = useState<OutlineDrop>()
   const [menu, setMenu] = useState<{ id: string; x: number; y: number }>()
   const references = useMemo(() => outlineReferences(text), [text])
@@ -43,16 +38,14 @@ export function OutlineEditor({ text, name, path, platform, remoteImages, sessio
   const composition = useRef<{ id: string; before: OutlineCaret; recorded: boolean } | undefined>(undefined)
 
   useLayoutEffect(() => {
-    if (session) {
-      sessions.delete(path)
-      sessions.set(path, session)
-      if (sessions.size > 12) sessions.delete(sessions.keys().next().value!)
-    } else sessions.delete(path)
+    sessions.delete(path)
+    sessions.set(path, session)
+    if (sessions.size > 12) sessions.delete(sessions.keys().next().value!)
   }, [path, session, sessions])
 
   useLayoutEffect(() => {
     const view = root.current
-    if (!view || !session) return
+    if (!view) return
     const before = (event: InputEvent) => {
       const input = event.target
       if (!(input instanceof HTMLTextAreaElement) || !input.dataset.block) return
@@ -65,7 +58,7 @@ export function OutlineEditor({ text, name, path, platform, remoteImages, sessio
     }
     view.addEventListener('beforeinput', before)
     return () => view.removeEventListener('beforeinput', before)
-  }, [session])
+  }, [])
 
   useLayoutEffect(() => {
     if (!focus.current || focus.current.id !== editing) return
@@ -76,13 +69,6 @@ export function OutlineEditor({ text, name, path, platform, remoteImages, sessio
     input.setSelectionRange(start, end)
     focus.current = undefined
   }, [blocks, collapsed, editing, scope])
-
-  if (!session) return <div className="outline-editor" onClick={event => {
-    if (event.target instanceof HTMLElement && event.target.closest('a')) event.preventDefault()
-  }}>
-    <UnsupportedList />
-    <OutlineMarkdown text={text} className="outline-content outline-markdown" {...{ path, remoteImages, links }} />
-  </div>
 
   const breadcrumb = scope ? blockPath(blocks, scope) : []
   const focused = breadcrumb.at(-1)
@@ -539,6 +525,7 @@ export function OutlineEditor({ text, name, path, platform, remoteImages, sessio
     })}</ul>
   }
 
+  const remainder = !focused && projectionRemainder(session.projection)
   return <div ref={root} className="outline-editor" tabIndex={-1} onKeyDown={handleKeys}
     onCopy={event => copy(event, false)} onCut={event => copy(event, true)} onPaste={paste}
     onClick={event => { if (event.target instanceof Element && event.target.closest('a')) event.preventDefault() }}>
@@ -557,11 +544,9 @@ export function OutlineEditor({ text, name, path, platform, remoteImages, sessio
         <button className="icon-button" aria-label="重做块编辑" title="重做" disabled={!session.redo.length}
           onMouseDown={event => event.preventDefault()} onClick={() => restore(true)}><Redo2 size={16} /></button>
       </div>
-      {!focused && !!session.projection.before.trim() && <OutlineMarkdown text={session.projection.before}
-        className="outline-markdown outline-surrounding" {...{ path, remoteImages, links }} />}
       {render(focused ? [focused] : blocks)}
       <button className="tool-button outline-add" onClick={() => addBlock(focused?.id)}><Plus size={17} />新增块</button>
-      {!focused && !!session.projection.after.trim() && <OutlineMarkdown text={session.projection.after}
+      {remainder && <OutlineMarkdown text={remainder}
         className="outline-markdown outline-surrounding" {...{ path, remoteImages, links }} />}
     </div>
     {menu && <MarkdownMenu point={menu} nativeStyle close={() => setMenu(undefined)} items={[

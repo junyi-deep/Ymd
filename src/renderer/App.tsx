@@ -1,9 +1,10 @@
-import { lazy, Suspense, useCallback, useEffect, useRef, useState, type MouseEvent, type ReactNode } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useRef, useState, type CSSProperties, type MouseEvent, type ReactNode } from 'react'
 import { ArrowLeft, Check, ChevronRight, CircleAlert, Copy, FilePlus2, FileText, FolderInput, Home, ListChecks, ListTree, Network, PanelLeft, LocateFixed, Pencil, Pin, Plus, Save, Search, Settings2, Shapes, Star, Trash2, X } from 'lucide-react'
 import { defaultPreferences, windowMaterialFor, type Command, type DocumentFile, type EditorMode, type Entry, type FileKind, type Preferences, type Scope, type SearchHit, type TreeChange, type TreeMutation, type VersionStatus } from '../shared/contracts'
 import { FileTreeRow, FilesTree, type TreeDrag, type TreeRename } from './FilesTree'
 import { SearchDialog } from './SearchDialog'
 import { Settings } from './Settings'
+import { PaneResize } from './PaneResize'
 import { useFileMarks } from './useFileMarks'
 import { useDocuments, type Session } from './documents'
 import { MarkdownEditor } from './editors/Markdown'
@@ -594,7 +595,8 @@ export function App() {
     setTreeMenu(current => current?.anchor === anchor ? undefined : { kind, target, x: rect.left, y: rect.bottom + 4, anchor })
   }
   const home = () => { flushEditor.current?.(); ++openIntent.current; setSettings(false); sessions.showHome() }
-  return <div className="window" data-platform={platform} data-sidebar={sidebar || settings}>
+  return <div className="window" data-platform={platform} data-sidebar={sidebar || settings}
+    style={{ '--sidebar-user-width': preferences.sidebarWidth === undefined ? undefined : preferences.sidebarWidth + 'px' } as CSSProperties}>
     <header className="titlebar flex items-center">
       <div className="window-controls flex items-center gap-1">
         <IconButton label="切换侧栏" click={() => { if (settings) setSettings(false); else setSidebar(!sidebar) }}><PanelLeft size={17} /></IconButton>
@@ -693,6 +695,7 @@ export function App() {
             <CircleAlert size={16} /><span>可更新至 {release.update.version}</span>
           </button>}
           <button className="tree-row sidebar-footer" onClick={() => commandRef.current('preferences')}><Settings2 size={18} /><span>设置</span></button>
+          <PaneResize pane="sidebar" side="left" apply={sidebarWidth => updatePreferences({ sidebarWidth })} />
         </aside>}
         <main className="workspace">
           {active?.conflict && <div className="alert"><CircleAlert size={17} /><span>磁盘上的文件已变化。草稿仍在编辑器中。</span>
@@ -717,6 +720,7 @@ export function App() {
               : active.mode === 'markdown'
                 ? <MarkdownEditor key={active.path + ':' + active.reload} text={active.text} name={active.name} path={active.path} modified={active.modified} platform={platform} remoteImages={preferences.remoteImages} keyOverrides={preferences.shortcuts}
                   outline={preferences.markdownOutline}
+                  width={preferences.markdownPageWidth} setWidth={markdownPageWidth => updatePreferences({ markdownPageWidth })}
                   updateOutline={patch => updatePreferences({ markdownOutline: { ...lastPreferences.current.markdownOutline, ...patch } })}
                   searchEngine={preferences.searchEngine} registerFlush={registerFlush}
                   find={find} jump={jump?.path === active.path ? jump : undefined} onChange={edit}
@@ -747,7 +751,7 @@ export function App() {
                   ? <OutlineEditor key={active.path + ':' + active.reload} text={active.text} name={active.name} path={active.path}
                     platform={platform} remoteImages={preferences.remoteImages} sessions={outlineSessions.current} onChange={edit} />
                   : <MindMapEditor key={active.path + ':' + active.reload} text={active.text} name={active.name} path={active.path} dark={dark} onChange={edit} find={find}
-                    platform={platform} keyOverrides={preferences.shortcuts}
+                    platform={platform} keyOverrides={preferences.shortcuts} remoteImages={preferences.remoteImages}
                     registerFlush={registerFlush} importWorkbook={importWorkbook} importing={importing}
                     readMapDocument={readMapDocument} followMapDocument={followMapDocument} consumedMapJump={consumedMapJump}
                     entryJump={mapJump?.path === active.path ? mapJump.target : undefined}

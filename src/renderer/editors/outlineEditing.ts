@@ -12,10 +12,10 @@ export type OutlineSession = {
   scope?: string
 }
 
-export function openOutline(session: OutlineSession | undefined, text: string): OutlineSession | undefined {
+export function openOutline(session: OutlineSession | undefined, text: string): OutlineSession {
   if (session?.text === text) return session
   const projection = projectList(text)
-  return projection && { projection, text, blocks: projection.blocks, undo: [], redo: [], collapsed: new Set() }
+  return { projection, text, blocks: projection.blocks, undo: [], redo: [], collapsed: new Set() }
 }
 
 export function flattenBlocks(blocks: Block[], collapsed?: Set<string>): Block[] {
@@ -74,7 +74,7 @@ export const writeBranches = (blocks: Block[]) => writeList(clipboardProjection,
 
 export function readBranches(text: string): Block[] | undefined {
   const projected = projectList(text)
-  if (!projected?.blocks.length || projected.before.trim() || projected.after.trim()) return
+  if (!projected.blocks.length || projected.before.trim() || projected.after.trim()) return
   const rekey = (block: Block): Block => ({ ...newBlock(block.text, block.marker), children: block.children.map(rekey) })
   return projected.blocks.map(rekey)
 }

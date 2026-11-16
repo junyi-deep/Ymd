@@ -6,6 +6,8 @@ export type FileKind = 'markdown' | 'drawing'
 export type Scope = 'library' | 'local'
 export type EditorMode = 'markdown' | 'outline' | 'map'
 export type Theme = 'system' | 'light' | 'dark'
+export type MarkdownPageWidth = 'narrow' | 'normal' | 'wide'
+export const paneWidths = { sidebar: { min: 160, max: 440 }, outline: { min: 152, max: 420 } } as const
 export type SearchEngine = 'google' | 'baidu' | 'bing' | 'duckduckgo'
 
 export const searchEngines: Record<SearchEngine, { label: string; url: string; parameter: string }> = {
@@ -73,6 +75,8 @@ export interface Preferences {
   libraryDirectory?: string
   recentLimit: number
   markdownOutline: MarkdownOutlinePreferences
+  sidebarWidth?: number
+  markdownPageWidth: MarkdownPageWidth
   animations: boolean
   documentTheme: 'classic' | 'paper' | 'mono'
   autoSave: boolean
@@ -86,11 +90,13 @@ export interface MarkdownOutlinePreferences {
   position: 'left' | 'right'
   numbering: 'none' | 'flat' | 'hierarchical'
   visible: boolean
+  width?: number
 }
 
 export const defaultPreferences: Preferences = {
   theme: 'system', size: 'normal', solidBackground: false, windowTransparency: 80, recentLimit: 10, animations: true, documentTheme: 'classic',
   markdownOutline: { position: 'right', numbering: 'none', visible: false },
+  markdownPageWidth: 'normal',
   autoSave: false, remoteImages: false, autoCheckUpdates: false, searchEngine: 'google', shortcuts: {},
 }
 
