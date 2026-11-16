@@ -40,7 +40,7 @@ function taskControl(label: string, text: string, run: () => void) {
   element.style.cssText = 'display:block;text-align:center;font:600 11px system-ui;cursor:pointer;'
   element.textContent = text
   element.setAttribute('aria-label', label)
-  for (const event of ['mousedown', 'pointerdown', 'dblclick', 'contextmenu']) element.addEventListener(event, input => input.stopPropagation())
+  for (const event of ['mousedown', 'pointerdown', 'dblclick']) element.addEventListener(event, input => input.stopPropagation())
   element.addEventListener('keydown', event => {
     if (event.key === 'Enter' || event.key === ' ' || event.key === 'Delete' || event.key === 'Backspace') event.stopPropagation()
   })

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { CalendarRange, ChevronDown, ChevronsLeft, ClipboardList, CornerUpLeft, Crosshair, Download, Focus, FolderInput, GitBranch, GitFork, ImagePlus, ListTree, Map as MapIcon, Maximize, MessageSquare, Mic, Minus, Paperclip, Plus, Redo2, Search, SlidersHorizontal, Square, SquareCheck, Star, Sticker, StickyNote, Tag, Trash2, Undo2, X } from 'lucide-react'
 import DOMPurify from 'dompurify'
 import MindMap from 'simple-mind-map'
@@ -41,6 +41,8 @@ import { MindMapCalloutFormat, MindMapCalloutText } from './MindMapCallout'
 import { calloutById, calloutTopicId, readCallouts, type Callout, type CalloutTarget } from './mapCallouts'
 import { editNumbering, type NumberingEdit } from './mapNumbering'
 import { installNumbering } from './mapNumberingLayer'
+import { MindMapNavigation } from './MindMapNavigation'
+import { facetAt, highlightTopics, navigationTopics, taskStatusFacets, type Facet } from './mapNavigation'
 
 class MapAssociativeLine extends AssociativeLine {
   protected checkOverlapNode(x: number, y: number) {
@@ -82,6 +84,7 @@ function hasAudio(tree: MapData, id: string): boolean {
 
 interface MapEditorProps {
   text: string; name: string; path: string; dark: boolean; onChange: (text: string) => void
+  find: number
   platform: string; keyOverrides: ShortcutOverrides
   registerFlush: (flush?: () => void) => void
   importWorkbook: () => void
@@ -302,7 +305,7 @@ export default function MindMapEditor(props: MapEditorProps) {
 }
 
 function MapCanvas({ text, name, path, dark, platform, keyOverrides, onChange, registerFlush, sheet, updateSheet, multipleSheets, saveXmind, createSheet,
-  linkWorkbook, jump, followTopicLink, readMapDocument, linkDocuments }: MapEditorProps & {
+  linkWorkbook, jump, followTopicLink, readMapDocument, linkDocuments, find }: MapEditorProps & {
   sheet?: MapSheet
   updateSheet: (id: string, settings: MapSettings, tree: MapData) => void
   multipleSheets: boolean
@@ -323,14 +326,14 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, onChange, r
   const [version, setVersion] = useState(0)
   const [zen, setZen] = useState(false)
   const [linking, setLinking] = useState(false)
-  const [menu, setMenu] = useState<'export' | 'insert' | 'backlinks' | { x: number; y: number; image?: boolean; link?: boolean; callout?: CalloutTarget }>()
+  const [menu, setMenu] = useState<'export' | 'insert' | 'backlinks' | { x: number; y: number; image?: boolean; link?: boolean; callout?: CalloutTarget; facet?: Facet }>()
   const [artOpen, setArtOpen] = useState(false)
-  const [query, setQuery] = useState('')
-  const [replace, setReplace] = useState('')
-  const [searchOpen, setSearchOpen] = useState(false)
+  const [navigation, setNavigation] = useState<{ key: number; facet?: string }>()
+  const previousFind = useRef(find)
   const [overview, setOverview] = useState(false)
   const [miniMap, setMiniMap] = useState<{ markup: string; viewport: Record<string, string> }>()
   const [matches, setMatches] = useState({ total: 0, currentIndex: -1 })
+  const [titleMatches, setTitleMatches] = useState<string[]>([])
   const [field, setField] = useState<{ key: TopicField; node: MapNode; value: string }>()
   const [linkEditor, setLinkEditor] = useState<{ node: MapNode; kind: LinkType; callout?: CalloutTarget }>()
   const [selectedCallout, setSelectedCallout] = useState<CalloutTarget>()
@@ -344,11 +347,13 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, onChange, r
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const host = useRef<HTMLDivElement>(null)
+  const navigationTrigger = useRef<HTMLButtonElement>(null)
   const artTrigger = useRef<HTMLButtonElement>(null)
   const ganttTrigger = useRef<HTMLButtonElement>(null)
   const resourceInput = useRef<HTMLInputElement>(null)
   const resourceTarget = useRef<{ node: MapNode; image: boolean; callout?: CalloutTarget } | undefined>(undefined)
   const engine = useRef<MindMap | undefined>(undefined)
+  const highlighted = useRef<ReadonlySet<string> | null>(null)
   const calloutLayer = useRef<ReturnType<typeof installCallouts> | undefined>(undefined)
   const exporting = useRef(false)
   const fieldDialog = useRef<HTMLDialogElement>(null)
@@ -361,6 +366,20 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, onChange, r
   saveSheet.current = updateSheet
   followLink.current = followTopicLink
   currentSettings.current = settings
+  const searchOpen = navigation !== undefined
+  const topics = useMemo(() => searchOpen && engine.current ? navigationTopics(engine.current.renderer.renderTree) : [], [searchOpen, version])
+  const highlight = useCallback((ids: ReadonlySet<string> | null) => {
+    highlighted.current = ids
+    if (engine.current) highlightTopics(engine.current, ids)
+  }, [])
+  const closeNavigation = () => {
+    setNavigation(undefined)
+    navigationTrigger.current?.focus()
+  }
+  const openNavigation = (facet?: string) => {
+    setArtOpen(false)
+    setNavigation(current => facet ? { key: (current?.key ?? 0) + 1, facet } : current ?? { key: 0 })
+  }
 
   const backlinkTopic = selectedCallout ? calloutTopicId(selectedCallout.owner, selectedCallout.id)
     : selected.length === 1 ? selected[0].uid : undefined
@@ -598,12 +617,15 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, onChange, r
       setSelectedCallout(undefined)
       select(node, map.renderer.activeNodeList)
       setMenu({ x: event.clientX, y: event.clientY, image: isTopicImage(event.target),
-        link: event.target instanceof Element && !!event.target.closest('a') && !!node.getData('hyperlink') })
+        link: event.target instanceof Element && !!event.target.closest('a') && !!node.getData('hyperlink'), facet: facetAt(node, event.target) })
     }
     const scale = (value: number) => setZoom(Math.round(value * 100))
     const syncLinkMode = () => setLinking(map.associativeLine.isCreatingLine)
     const clearCalloutSelection = () => { setSelectedCallout(undefined); syncLinkMode() }
     const searchInfo = (info: typeof matches) => setMatches(info)
+    const searchNodes = (nodes: (MapNode | MapData)[]) => setTitleMatches(nodes.map(item =>
+      ('getData' in item ? item.getData() : item.data).uid ?? ''))
+    const reapplyFilter = () => { if (highlighted.current) highlightTopics(map, highlighted.current) }
     const download = (node: MapNode) => downloadAttachment(node.getData('attachmentUrl'), node.getData('attachmentName'))
     map.on('data_change', onData)
     map.on('afterExecCommand', sync)
@@ -614,6 +636,8 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, onChange, r
     map.on('contextmenu', syncLinkMode)
     map.on('scale', scale)
     map.on('search_info_change', searchInfo)
+    map.on('search_match_node_list_change', searchNodes)
+    map.on('node_tree_render_end', reapplyFilter)
     map.on('node_attachmentClick', download)
     registerFlush(flush)
     const resize = new ResizeObserver(() => map.resize())
@@ -636,6 +660,8 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, onChange, r
       map.off('contextmenu', syncLinkMode)
       map.off('scale', scale)
       map.off('search_info_change', searchInfo)
+      map.off('search_match_node_list_change', searchNodes)
+      map.off('node_tree_render_end', reapplyFilter)
       map.off('node_attachmentClick', download)
       map.associativeLine.cancelCreateLine()
       map.destroy()
@@ -688,11 +714,12 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, onChange, r
     else if (fieldDialog.current?.open) fieldDialog.current.close()
   }, [field?.key, field?.node])
   useEffect(() => {
-    if (!searchOpen) return
-    const map = engine.current
-    if (query.trim()) map?.search.search(query.trim())
-    else map?.search.endSearch()
-  }, [searchOpen, query])
+    if (find === previousFind.current) return
+    previousFind.current = find
+    setGantt(false)
+    setZen(false)
+    openNavigation()
+  }, [find])
 
   useEffect(() => {
     const escape = (event: KeyboardEvent) => {
@@ -707,7 +734,7 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, onChange, r
       }
       if (gantt) { event.preventDefault(); toggleGantt(false) }
       else if (linking) { engine.current?.associativeLine.cancelCreateLine(); setLinking(false) }
-      else if (searchOpen) { setQuery(''); setReplace(''); setSearchOpen(false); engine.current?.search.endSearch() }
+      else if (searchOpen) { event.preventDefault(); closeNavigation() }
       else if (artOpen) {
         event.preventDefault()
         setArtOpen(false)
@@ -1058,6 +1085,10 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, onChange, r
     { label: '另存录音…', icon: <Download size={16} />, run: () => saveAudioToFile(audioNote) },
     { label: '删除录音', icon: <Trash2 size={16} />, run: () => command('REMOVE_NODE') },
   ] : [
+    ...(typeof menu === 'object' && menu.facet ? (menu.facet.group === '任务状态' ? taskStatusFacets : [menu.facet]).map(facet => ({
+      label: facet.group === '任务状态' ? '高亮' + facet.label + '任务' : '高亮相关主题',
+      icon: <Search size={16} />, run: () => openNavigation(facet.id),
+    })) : []),
     { label: '添加同级主题', shortcut: 'Enter', run: () => add(true) },
     { label: '添加子主题', shortcut: 'Tab', run: () => add(false) },
     { label: '收起子主题', run: () => { if (node) command('SET_NODE_EXPAND', node, false) } },
@@ -1078,7 +1109,6 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, onChange, r
   const taskSource = taskTree && taskTopic ? findTopic(taskTree, taskTopic) : undefined
   const initialTask = readTask(taskSource?.data.ymdTask)
   const closeMenu = () => setMenu(undefined)
-  const closeMapSearch = () => { setQuery(''); setReplace(''); setSearchOpen(false); engine.current?.search.endSearch() }
 
   return <div className="map-editor xmind-workspace" data-zen={zen}>
     {!zen && <div className="map-toolbar" aria-label="思维导图工具栏">
@@ -1101,16 +1131,16 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, onChange, r
           <CalendarRange size={16} />甘特图</button>
         {!gantt && <>
         <button ref={artTrigger} className="icon-button" title="贴纸与插图" aria-label="贴纸与插图" aria-expanded={artOpen}
-          onClick={() => setArtOpen(!artOpen)}><Sticker size={17} /></button>
-        <button className="icon-button" title="查找主题" aria-label="查找主题" aria-expanded={searchOpen}
-          onClick={() => searchOpen ? closeMapSearch() : setSearchOpen(true)}><Search size={17} /></button>
+          onClick={() => { setNavigation(undefined); setArtOpen(!artOpen) }}><Sticker size={17} /></button>
+        <button ref={navigationTrigger} className="icon-button" title="查找主题" aria-label="查找主题" aria-expanded={searchOpen}
+          onClick={() => searchOpen ? closeNavigation() : openNavigation()}><Search size={17} /></button>
         <div className="menu-anchor">
           <button className="tool-button" aria-haspopup="menu" aria-expanded={menu === 'export'} onClick={() => setMenu(menu === 'export' ? undefined : 'export')}><Download size={16} />导出</button>
           {menu === 'export' && <MarkdownMenu items={exportItems} close={closeMenu} />}
         </div>
         <button className="icon-button" title="专注模式" aria-label="专注模式" onClick={() => setZen(true)}><Focus size={17} /></button>
-        <button className="tool-button" aria-pressed={formatOpen && !artOpen} onClick={() => {
-          if (artOpen) { setArtOpen(false); setFormatOpen(true) } else setFormatOpen(!formatOpen)
+        <button className="tool-button" aria-pressed={formatOpen && !artOpen && !searchOpen} onClick={() => {
+          if (artOpen || searchOpen) { setArtOpen(false); setNavigation(undefined); setFormatOpen(true) } else setFormatOpen(!formatOpen)
         }}><SlidersHorizontal size={16} />格式</button></>}
       </div>
     </div>}
@@ -1130,15 +1160,6 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, onChange, r
           onContextMenu={event => event.preventDefault()} />
         {linking && <div className="map-action-status" role="status">选择关联线的目标主题 <kbd>Esc 取消</kbd></div>}
         {notice && <div className="map-action-status" role="status">{notice}<button className="icon-button" aria-label="关闭提示" onClick={() => setNotice('')}><X size={14} /></button></div>}
-        {searchOpen && <div className="map-search" role="search">
-          <div><Search size={15} /><input aria-label="查找主题内容" placeholder="查找" autoFocus value={query}
-            onChange={event => setQuery(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') engine.current?.search.searchNext() }} />
-            <span>{matches.total ? matches.currentIndex + 1 : 0}/{matches.total}</span>
-            <button className="icon-button" aria-label="关闭导图搜索" onClick={closeMapSearch}><X size={15} /></button></div>
-          <div><input aria-label="替换主题内容" placeholder="替换为" value={replace} onChange={event => setReplace(event.target.value)} />
-            <button className="tool-button" disabled={!matches.total} onClick={() => engine.current?.search.replace(replace, true)}>替换</button>
-            <button className="tool-button" disabled={!matches.total} onClick={() => engine.current?.search.replaceAll(replace)}>全部</button></div>
-        </div>}
         {overview && miniMap && <div className="map-minimap" aria-label="导图概览"
           onPointerDown={event => {
             event.currentTarget.setPointerCapture(event.pointerId)
@@ -1168,11 +1189,15 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, onChange, r
           <button className="icon-button" aria-label="放大" onClick={() => engine.current?.view.enlarge()}><Plus size={16} /></button>
         </div>
       </div>
+      {!zen && navigation && <MindMapNavigation key={navigation.key} topics={topics} initialFacet={navigation.facet}
+        titleMatches={titleMatches} currentTopic={selected.length === 1 ? selected[0].getData().uid : undefined}
+        search={engine.current?.search} count={matches} close={closeNavigation} highlight={highlight}
+        locate={id => command('GO_TARGET_NODE', id)} focusRequest={find} />}
       {!zen && artOpen && <MindMapArt
         target={topicAcceptsArt(node) ? String(node?.getData('text') || '未命名主题') : undefined}
         apply={art => { if (engine.current && node) applyArt(engine.current, node, art) }}
         close={() => { setArtOpen(false); artTrigger.current?.focus() }} />}
-      {!zen && !artOpen && formatOpen && (activeCallout && selectedCallout ? <MindMapCalloutFormat
+      {!zen && !artOpen && !searchOpen && formatOpen && (activeCallout && selectedCallout ? <MindMapCalloutFormat
         key={selectedCallout.id} note={activeCallout.note} close={() => setFormatOpen(false)}
         edit={() => editCallout(selectedCallout)} change={patch => changeCallout(selectedCallout, patch)} />
         : <MindMapFormat {...{ tab, settings, node, selected, version }} change={changeSettings} onTab={setTab} editNumbering={updateNumbering}

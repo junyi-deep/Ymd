@@ -20,6 +20,11 @@ declare module 'simple-mind-map' {
     children: MapNode[]
     nodeData: NodeData
     group?: { node: Element }
+    _tagData?: { node: { node: Element } }[]
+    _iconData?: { node: { node: Element } }[]
+    _lines?: { node: Element }[]
+    _postfixData?: { el: Element }
+    _generalizationList?: { generalizationLine: { node: Element }; generalizationNode: MapNode }[]
     expandBtnSize: number
     _generalizationNodeWidth: number
     _generalizationNodeHeight: number
@@ -59,6 +64,7 @@ declare module 'simple-mind-map' {
     node_contextmenu: [event: MouseEvent, node: MapNode]
     scale: [scale: number]
     search_info_change: [info: { total: number; currentIndex: number }]
+    search_match_node_list_change: [nodes: (MapNode | NodeData)[]]
     node_tree_render_end: []
     node_tree_render_start: []
     view_data_change: []
@@ -95,7 +101,7 @@ declare module 'simple-mind-map' {
       onMouseup(): void
     }
     associativeLine: { isCreatingLine: boolean; createLineFromActiveNode(): void; cancelCreateLine(): void }
-    search: { search(text: string): void; endSearch(): void; searchNext(): void; replace(text: string, jumpNext?: boolean): void; replaceAll(text: string): void }
+    search: { search(text: string): void; endSearch(): void; searchNext(): void; jump(index: number): void; replace(text: string, jumpNext?: boolean): void; replaceAll(text: string): void }
     constructor(options: {
       el: HTMLElement
       data: NodeData

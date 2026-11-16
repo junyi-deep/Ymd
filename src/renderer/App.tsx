@@ -363,7 +363,7 @@ export function App() {
     if (command === 'preferences') { flushEditor.current?.(); setSettingsPage('外观'); setSettings(value => !value) }
     if (command === 'save' && active) { flushEditor.current?.(); run(() => sessions.save(active.path)) }
     if (command === 'find') {
-      if (!settings && active?.kind === 'markdown' && active.mode === 'markdown') setFind(value => value + 1)
+      if (!settings && active?.kind === 'markdown' && (active.mode === 'markdown' || active.mode === 'map')) setFind(value => value + 1)
       else setSearchOpen(true)
     }
   }
@@ -747,7 +747,7 @@ export function App() {
                 : active.mode === 'outline'
                   ? <OutlineEditor key={active.path + ':' + active.reload} text={active.text} name={active.name} path={active.path}
                     platform={platform} remoteImages={preferences.remoteImages} sessions={outlineSessions.current} onChange={edit} />
-                  : <MindMapEditor key={active.path + ':' + active.reload} text={active.text} name={active.name} path={active.path} dark={dark} onChange={edit}
+                  : <MindMapEditor key={active.path + ':' + active.reload} text={active.text} name={active.name} path={active.path} dark={dark} onChange={edit} find={find}
                     platform={platform} keyOverrides={preferences.shortcuts}
                     registerFlush={registerFlush} importWorkbook={importWorkbook} importing={importing}
                     readMapDocument={readMapDocument} followMapDocument={followMapDocument} consumedMapJump={consumedMapJump}
