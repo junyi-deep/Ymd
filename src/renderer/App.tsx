@@ -853,7 +853,11 @@ export function App() {
             </section>
           </div></div> : <Suspense fallback={<div className="startup">正在加载编辑器…</div>}>
             {active.kind === 'drawing'
-              ? <DrawingEditor key={active.path + ':' + active.reload} text={active.text} dark={dark} onChange={edit} />
+              ? <DrawingEditor key={active.path + ':' + active.reload} text={active.text} dark={dark} onChange={edit}
+                backup={() => run(async () => {
+                  if (await window.desktop.saveCopy(active.path, active.text)) setNotice('已保存原文件副本。')
+                })}
+                reveal={() => run(() => window.desktop.reveal(active.path))} />
               : active.mode === 'markdown'
                 ? <MarkdownEditor key={active.path + ':' + active.reload} text={active.text} name={active.name} path={active.path} modified={active.modified} platform={platform} remoteImages={preferences.remoteImages} keyOverrides={preferences.shortcuts}
                   outline={preferences.markdownOutline}

@@ -17,10 +17,19 @@ function readScene(text: string): Scene | undefined {
   }
 }
 
-export default function DrawingEditor({ text, dark, onChange }: { text: string; dark: boolean; onChange: (text: string) => void }) {
+export default function DrawingEditor({ text, dark, onChange, backup, reveal }: {
+  text: string; dark: boolean; onChange: (text: string) => void; backup: () => void; reveal: () => void
+}) {
   const [scene] = useState(() => readScene(text))
   const previous = useRef<string | undefined>(undefined)
-  if (!scene) return <div className="editor-empty"><h2>无法读取绘图</h2><p>此文件需要有效的 Excalidraw 场景 JSON。原文件已保留。</p></div>
+  if (!scene) return <div className="editor-empty">
+    <h2>无法读取绘图</h2>
+    <p>此文件需要有效的 Excalidraw 场景 JSON。可以用文本编辑器检查原文件，或先另存副本。</p>
+    <div className="editor-empty-actions">
+      <button type="button" className="tool-button" onClick={backup}>另存原文件副本</button>
+      <button type="button" className="tool-button" onClick={reveal}>在文件管理器中显示原文件</button>
+    </div>
+  </div>
   return <div className="drawing-editor">
     <Excalidraw initialData={scene} theme={dark ? 'dark' : 'light'} langCode="zh-CN"
       onChange={(elements, appState, files) => {

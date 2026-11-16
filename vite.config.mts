@@ -1,7 +1,16 @@
 import { cp } from 'node:fs/promises'
-import { defineConfig } from 'vite'
+import { defineConfig, normalizePath } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwind from '@tailwindcss/vite'
+
+const localDrawingFontSources = {
+  name: 'local-drawing-font-sources',
+  transform(code: string, id: string) {
+    if (!normalizePath(id).includes('/@excalidraw/excalidraw/dist/') || !code.includes('ASSETS_FALLBACK_URL')) return
+    // Keep SDK font loading and SVG export on the same bundled assets.
+    return code.replace(/`https:\/\/esm\.sh\/[^\r\n]*?\/dist\/prod\/`/, 'window.EXCALIDRAW_ASSET_PATH')
+  },
+}
 
 export default defineConfig({
   base: './',
@@ -16,6 +25,7 @@ export default defineConfig({
     },
     react(),
     tailwind(),
+    localDrawingFontSources,
     {
       name: 'local-drawing-fonts',
       apply: 'build',
@@ -24,6 +34,7 @@ export default defineConfig({
       },
     },
   ],
+  optimizeDeps: { rolldownOptions: { plugins: [localDrawingFontSources] } },
   server: {
     fs: { allow: ['.'] },
   },

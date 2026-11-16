@@ -305,6 +305,9 @@ kbd { color: var(--muted); font-family: inherit; font-size: .9em; white-space: n
 .editor-empty { margin: 80px auto; max-width: min(440px, 90%); color: var(--muted); text-align: center; }
 .editor-empty svg { margin: 0 auto 10px; }
 .editor-empty h2 { font-size: 1.27rem; color: var(--text); font-weight: 650; margin-bottom: 8px; }
+.editor-empty-actions { display: flex; justify-content: center; flex-wrap: wrap; gap: 7px; margin-top: 14px; }
+.editor-empty-actions .tool-button { background: var(--soft); color: var(--text); }
+.editor-empty-actions .tool-button:hover { background: var(--hover); }
 .alert, .notice { display: flex; align-items: center; gap: 8px; background: var(--soft); }
 .alert { padding: 8px 15px; border-block: 1px solid var(--line); }
 .alert svg, .notice svg { flex: none; }

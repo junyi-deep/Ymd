@@ -1,32 +1,11 @@
 # Ymd
 
-Ymd 是面向 macOS arm64 和 Windows x64 的本地 Markdown 编辑器。「我的文档」默认使用 `~/.ymd`，可在「设置 → 文档库」更改。侧栏的「本机文件」保留最近打开的文件和文件夹。文件树显示 `.md` 与 `.excalidraw`。同一份 Markdown 可以切换到实时渲染、大纲和思维导图视图。
+Ymd 是一款面向 macOS arm64 和 Windows x64 的本地 Markdown 与 Excalidraw 编辑器。
 
-## 开发
+- **Markdown 实时编辑**。边写边排版，支持源码切换、标题目录、表格、公式和 Mermaid。
+- **大纲与思维导图**。同一份 Markdown 可以切换为大纲或导图，编辑层级与分支。
+- **Excalidraw 绘图**。用图形、线条、文字和图片绘制草图，保存为标准 `.excalidraw` 文件。
+- **本地工作区与多窗口**。管理「我的文档」，打开本机目录与文件，支持在新窗口打开文档。
+- **文档保护**。支持自动保存、外部修改同步、冲突处理和崩溃草稿恢复。
 
-```sh
-npm ci
-npm run dev
-npm run check
-npm run build
-```
-
-`npm run dist:mac` 输出 macOS arm64 DMG，`npm run dist:win` 输出 Windows x64 NSIS 安装包。开发机安装 Node.js 22.12 或更新的受支持版本。
-
-## 发布
-
-推送与 `package.json` 版本一致的 `v<版本>` 标签会触发 GitHub Actions，两个平台构建成功后发布 Release。
-
-## 文档
-
-以下模块规格仅在本地开发工作区提供。
-
-- [架构、数据流和实施顺序](docs/architecture.md)
-- [工作区与文件](docs/modules/workspace.md)
-- [窗口、侧栏和设置](docs/modules/shell.md)
-- [界面设计基准](docs/design.md)
-- [实时 Markdown](docs/modules/markdown.md)
-- [大纲](docs/modules/outline.md)
-- [思维导图](docs/modules/mind-map.md)
-- [Excalidraw](docs/modules/excalidraw.md)
-- [构建与验收](docs/modules/release.md)
+[官网与下载](https://junyi-deep.github.io/Ymd/) · [版本记录](https://github.com/junyi-deep/Ymd/releases)
