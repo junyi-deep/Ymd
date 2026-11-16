@@ -1,10 +1,10 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, net, protocol, session, shell } from 'electron'
+import { app, BrowserWindow, clipboard, ClipboardItem, dialog, ipcMain, Menu, nativeImage, nativeTheme, net, protocol, session, shell } from 'electron'
 import type { IpcMainInvokeEvent, MediaAccessPermissionRequest, MenuItemConstructorOptions } from 'electron'
 import { mkdir, readdir, readFile, writeFile, rename, open } from 'node:fs/promises'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { defaultPreferences, markdownImageExtensions, searchEngines, windowMaterialFor } from '../shared/contracts'
-import type { Command, ContextMenuItem, Desktop, DocumentFile, Entry, FileKind, MarkdownImageUpload, Preferences, TreeChange, TreeMutation } from '../shared/contracts'
+import type { Command, ContextMenuItem, Desktop, DocumentFile, Entry, FileKind, MapShotRect, MarkdownImageUpload, Preferences, TreeChange, TreeMutation } from '../shared/contracts'
 import { Files, containsPath, fileKind } from './files'
 import { LocalMapLocations } from './localMapLocations'
 import { searchRoots } from './search'
@@ -541,6 +541,39 @@ void app.whenReady().then(async () => {
     if (result.canceled || !result.filePath) return false
     const destination = /\.webm$/i.test(result.filePath) ? result.filePath : result.filePath + '.webm'
     await writeFile(destination, Buffer.from(data), { flush: true })
+    return true
+  })
+  handle('captureMapShot', async (rect: MapShotRect) => {
+    const owner = window!
+    const [width, height] = owner.getContentSize()
+    if (!rect || ![rect.x, rect.y, rect.width, rect.height].every(Number.isSafeInteger) ||
+      rect.x < 0 || rect.y < 0 || rect.width < 12 || rect.height < 12 ||
+      rect.x + rect.width > width || rect.y + rect.height > height) throw new Error('截图区域超出窗口范围。')
+    const image = await owner.webContents.capturePage(rect)
+    if (image.isEmpty()) throw new Error('无法截取导图画布。')
+    return Uint8Array.from(image.toPNG({ scaleFactor: Math.max(1, ...image.getScaleFactors()) })).buffer
+  })
+  handle('outputMapShot', async (data: ArrayBuffer, name?: string) => {
+    if (!(data instanceof ArrayBuffer) || data.byteLength < 24 || data.byteLength > 40 * 1024 * 1024 ||
+        (name !== undefined && typeof name !== 'string')) throw new Error('截图内容无效或过大。')
+    const header = new DataView(data)
+    if (header.getUint32(0) !== 0x89504e47 || header.getUint32(4) !== 0x0d0a1a0a || header.getUint32(12) !== 0x49484452 ||
+        !header.getUint32(16) || !header.getUint32(20) || header.getUint32(16) * header.getUint32(20) > 50_000_000) {
+      throw new Error('截图内容无效或过大。')
+    }
+    const bytes = Buffer.from(data)
+    const image = nativeImage.createFromBuffer(bytes)
+    if (image.isEmpty()) throw new Error('无法读取截图。')
+    if (name !== undefined) {
+      const title = name.replace(/[<>:"/\\|?*\u0000-\u001f]/g, '_').replace(/[. ]+$/, '').slice(0, 120) || '思维导图'
+      const result = await dialog.showSaveDialog(window!, {
+        defaultPath: path.join(app.getPath('desktop'), title + ' 截图.png'), filters: [{ name: 'PNG', extensions: ['png'] }],
+      })
+      if (result.canceled || !result.filePath) return false
+      const destination = /\.png$/i.test(result.filePath) ? result.filePath : result.filePath + '.png'
+      await writeFile(destination, bytes, { flush: true })
+    }
+    await clipboard.write([new ClipboardItem({ 'image/png': new Blob([data], { type: 'image/png' }) })])
     return true
   })
   handle('printDocument', (name: string, html: string) => printView(name, html, view => new Promise<void>((resolve, reject) => {

@@ -527,6 +527,33 @@ dialog button.primary { background: var(--accent); color: var(--accent-ink); }
   .map-gantt-columns span:last-child { display: none; }
 }
 .map-stage { position: relative; flex: 1; min-width: 0; overflow: hidden; }
+.map-shot-overlay { position: absolute; inset: 0; z-index: 4; overflow: hidden; touch-action: none; cursor: crosshair; }
+.map-shot-area { position: absolute; box-shadow: 0 0 0 1px #1d304e, 0 0 0 9999px #11172399; border: 1px solid #d7e6ff; cursor: move; }
+.map-shot-area:focus { outline: none; border-color: white; }
+.map-shot-handle { position: absolute; z-index: 1; width: 11px; height: 11px; background: #f8fbff; border: 1px solid #314666; border-radius: 3px; }
+.map-shot-handle[data-corner="nw"] { top: -5px; left: -5px; cursor: nwse-resize; }
+.map-shot-handle[data-corner="ne"] { top: -5px; right: -5px; cursor: nesw-resize; }
+.map-shot-handle[data-corner="sw"] { bottom: -5px; left: -5px; cursor: nesw-resize; }
+.map-shot-handle[data-corner="se"] { bottom: -5px; right: -5px; cursor: nwse-resize; }
+.map-shot-toolbar { position: absolute; inset: auto auto 12px 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 5px;
+  max-width: calc(100% - 8px); padding: 4px; border: 1px solid var(--line); border-radius: 9px; background: var(--page); box-shadow: var(--shadow); cursor: default; }
+.map-shot-toolbar > output { white-space: nowrap; color: var(--muted); font-variant-numeric: tabular-nums; }
+.map-shot-toolbar button { white-space: nowrap; }
+.map-shot-error { position: absolute; inset: auto 8px 57px; margin: auto; width: max-content; max-width: calc(100% - 16px);
+  padding: 5px 8px; border-radius: 6px; color: var(--text); background: var(--page); }
+.map-editor[data-shot-open] .map-body > :not(.map-stage) { pointer-events: none; }
+.map-stage[data-shot-capturing] :is(.map-shot-overlay, .map-status, .map-minimap, .map-action-status, .smm-hover-node,
+  .smm-quick-create-child-btn, .smm-expand-btn, [data-callout-resize]) { visibility: hidden !important; }
+.map-shot-preview { width: min(670px, 94vw); max-height: 92vh; }
+.map-shot-image { display: grid; place-items: center; min-height: 80px; padding: 9px; border-radius: 8px; background: var(--soft); }
+.map-shot-image canvas { max-width: 100%; max-height: 42vh; object-fit: contain; }
+.map-shot-options { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; margin-top: 12px; }
+.map-shot-options label { display: inline-flex; align-items: center; gap: 5px; margin: 0; white-space: nowrap; }
+.map-shot-options input[type="range"] { width: clamp(70px, 12vw, 145px); padding: 0; }
+.map-shot-options input[type="color"] { width: 32px; height: 25px; padding: 2px; }
+.map-shot-options input:is([type="range"], [type="checkbox"]) { accent-color: var(--accent); }
+.map-shot-options output { min-width: 36px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.map-shot-preview-error { padding-top: 8px; color: var(--text); }
 .map-format { width: clamp(208px, 24%, 260px); flex: none; overflow: auto; border-left: 1px solid var(--line); background: var(--page); }
 .map-format header { display: flex; justify-content: space-between; align-items: center; padding: 7px 9px 5px 13px; }
 .map-format header strong { font-weight: 650; }

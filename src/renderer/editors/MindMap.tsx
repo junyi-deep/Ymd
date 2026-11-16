@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { CalendarRange, ChevronDown, ChevronsLeft, ClipboardList, CornerUpLeft, Crosshair, Download, Focus, FolderInput, GitBranch, GitFork, ImagePlus, ListTree, Map as MapIcon, Maximize, MessageSquare, Mic, Minus, Paperclip, Plus, Redo2, Search, SlidersHorizontal, Square, SquareCheck, Star, Sticker, StickyNote, Tag, Trash2, Undo2, X } from 'lucide-react'
+import { CalendarRange, Camera, ChevronDown, ChevronsLeft, ClipboardList, CornerUpLeft, Crosshair, Download, Focus, FolderInput, GitBranch, GitFork, ImagePlus, ListTree, Map as MapIcon, Maximize, MessageSquare, Mic, Minus, Paperclip, Plus, Redo2, Search, SlidersHorizontal, Square, SquareCheck, Star, Sticker, StickyNote, Tag, Trash2, Undo2, X } from 'lucide-react'
 import DOMPurify from 'dompurify'
 import MindMap from 'simple-mind-map'
 import AssociativeLine from 'simple-mind-map/src/plugins/AssociativeLine.js'
@@ -27,7 +27,7 @@ import { MindMapRecorder } from './MindMapRecorder'
 import { MindMapArt } from './MindMapArt'
 import { MindMapLink, type LinkSheet } from './MindMapLink'
 import { readLocalMapUrl } from '../../shared/localMapLinks'
-import { inputChord, ShortcutSequence, shortcutsFor, type ShortcutOverrides } from '../../shared/shortcuts'
+import { inputChord, shortcutLabel, shortcutValue, ShortcutSequence, shortcutsFor, type ShortcutOverrides } from '../../shared/shortcuts'
 import { addTopicImage, applyArt, imagePlacements, installTopicImageGestures, isTopicImage, placeTopicImage, removeTopicImage, resetTopicImage, topicAcceptsArt } from './mapTopicImages'
 import { audioButton, audioTitle, createAudioPlayer, forgetAudio, loadAudio, readAudioNote, storeAudio, type AudioNote } from './mapAudio'
 import { MarkdownMenu, type MenuItem } from './MarkdownMenu'
@@ -42,6 +42,7 @@ import { calloutById, calloutTopicId, readCallouts, type Callout, type CalloutTa
 import { editNumbering, type NumberingEdit } from './mapNumbering'
 import { installNumbering } from './mapNumberingLayer'
 import { MindMapNavigation } from './MindMapNavigation'
+import { MindMapShot } from './MindMapShot'
 import { facetAt, highlightTopics, navigationTopics, taskStatusFacets, type Facet } from './mapNavigation'
 
 class MapAssociativeLine extends AssociativeLine {
@@ -346,8 +347,10 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, onChange, r
   const [audioParent, setAudioParent] = useState<MapNode>()
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
+  const [shotOpen, setShotOpen] = useState(false)
   const host = useRef<HTMLDivElement>(null)
   const navigationTrigger = useRef<HTMLButtonElement>(null)
+  const shotTrigger = useRef<HTMLButtonElement>(null)
   const artTrigger = useRef<HTMLButtonElement>(null)
   const ganttTrigger = useRef<HTMLButtonElement>(null)
   const resourceInput = useRef<HTMLInputElement>(null)
@@ -379,6 +382,20 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, onChange, r
   const openNavigation = (facet?: string) => {
     setArtOpen(false)
     setNavigation(current => facet ? { key: (current?.key ?? 0) + 1, facet } : current ?? { key: 0 })
+  }
+  const openShot = useCallback(() => {
+    if (!engine.current) return
+    engine.current.renderer.textEdit.hideEditTextBox()
+    engine.current.associativeLine.cancelCreateLine()
+    setLinking(false)
+    setMenu(undefined)
+    setNotice('')
+    setShotOpen(true)
+  }, [])
+  const closeShot = (message?: string) => {
+    setShotOpen(false)
+    if (message) setNotice(message)
+    requestAnimationFrame(() => (shotTrigger.current ?? host.current)?.focus())
   }
 
   const backlinkTopic = selectedCallout ? calloutTopicId(selectedCallout.owner, selectedCallout.id)
@@ -716,15 +733,16 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, onChange, r
   useEffect(() => {
     if (find === previousFind.current) return
     previousFind.current = find
+    if (shotOpen) return
     setGantt(false)
     setZen(false)
     openNavigation()
-  }, [find])
+  }, [find, shotOpen])
 
   useEffect(() => {
     const escape = (event: KeyboardEvent) => {
       if (event.key !== 'Escape' || event.isComposing || event.keyCode === 229 || event.defaultPrevented ||
-          calendarOpen || field || linkEditor || taskTopic || audioParent || calloutText) return
+          calendarOpen || field || linkEditor || taskTopic || audioParent || calloutText || shotOpen) return
       if (event.target instanceof HTMLElement && event.target.closest('.document-menu')) return
       if (event.target instanceof HTMLElement && event.target.closest('.smm-node-edit-wrap')) {
         event.preventDefault()
@@ -745,31 +763,34 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, onChange, r
     }
     window.addEventListener('keydown', escape)
     return () => window.removeEventListener('keydown', escape)
-  }, [gantt, zen, linking, searchOpen, formatOpen, artOpen, calendarOpen, field, linkEditor, taskTopic, audioParent, calloutText])
+  }, [gantt, zen, linking, searchOpen, formatOpen, artOpen, calendarOpen, field, linkEditor, taskTopic, audioParent, calloutText, shotOpen])
 
   useEffect(() => {
     const current = selectedCallout && readCallout(selectedCallout)
     const source = current?.owner ?? (selected.length === 1 ? selected[0] : undefined)
-    if (gantt || !source || source.isGeneralization || readAudioNote(source.getData('ymdAudio')) || linkEditor || field || taskTopic || audioParent || calloutText) return
+    if (gantt || linkEditor || field || taskTopic || audioParent || calloutText || calendarOpen || shotOpen) return
+    const linkable = source && !source.isGeneralization && !readAudioNote(source.getData('ymdAudio'))
     const bindings = shortcutsFor('map', keyOverrides, platform)
     const sequence = new ShortcutSequence()
-    const editLink = (event: KeyboardEvent) => {
+    const mapShortcut = (event: KeyboardEvent) => {
       if (event.defaultPrevented || event.isComposing || event.keyCode === 229 ||
-          !(event.target instanceof Element) || event.target.closest('input, textarea, select, [contenteditable], dialog, .document-menu') ||
-          (event.target !== document.body && !host.current?.contains(event.target))) return
+          !(event.target instanceof Element) || event.target.closest('input, textarea, select, [contenteditable], dialog, .document-menu')) return
       if (event.key === 'Escape') { sequence.reset(); return }
+      const onCanvas = event.target === document.body || host.current?.contains(event.target)
       const chord = inputChord({ key: event.key, code: event.code, control: event.ctrlKey, alt: event.altKey, meta: event.metaKey, shift: event.shiftKey }, platform)
-      const match = chord && sequence.take(chord, bindings, event.repeat)
+      const match = chord && sequence.take(chord, bindings.filter(item => item.id === 'map-shot' || linkable && onCanvas), event.repeat)
       if (!match) return
       event.preventDefault()
       event.stopPropagation()
       if (match === 'pending') return
+      if (match === 'map-shot') { openShot(); return }
+      if (!source) return
       const href = current ? current.note.data.hyperlink : source.getData('hyperlink')
       setLinkEditor({ node: source, callout: current ? selectedCallout : undefined, kind: mapLinkType(href) })
     }
-    window.addEventListener('keydown', editLink, true)
-    return () => window.removeEventListener('keydown', editLink, true)
-  }, [gantt, selected, selectedCallout, linkEditor, field, taskTopic, audioParent, calloutText, keyOverrides, platform])
+    window.addEventListener('keydown', mapShortcut, true)
+    return () => window.removeEventListener('keydown', mapShortcut, true)
+  }, [gantt, selected, selectedCallout, linkEditor, field, taskTopic, audioParent, calloutText, calendarOpen, shotOpen, keyOverrides, platform, openShot])
 
   useEffect(() => {
     const map = engine.current
@@ -1039,7 +1060,10 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, onChange, r
     finally { callouts?.controls(true); exporting.current = false }
   }
 
+  const shotKey = shortcutValue(keyOverrides, 'map-shot', platform)
+  const shotShortcut = shotKey ? shortcutLabel(shotKey, platform) : undefined
   const exportItems: MenuItem[] = [
+    { label: '导图截图…', icon: <Camera size={16} />, shortcut: shotShortcut, run: openShot },
     multipleSheets ? { label: 'Xmind 文件', children: [
       { label: '全部画布', run: () => void exportWorkbook(true) },
       { label: '当前画布', run: () => void exportWorkbook(false) },
@@ -1110,8 +1134,8 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, onChange, r
   const initialTask = readTask(taskSource?.data.ymdTask)
   const closeMenu = () => setMenu(undefined)
 
-  return <div className="map-editor xmind-workspace" data-zen={zen}>
-    {!zen && <div className="map-toolbar" aria-label="思维导图工具栏">
+  return <div className="map-editor xmind-workspace" data-zen={zen} data-shot-open={shotOpen || undefined}>
+    {!zen && <div className="map-toolbar" aria-label="思维导图工具栏" ref={element => { element?.toggleAttribute('inert', shotOpen) }}>
       <div className="map-toolbar-group">
         <button className="icon-button" title="撤销" aria-label="撤销" onClick={() => command('BACK')}><Undo2 size={17} /></button>
         <button className="icon-button" title="重做" aria-label="重做" onClick={() => command('FORWARD')}><Redo2 size={17} /></button>
@@ -1134,6 +1158,8 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, onChange, r
           onClick={() => { setNavigation(undefined); setArtOpen(!artOpen) }}><Sticker size={17} /></button>
         <button ref={navigationTrigger} className="icon-button" title="查找主题" aria-label="查找主题" aria-expanded={searchOpen}
           onClick={() => searchOpen ? closeNavigation() : openNavigation()}><Search size={17} /></button>
+        <button ref={shotTrigger} className="icon-button" aria-label="导图截图"
+          title={shotShortcut ? '导图截图 (' + shotShortcut + ')' : '导图截图'} onClick={openShot}><Camera size={17} /></button>
         <div className="menu-anchor">
           <button className="tool-button" aria-haspopup="menu" aria-expanded={menu === 'export'} onClick={() => setMenu(menu === 'export' ? undefined : 'export')}><Download size={16} />导出</button>
           {menu === 'export' && <MarkdownMenu items={exportItems} close={closeMenu} />}
@@ -1171,7 +1197,7 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, onChange, r
           <div aria-hidden="true" dangerouslySetInnerHTML={{ __html: miniMap.markup }} />
           <i style={miniMap.viewport} />
         </div>}
-        <div className="map-status" role="group" aria-label="画布视图">
+        <div className="map-status" role="group" aria-label="画布视图" ref={element => { element?.toggleAttribute('inert', shotOpen) }}>
           {!!backlinks.length && <div className="menu-anchor">
             <button className="tool-button" aria-haspopup="menu" aria-expanded={menu === 'backlinks'}
               onClick={() => setMenu(menu === 'backlinks' ? undefined : 'backlinks')}><CornerUpLeft size={15} />反向链接</button>
@@ -1188,6 +1214,7 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, onChange, r
           <button className="tool-button" title="恢复为 100%" aria-label="恢复为 100%" onClick={() => engine.current?.view.reset()}>{zoom}%</button>
           <button className="icon-button" aria-label="放大" onClick={() => engine.current?.view.enlarge()}><Plus size={16} /></button>
         </div>
+        {shotOpen && <MindMapShot title={sheet?.title ?? mapTitle(name)} close={closeShot} />}
       </div>
       {!zen && navigation && <MindMapNavigation key={navigation.key} topics={topics} initialFacet={navigation.facet}
         titleMatches={titleMatches} currentTopic={selected.length === 1 ? selected[0].getData().uid : undefined}

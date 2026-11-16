@@ -45,7 +45,10 @@ export const markdownShortcuts = {
   'paragraph-after': { label: '在下方插入段落' },
 } satisfies Record<string, Shortcut>
 
-const mapShortcuts = { 'map-link': { label: '编辑主题链接', key: 'Mod-k' } } satisfies Record<string, Shortcut>
+const mapShortcuts = {
+  'map-link': { label: '编辑主题链接', key: 'Mod-k' },
+  'map-shot': { label: '导图截图', mac: 'Mod-Shift-p', key: 'F7' },
+} satisfies Record<string, Shortcut>
 export const shortcutGroups = { app: appShortcuts, markdown: markdownShortcuts, map: mapShortcuts }
 type Shortcut = { label: string; key?: string; mac?: string }
 export type AppShortcut = keyof typeof appShortcuts
