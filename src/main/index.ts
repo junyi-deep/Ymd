@@ -3,7 +3,7 @@ import type { IpcMainInvokeEvent, MediaAccessPermissionRequest, MenuItemConstruc
 import { mkdir, readdir, readFile, writeFile, rename, open } from 'node:fs/promises'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { defaultPreferences, markdownImageExtensions, searchEngines } from '../shared/contracts'
+import { defaultPreferences, markdownImageExtensions, searchEngines, windowMaterialFor } from '../shared/contracts'
 import type { Command, ContextMenuItem, Desktop, DocumentFile, Entry, FileKind, MarkdownImageUpload, Preferences, TreeChange, TreeMutation } from '../shared/contracts'
 import { Files, containsPath, fileKind } from './files'
 import { LocalMapLocations } from './localMapLocations'
@@ -57,20 +57,19 @@ function normalizePreferences(value: Partial<Preferences> | null): Preferences {
 }
 
 const macReducesTransparency = () => process.platform === 'darwin' && nativeTheme.prefersReducedTransparency
-const glassEnabled = () => !preferences.solidBackground &&
-  (process.platform === 'darwin' ? !macReducesTransparency() : windowsAcrylic)
+const windowMaterial = (value = preferences) => windowMaterialFor(value, process.platform, windowsAcrylic, macReducesTransparency())
 const windowColor = () => nativeTheme.shouldUseDarkColors ? '#222323' : '#fdfdfd'
 const overlayColors = () => ({ color: windowColor(), symbolColor: nativeTheme.shouldUseDarkColors ? '#ededee' : '#222528' })
 
 function applyBackground() {
   nativeTheme.themeSource = preferences.theme
-  const glass = glassEnabled()
-  if (process.platform === 'darwin') window?.setVibrancy(glass ? macVibrancy : null)
+  const material = windowMaterial()
+  if (process.platform === 'darwin') window?.setVibrancy(material === 'vibrancy' ? macVibrancy : null)
   if (windowsAcrylic) {
-    window?.setBackgroundMaterial(glass ? 'acrylic' : 'none')
+    window?.setBackgroundMaterial(material === 'acrylic' ? 'acrylic' : 'none')
     window?.setTitleBarOverlay(overlayColors())
   }
-  window?.setBackgroundColor(glass ? '#00000000' : windowColor())
+  window?.setBackgroundColor(material === 'solid' ? windowColor() : '#00000000')
   if (process.platform === 'darwin') window?.webContents.send('ymd:reducedTransparency', macReducesTransparency())
 }
 
@@ -104,20 +103,22 @@ function installMenu() {
 function createWindow() {
   closing = false
   nativeTheme.themeSource = preferences.theme
-  const glass = glassEnabled()
+  const material = windowMaterial()
   window = new BrowserWindow({
     width: 1220,
     height: 800,
     minWidth: 660,
     minHeight: 510,
     title: 'Ymd',
-    backgroundColor: glass ? '#00000000' : windowColor(),
+    // A clear background requires an alpha-capable macOS window even when launched in solid mode.
+    transparent: process.platform === 'darwin',
+    backgroundColor: material === 'solid' ? windowColor() : '#00000000',
     // DWM needs the title bar hidden to extend the backdrop through the client area.
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : windowsAcrylic ? 'hidden' : 'default',
     titleBarOverlay: windowsAcrylic ? { ...overlayColors(), height: 49 } : undefined,
     autoHideMenuBar: windowsAcrylic,
-    backgroundMaterial: windowsAcrylic && glass ? 'acrylic' : undefined,
-    vibrancy: process.platform === 'darwin' && glass ? macVibrancy : undefined,
+    backgroundMaterial: material === 'acrylic' ? 'acrylic' : undefined,
+    vibrancy: material === 'vibrancy' ? macVibrancy : undefined,
     visualEffectState: process.platform === 'darwin' ? 'active' : undefined,
     webPreferences: { preload: path.join(__dirname, '../preload/index.js'), contextIsolation: true, sandbox: true, nodeIntegration: false },
   })
@@ -572,7 +573,7 @@ void app.whenReady().then(async () => {
     const updated = await storePreferences(current => {
       const next = normalizePreferences({ ...value, libraryDirectory: current.libraryDirectory })
       changedShortcuts = JSON.stringify(current.shortcuts) !== JSON.stringify(next.shortcuts)
-      changedBackground = current.theme !== next.theme || current.solidBackground !== next.solidBackground
+      changedBackground = current.theme !== next.theme || windowMaterial(current) !== windowMaterial(next)
       return next
     })
     if (changedShortcuts) installMenu()

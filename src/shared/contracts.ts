@@ -92,6 +92,16 @@ export const defaultPreferences: Preferences = {
   markdownOutline: { position: 'right', numbering: 'none', visible: false },
   autoSave: false, remoteImages: false, autoCheckUpdates: false, searchEngine: 'google', shortcuts: {},
 }
+
+export function windowMaterialFor(preferences: Preferences, platform: string, windowsAcrylic: boolean, macReducesTransparency: boolean) {
+  if (preferences.solidBackground) return 'solid'
+  if (platform === 'darwin') {
+    if (macReducesTransparency) return 'solid'
+    return preferences.windowTransparency === 100 ? 'clear' : 'vibrancy'
+  }
+  return windowsAcrylic ? 'acrylic' : 'solid'
+}
+
 export type Command = AppShortcut | 'close'
 
 export const markdownImageExtensions = {

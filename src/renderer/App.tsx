@@ -1,6 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState, type MouseEvent, type ReactNode } from 'react'
 import { ArrowLeft, Check, ChevronRight, CircleAlert, Copy, FilePlus2, FileText, FolderInput, Home, ListChecks, ListTree, Network, PanelLeft, LocateFixed, Pencil, Pin, Plus, Save, Search, Settings2, Shapes, Star, Trash2, X } from 'lucide-react'
-import { defaultPreferences, type Command, type DocumentFile, type EditorMode, type Entry, type FileKind, type Preferences, type Scope, type SearchHit, type TreeChange, type TreeMutation, type VersionStatus } from '../shared/contracts'
+import { defaultPreferences, windowMaterialFor, type Command, type DocumentFile, type EditorMode, type Entry, type FileKind, type Preferences, type Scope, type SearchHit, type TreeChange, type TreeMutation, type VersionStatus } from '../shared/contracts'
 import { FileTreeRow, FilesTree, type TreeDrag, type TreeRename } from './FilesTree'
 import { SearchDialog } from './SearchDialog'
 import { Settings } from './Settings'
@@ -140,8 +140,7 @@ export function App() {
   useEffect(() => {
     document.documentElement.dataset.theme = dark ? 'dark' : 'light'
     document.documentElement.dataset.size = preferences.size
-    document.documentElement.dataset.windowMaterial = preferences.solidBackground || macReducesTransparency ? 'solid'
-      : platform === 'darwin' ? 'vibrancy' : windowsAcrylic ? 'acrylic' : 'solid'
+    document.documentElement.dataset.windowMaterial = windowMaterialFor(preferences, platform, windowsAcrylic, macReducesTransparency)
     document.documentElement.style.setProperty('--window-transparency', preferences.windowTransparency + '%')
     document.documentElement.dataset.animation = preferences.animations ? 'full' : 'reduced'
     document.documentElement.dataset.documentTheme = preferences.documentTheme

@@ -67,14 +67,16 @@ export function Settings({ preferences, platform, library, windowsAcrylic, macRe
             <Row label="透明窗口背景" detail={macReducesTransparency
               ? 'macOS 已开启「降低透明度」。可在系统设置的「辅助功能 → 显示」中关闭。'
               : material
-              ? (platform === 'darwin' ? '侧栏和左侧标题栏使用 macOS 毛玻璃。' : '侧栏和左侧标题栏使用 Windows Acrylic。')
+              ? (platform === 'darwin' ? '侧栏和左侧标题栏可使用透明背景。' : '侧栏和左侧标题栏使用 Windows Acrylic。')
               : '当前系统使用实色背景。Windows Acrylic 需要 Windows 11 22H2 或更新版本。'}>
               <button className="switch" role="switch" aria-label="透明窗口背景" aria-checked={transparent}
                 disabled={!material} onClick={() => onChange({ solidBackground: transparent })} />
             </Row>
-            {platform === 'darwin' && transparent && <Row label="毛玻璃透明度" detail="100% 时仅保留系统毛玻璃。">
+            {transparent && <Row label="背景透明度" detail={platform === 'darwin'
+              ? '100% 时侧栏背景完全透明。降低透明度可恢复毛玻璃。'
+              : '100% 时仅保留 Windows Acrylic 材质。'}>
               <div className="transparency-control">
-                <input type="range" aria-label="毛玻璃透明度" aria-valuetext={preferences.windowTransparency + '%'}
+                <input type="range" aria-label="背景透明度" aria-valuetext={preferences.windowTransparency + '%'}
                   min={0} max={100} step={5} value={preferences.windowTransparency}
                   onChange={event => onChange({ windowTransparency: event.currentTarget.valueAsNumber })} />
                 <span aria-hidden="true">{preferences.windowTransparency}%</span>
