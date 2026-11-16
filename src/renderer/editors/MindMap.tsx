@@ -13,7 +13,8 @@ import OuterFrame from 'simple-mind-map/src/plugins/OuterFrame.js'
 import RainbowLines from 'simple-mind-map/src/plugins/RainbowLines.js'
 import SearchPlugin from 'simple-mind-map/src/plugins/Search.js'
 import Select from 'simple-mind-map/src/plugins/Select.js'
-import { OutlineMarkdown, outlineReferences } from './OutlineMarkdown'
+import { DocumentRemainder } from './DocumentRemainder'
+import { outlineReferences } from './OutlineMarkdown'
 import { listMarker, projectList, projectionRemainder, writeList, type Block } from './listProjection'
 import type { DocumentFile, Entry } from '../../shared/contracts'
 import { MindMapFormat } from './MindMapFormat'
@@ -96,6 +97,7 @@ interface MapEditorProps {
   text: string; name: string; path: string; dark: boolean; onChange: (text: string) => void
   find: number
   platform: string; keyOverrides: ShortcutOverrides; remoteImages: boolean
+  remainderVisible: boolean; setRemainderVisible: (visible: boolean) => void
   registerFlush: (flush?: () => void) => void
   importWorkbook: () => void
   importing: boolean
@@ -314,7 +316,7 @@ export default function MindMapEditor(props: MapEditorProps) {
   </div>
 }
 
-function MapCanvas({ text, name, path, dark, platform, keyOverrides, remoteImages, onChange, registerFlush, sheet, updateSheet, multipleSheets, saveXmind, createSheet,
+function MapCanvas({ text, name, path, dark, platform, keyOverrides, remoteImages, remainderVisible, setRemainderVisible, onChange, registerFlush, sheet, updateSheet, multipleSheets, saveXmind, createSheet,
   linkWorkbook, jump, followTopicLink, readMapDocument, linkDocuments, find }: MapEditorProps & {
   sheet?: MapSheet
   updateSheet: (id: string, settings: MapSettings, tree: MapData) => void
@@ -1527,10 +1529,8 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, remoteImage
         }} />)}
     </div>
     </div>
-    {remainder && !zen && !branch && !gantt && <section className="map-remainder" aria-label="文档正文"
-      onClick={event => { if (event.target instanceof Element && event.target.closest('a')) event.preventDefault() }}>
-      <OutlineMarkdown text={remainder} className="outline-markdown" links={remainderLinks} {...{ path, remoteImages }} />
-    </section>}
+    {remainder && !zen && !branch && !gantt && <DocumentRemainder text={remainder} className="map-remainder"
+      links={remainderLinks} visible={remainderVisible} onToggle={setRemainderVisible} {...{ path, remoteImages }} />}
     {typeof menu === 'object' && <MarkdownMenu items={contextItems} close={closeMenu} point={menu} nativeStyle />}
     {equationNode && <MindMapEquation initial={readEquation(equationNode.getData('ymdEquation'))}
       hasImage={!!equationNode.getData('image')} close={closeEquation} save={saveEquation} />}

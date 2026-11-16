@@ -1,4 +1,5 @@
 import { isolateHistory } from '@codemirror/commands'
+import { languages } from '@codemirror/language-data'
 import { markdown } from '@codemirror/lang-markdown'
 import { yamlFrontmatter } from '@codemirror/lang-yaml'
 import { Language, LanguageSupport, syntaxTree } from '@codemirror/language'
@@ -10,7 +11,7 @@ import { footnoteDefinition, metadataClosing as closing, metadataOpening as open
 import { markdownInlineHtml } from './markdownHtml'
 import { markdownImageTags } from './markdownImageSyntax'
 
-const markdownLanguage = markdown({ extensions: [GFM, typoraMarkdown, markdownImageTags], addKeymap: false })
+const markdownLanguage = markdown({ extensions: [GFM, typoraMarkdown, markdownImageTags], addKeymap: false, codeLanguages: languages })
 const mixedLanguage = yamlFrontmatter({ content: markdownLanguage })
 
 class MarkdownWithMetadata extends Parser {

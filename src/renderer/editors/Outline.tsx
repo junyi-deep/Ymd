@@ -1,6 +1,8 @@
 import { useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type KeyboardEvent, type MouseEvent } from 'react'
-import { ChevronRight, Plus, Redo2, Undo2 } from 'lucide-react'
+import { ArrowLeft, ArrowRight, BetweenHorizontalStart, ChevronRight, Plus, Redo2, Undo2 } from 'lucide-react'
 import type { Links } from 'marked'
+import { markdownPageWidths, type MarkdownPageWidth } from '../../shared/contracts'
+import { DocumentRemainder } from './DocumentRemainder'
 import { MarkdownMenu } from './MarkdownMenu'
 import { OutlineMarkdown, outlineReferences } from './OutlineMarkdown'
 import { locateBlock, newBlock, projectionRemainder, writeList, type Block } from './listProjection'
@@ -12,8 +14,10 @@ const typingTypes = new Set(['insertText', 'deleteContentBackward', 'deleteConte
 const blockTitle = (node: Block) => node.text.split('\n')[0].trim() || '空块'
 const cursor = (id: string, start: number, end = start): OutlineCaret => ({ id, start, end })
 
-export function OutlineEditor({ text, name, path, platform, remoteImages, sessions, onChange }: {
-  text: string; name: string; path: string; platform: string; remoteImages: boolean; sessions: Map<string, OutlineSession>; onChange: (text: string) => void
+export function OutlineEditor({ text, name, path, platform, remoteImages, sessions, width, setWidth, remainderVisible, setRemainderVisible, onChange }: {
+  text: string; name: string; path: string; platform: string; remoteImages: boolean; sessions: Map<string, OutlineSession>
+  width: MarkdownPageWidth; setWidth: (value: MarkdownPageWidth) => void
+  remainderVisible: boolean; setRemainderVisible: (visible: boolean) => void; onChange: (text: string) => void
 }) {
   const [session] = useState(() => openOutline(sessions.get(path), text))
   const [blocks, setBlocks] = useState(() => session.blocks)
@@ -22,6 +26,7 @@ export function OutlineEditor({ text, name, path, platform, remoteImages, sessio
   const [scope, setScope] = useState(session.scope)
   const [collapsed, setCollapsed] = useState(() => session.collapsed)
   const [drop, setDrop] = useState<OutlineDrop>()
+  const [widthMenu, setWidthMenu] = useState(false)
   const [menu, setMenu] = useState<{ id: string; x: number; y: number }>()
   const references = useMemo(() => outlineReferences(text), [text])
   const links = useMemo<Links | undefined>(() => references ? JSON.parse(references) : undefined, [references])
@@ -160,8 +165,13 @@ export function OutlineEditor({ text, name, path, platform, remoteImages, sessio
     syncCollapsed(next)
   }
 
-  function setBranch(id?: string, clear = true) {
-    session!.scope = id
+  function setBranch(id?: string, clear = true, remember = clear) {
+    if (remember && session.scope !== id) {
+      session.branchBack.push(session.scope)
+      if (session.branchBack.length > historyLimit) session.branchBack.shift()
+      session.branchForward.length = 0
+    }
+    session.scope = id
     setScope(id)
     if (clear) {
       typing.current = undefined
@@ -172,6 +182,22 @@ export function OutlineEditor({ text, name, path, platform, remoteImages, sessio
       if (id && collapsed.has(id)) collapse(id, false)
       root.current?.scrollTo({ top: 0 })
       root.current?.focus({ preventScroll: true })
+    }
+  }
+
+  function validBranch(id?: string) {
+    return id !== scope && (id === undefined || !!locateBlock(blocks, id))
+  }
+
+  function navigateBranch(forward: boolean) {
+    const source = forward ? session.branchForward : session.branchBack
+    const destination = forward ? session.branchBack : session.branchForward
+    while (source.length) {
+      const next = source.pop()
+      if (!validBranch(next)) continue
+      destination.push(scope)
+      setBranch(next, true, false)
+      return
     }
   }
 
@@ -526,11 +552,15 @@ export function OutlineEditor({ text, name, path, platform, remoteImages, sessio
   }
 
   const remainder = !focused && projectionRemainder(session.projection)
-  return <div ref={root} className="outline-editor" tabIndex={-1} onKeyDown={handleKeys}
+  return <div ref={root} className="outline-editor" data-width={width} tabIndex={-1} onKeyDown={handleKeys}
     onCopy={event => copy(event, false)} onCut={event => copy(event, true)} onPaste={paste}
     onClick={event => { if (event.target instanceof Element && event.target.closest('a')) event.preventDefault() }}>
     <div className="outline-content">
       <div className="outline-toolbar" role="toolbar" aria-label="大纲工具栏">
+        <button className="icon-button" aria-label="后退" title="返回上一个分支" disabled={!session.branchBack.some(validBranch)}
+          onClick={() => navigateBranch(false)}><ArrowLeft size={16} /></button>
+        <button className="icon-button" aria-label="前进" title="前往下一个分支" disabled={!session.branchForward.some(validBranch)}
+          onClick={() => navigateBranch(true)}><ArrowRight size={16} /></button>
         <nav aria-label="大纲路径">
           {focused && <>
             <button className="tool-button" onClick={() => setBranch()}>{name.replace(/\.(?:md|markdown)$/i, '')}</button>
@@ -543,11 +573,18 @@ export function OutlineEditor({ text, name, path, platform, remoteImages, sessio
           onMouseDown={event => event.preventDefault()} onClick={() => restore(false)}><Undo2 size={16} /></button>
         <button className="icon-button" aria-label="重做块编辑" title="重做" disabled={!session.redo.length}
           onMouseDown={event => event.preventDefault()} onClick={() => restore(true)}><Redo2 size={16} /></button>
+        <div className="menu-anchor">
+          <button type="button" className="icon-button" title="页宽设置" aria-label="页宽设置" aria-haspopup="menu" aria-expanded={widthMenu}
+            onClick={() => setWidthMenu(!widthMenu)}><BetweenHorizontalStart size={16} /></button>
+          {widthMenu && <MarkdownMenu close={() => setWidthMenu(false)} items={markdownPageWidths.map(([value, label]) => ({
+            label, selected: width === value, run: () => setWidth(value),
+          }))} />}
+        </div>
       </div>
       {render(focused ? [focused] : blocks)}
       <button className="tool-button outline-add" onClick={() => addBlock(focused?.id)}><Plus size={17} />新增块</button>
-      {remainder && <OutlineMarkdown text={remainder}
-        className="outline-markdown outline-surrounding" {...{ path, remoteImages, links }} />}
+      {remainder && <DocumentRemainder text={remainder} className="outline-surrounding" {...{ path, remoteImages, links }}
+        visible={remainderVisible} onToggle={setRemainderVisible} />}
     </div>
     {menu && <MarkdownMenu point={menu} nativeStyle close={() => setMenu(undefined)} items={[
       { label: '聚焦此分支', run: () => setBranch(menu.id) },

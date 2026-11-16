@@ -10,7 +10,7 @@ import { LocalMapLocations } from './localMapLocations'
 import { searchRoots } from './search'
 import { printView } from './printing'
 import { registerPitchWindow } from './pitchWindow'
-import { readReleaseStatus } from './releases'
+import { Releases } from './releases'
 import { appShortcuts, inputChord, isShortcutAccelerator, readShortcutOverrides, shortcutAccelerator, shortcutMenuLabel, ShortcutSequence, shortcutsFor, shortcutValue,
   type AppShortcut } from '../shared/shortcuts'
 
@@ -52,11 +52,16 @@ function normalizePreferences(value: Partial<Preferences> | null): Preferences {
     },
     sidebarWidth: width(value?.sidebarWidth, paneWidths.sidebar),
     markdownPageWidth: value?.markdownPageWidth === 'narrow' || value?.markdownPageWidth === 'wide' ? value.markdownPageWidth : 'normal',
+    outlinePageWidth: value?.outlinePageWidth === 'narrow' || value?.outlinePageWidth === 'wide' ? value.outlinePageWidth : 'normal',
+    outlineRemainderVisible: value?.outlineRemainderVisible !== false,
+    mapRemainderVisible: value?.mapRemainderVisible !== false,
+    codeBlocks: { lineNumbers: value?.codeBlocks?.lineNumbers === true, wrap: value?.codeBlocks?.wrap === true },
     animations: value?.animations !== false,
     documentTheme: value?.documentTheme === 'paper' || value?.documentTheme === 'mono' ? value.documentTheme : 'classic',
     autoSave: value?.autoSave === true,
     remoteImages: value?.remoteImages === true,
     autoCheckUpdates: value?.autoCheckUpdates === true,
+    autoDownloadUpdates: value?.autoDownloadUpdates === true,
     searchEngine: value?.searchEngine && Object.hasOwn(searchEngines, value.searchEngine) ? value.searchEngine : 'google',
     shortcuts: readShortcutOverrides(value?.shortcuts, process.platform),
   }
@@ -189,6 +194,8 @@ void app.whenReady().then(async () => {
     return net.fetch(pathToFileURL(target).href)
   })
   const data = app.getPath('userData')
+  const releases = new Releases(data, status => window?.webContents.send('ymd:updateStatus', status))
+  await releases.network.load()
   const settings = path.join(data, 'preferences.json')
   const recentFile = path.join(data, 'recent.json')
   const defaultLibrary = path.join(app.getPath('home'), '.ymd')
@@ -271,8 +278,16 @@ void app.whenReady().then(async () => {
   }
 
   handle('initialize', () => ({ library, recent, preferences, platform: process.platform, windowsAcrylic,
-    macReducesTransparency: macReducesTransparency(), version: app.getVersion() }))
-  handle('checkForUpdates', () => readReleaseStatus(app.getVersion()))
+    macReducesTransparency: macReducesTransparency(), version: app.getVersion(), updateProxy: releases.network.publicProxy(), release: releases.status }))
+  handle('checkForUpdates', () => releases.check())
+  handle('downloadUpdate', () => releases.download())
+  handle('setUpdateProxy', (proxy: Parameters<Desktop['setUpdateProxy']>[0]) => releases.network.save(proxy))
+  handle('installUpdate', async () => {
+    await preferenceWrite
+    await releases.install()
+    closing = true
+    app.quit()
+  })
   handle('openLibraryDirectory', async () => {
     const message = await shell.openPath(library.path)
     if (message) throw new Error(message)

@@ -6,6 +6,8 @@ files:
   - dist/**/*
   - package.json
 mac:
+  identity: "-"
+  hardenedRuntime: false
   icon: build/icon.icns
   extendInfo:
     NSMicrophoneUsageDescription: Ymd 使用麦克风为思维导图主题录制语音备注。

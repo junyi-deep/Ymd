@@ -9,13 +9,15 @@ export type OutlineSession = {
   undo: OutlineFrame[]
   redo: OutlineFrame[]
   collapsed: Set<string>
+  branchBack: (string | undefined)[]
+  branchForward: (string | undefined)[]
   scope?: string
 }
 
 export function openOutline(session: OutlineSession | undefined, text: string): OutlineSession {
   if (session?.text === text) return session
   const projection = projectList(text)
-  return { projection, text, blocks: projection.blocks, undo: [], redo: [], collapsed: new Set() }
+  return { projection, text, blocks: projection.blocks, undo: [], redo: [], collapsed: new Set(), branchBack: [], branchForward: [] }
 }
 
 export function flattenBlocks(blocks: Block[], collapsed?: Set<string>): Block[] {

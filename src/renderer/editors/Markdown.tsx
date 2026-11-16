@@ -1,20 +1,21 @@
 import { useDeferredValue, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { BetweenHorizontalStart, Check, ChevronsLeft, ChevronsRight, Code2, Copy, Eye, FileDown, FileText, FolderInput, Info, Keyboard, ListTree, LocateFixed, MoreHorizontal, Pin, Printer, Search, Star, Trash2 } from 'lucide-react'
 import { MarkdownMenu, type MenuItem } from './MarkdownMenu'
-import { contextItems, insertMermaid, typographyKeys } from './markdownCommands'
+import { contextItems, insertMermaid, tabInList, typographyKeys } from './markdownCommands'
 import { markdownPlainText } from './markdownHtml'
 import { chooseMarkdownImages, editImageReference, imageContextItems, isImageNode, MarkdownImage, markdownImageIntake, readImageReference, type ImageResizeRequest } from './markdownImages'
 import { MarkdownImageSize } from './MarkdownImageSize'
-import { renderedBlocks } from './renderedBlocks'
+import { codeBlockPreferences, renderedBlocks } from './renderedBlocks'
 import { insertTable, markdownTable } from './markdownTable'
 import { expandMetadata, FootnoteReference, footnotes, insertFootnote, insertMetadata, markdownNotes, markdownWithMetadata, referenceNote } from './markdownNotes'
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands'
 import { markdownKeymap } from '@codemirror/lang-markdown'
-import { ensureSyntaxTree, syntaxTree } from '@codemirror/language'
+import { ensureSyntaxTree, indentUnit, syntaxHighlighting, syntaxTree } from '@codemirror/language'
 import { openSearchPanel, search, searchKeymap } from '@codemirror/search'
 import { Compartment, EditorState, Prec, type Range } from '@codemirror/state'
 import { Decoration, drawSelection, EditorView, highlightSpecialChars, keymap, ViewPlugin, WidgetType, type DecorationSet, type ViewUpdate } from '@codemirror/view'
-import type { ContextMenuItem, MarkdownOutlinePreferences, MarkdownPageWidth, SearchEngine } from '../../shared/contracts'
+import { classHighlighter } from '@lezer/highlight'
+import { markdownPageWidths, type CodeBlockPreferences, type ContextMenuItem, type MarkdownOutlinePreferences, type MarkdownPageWidth, type SearchEngine } from '../../shared/contracts'
 import type { ShortcutOverrides } from '../../shared/shortcuts'
 import { PaneResize } from '../PaneResize'
 
@@ -166,6 +167,7 @@ interface Props {
   keyOverrides: ShortcutOverrides
   outline: MarkdownOutlinePreferences
   width: MarkdownPageWidth
+  codeBlocks: CodeBlockPreferences
   setWidth: (width: MarkdownPageWidth) => void
   updateOutline: (patch: Partial<MarkdownOutlinePreferences>) => void
   registerFlush: (flush?: () => void) => void
@@ -187,7 +189,7 @@ interface Props {
   report: (error: unknown) => void
 }
 
-export function MarkdownEditor({ text, name, path, modified, platform, remoteImages, searchEngine, keyOverrides, outline, updateOutline, width, setWidth, registerFlush, onChange, find, jump, reveal, saveCopy, duplicate, move, trash, shortcuts, exportPdf, printDocument, pinned, starred, togglePin, toggleStar, report }: Props) {
+export function MarkdownEditor({ text, name, path, modified, platform, remoteImages, searchEngine, keyOverrides, outline, updateOutline, width, codeBlocks, setWidth, registerFlush, onChange, find, jump, reveal, saveCopy, duplicate, move, trash, shortcuts, exportPdf, printDocument, pinned, starred, togglePin, toggleStar, report }: Props) {
   const host = useRef<HTMLDivElement>(null)
   const view = useRef<EditorView>(null)
   const change = useRef(onChange)
@@ -237,12 +239,13 @@ export function MarkdownEditor({ text, name, path, modified, platform, remoteIma
         extensions: [
           highlightSpecialChars(), history(), drawSelection(), keymap.of([...defaultKeymap.filter(binding =>
             !['Mod-i', 'Mod-[', 'Mod-]'].includes(binding.key ?? '') && (platform === 'darwin' || binding.key !== 'Shift-Mod-k')), ...historyKeymap]),
-          EditorView.lineWrapping, markdownWithMetadata, footnotes, keyMode.current.of(writingKeys()),
+          EditorView.lineWrapping, markdownWithMetadata, syntaxHighlighting(classHighlighter), indentUnit.of('  '), footnotes, keyMode.current.of(writingKeys()),
           search({ top: true }), Prec.high(keymap.of([{ key: 'Enter', run: expandMetadata },
+            { key: 'Tab', run: tabInList(), shift: tabInList(true) },
             ...markdownKeymap, ...searchKeymap.filter(binding => binding.key !== 'Mod-f')])),
           EditorView.contentAttributes.of({ 'aria-label': 'Markdown 编辑器', spellcheck: 'false' }),
           markdownImageIntake(path, report),
-          renderMode.current.of([live(path, remoteImages), renderedBlocks, markdownTable, markdownNotes]),
+          renderMode.current.of([live(path, remoteImages), codeBlockPreferences.of(codeBlocks), renderedBlocks, markdownTable, markdownNotes]),
           readMode.current.of([]),
           EditorView.updateListener.of(update => {
             if (update.docChanged) change.current(bom + update.state.doc.toString().replaceAll('\n', newline))
@@ -264,8 +267,8 @@ export function MarkdownEditor({ text, name, path, modified, platform, remoteIma
   }, [registerFlush])
 
   useEffect(() => {
-    view.current?.dispatch({ effects: renderMode.current.reconfigure(source ? [] : [live(path, remoteImages), renderedBlocks, markdownTable, markdownNotes]) })
-  }, [source, path, remoteImages])
+    view.current?.dispatch({ effects: renderMode.current.reconfigure(source ? [] : [live(path, remoteImages), codeBlockPreferences.of(codeBlocks), renderedBlocks, markdownTable, markdownNotes]) })
+  }, [source, path, remoteImages, codeBlocks])
   useEffect(() => {
     view.current?.dispatch({ effects: readMode.current.reconfigure([
       EditorState.readOnly.of(reading), EditorView.editable.of(!reading),
@@ -337,11 +340,9 @@ export function MarkdownEditor({ text, name, path, modified, platform, remoteIma
     label, selected: outline.numbering === numbering, run: () => { updateOutline({ numbering }); numberingTrigger.current?.focus() },
   }))
   const docItems: MenuItem[] = [
-    { label: '页宽设置', icon: <BetweenHorizontalStart size={16} />, children: [
-      { label: '窄', selected: width === 'narrow', run: () => setWidth('narrow') },
-      { label: '标准', selected: width === 'normal', run: () => setWidth('normal') },
-      { label: '宽', selected: width === 'wide', run: () => setWidth('wide') },
-    ] },
+    { label: '页宽设置', icon: <BetweenHorizontalStart size={16} />, children: markdownPageWidths.map(([value, label]) => ({
+      label, selected: width === value, run: () => setWidth(value),
+    })) },
     { label: '查找和替换', icon: <Search size={16} />, separator: true, run: () => { if (view.current) openSearchPanel(view.current) } },
     { label: '移动到', icon: <FolderInput size={16} />, separator: true, run: move },
     { label: pinned ? '从“置顶”移除' : '添加到“置顶”', icon: <Pin size={16} />, run: togglePin },

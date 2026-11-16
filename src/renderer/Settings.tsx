@@ -1,6 +1,7 @@
 import { useState, type ReactNode } from 'react'
 import { ArrowLeft, HardDrive, Info, Keyboard, Palette, SlidersHorizontal } from 'lucide-react'
-import { searchEngines, type Entry, type Preferences, type SearchEngine, type VersionStatus } from '../shared/contracts'
+import { searchEngines, type Entry, type Preferences, type SearchEngine, type UpdateProxy, type UpdateProxyInput, type VersionStatus } from '../shared/contracts'
+import { UpdateProxySettings } from './UpdateProxySettings'
 import { ShortcutSettings } from './ShortcutSettings'
 import { appShortcuts, shortcutLabel, shortcutValue } from '../shared/shortcuts'
 
@@ -25,7 +26,7 @@ function Choices<T extends string>({ value, choices, onChange }: {
     <button key={key} aria-pressed={value === key} onClick={() => onChange(key)}>{label}</button>)}</div>
 }
 
-export function Settings({ preferences, platform, library, windowsAcrylic, macReducesTransparency, initialPage, version, release, checking, onCheckUpdates, onOpenRelease, onOpenDirectory, onChange, onReturn, onLibraryChange }: {
+export function Settings({ preferences, platform, library, windowsAcrylic, macReducesTransparency, initialPage, version, release, checking, updateProxy, onSaveUpdateProxy, onCheckUpdates, onDownloadUpdate, onInstallUpdate, onOpenRelease, onOpenDirectory, onChange, onReturn, onLibraryChange }: {
   preferences: Preferences
   platform: string
   library: Entry
@@ -35,7 +36,11 @@ export function Settings({ preferences, platform, library, windowsAcrylic, macRe
   version: string
   release?: VersionStatus
   checking: boolean
+  updateProxy: UpdateProxy
+  onSaveUpdateProxy: (input: UpdateProxyInput) => Promise<UpdateProxy>
   onCheckUpdates: () => void
+  onDownloadUpdate: () => void
+  onInstallUpdate: () => void
   onOpenRelease: (url: string) => void
   onOpenDirectory: () => void
   onLibraryChange: (reset?: boolean) => void
@@ -44,6 +49,9 @@ export function Settings({ preferences, platform, library, windowsAcrylic, macRe
 }) {
   const [page, setPage] = useState(initialPage)
   const material = (platform === 'darwin' && !macReducesTransparency) || windowsAcrylic
+  const updateProgress = release?.progress
+  const downloading = updateProgress?.state === 'downloading'
+  const installing = updateProgress?.state === 'installing'
   const transparent = material && !preferences.solidBackground
   const quickNew = (['new-file', 'new-drawing'] as const).flatMap(id => {
     const key = shortcutValue(preferences.shortcuts, id, platform)
@@ -103,9 +111,23 @@ export function Settings({ preferences, platform, library, windowsAcrylic, macRe
               <button className="switch" role="switch" aria-label="自动下载网络图片" aria-checked={preferences.remoteImages}
                 onClick={() => onChange({ remoteImages: !preferences.remoteImages })} />
             </Row>
-            <Row label="自动检查更新" detail="启动时读取 GitHub 版本信息。发现新版本后，可打开发布页下载。">
+            <Row label="自动检查更新" detail="启动时和运行期间检查 GitHub 发布版本。">
               <button className="switch" role="switch" aria-label="自动检查更新" aria-checked={preferences.autoCheckUpdates}
-                onClick={() => onChange({ autoCheckUpdates: !preferences.autoCheckUpdates })} />
+                onClick={() => onChange({ autoCheckUpdates: !preferences.autoCheckUpdates, ...(preferences.autoCheckUpdates ? { autoDownloadUpdates: false } : {}) })} />
+            </Row>
+            <Row label="自动下载更新" detail="发现新版本后在后台下载，保存文档后可重启安装。">
+              <button className="switch" role="switch" aria-label="自动下载更新" aria-checked={preferences.autoDownloadUpdates}
+                onClick={() => onChange({ autoDownloadUpdates: !preferences.autoDownloadUpdates,
+                  ...(!preferences.autoDownloadUpdates ? { autoCheckUpdates: true } : {}) })} />
+            </Row>
+            <UpdateProxySettings proxy={updateProxy} save={onSaveUpdateProxy} disabled={checking || downloading || installing} />
+            <Row label="代码块显示行号">
+              <button className="switch" role="switch" aria-label="代码块显示行号" aria-checked={preferences.codeBlocks.lineNumbers}
+                onClick={() => onChange({ codeBlocks: { ...preferences.codeBlocks, lineNumbers: !preferences.codeBlocks.lineNumbers } })} />
+            </Row>
+            <Row label="代码块自动换行">
+              <button className="switch" role="switch" aria-label="代码块自动换行" aria-checked={preferences.codeBlocks.wrap}
+                onClick={() => onChange({ codeBlocks: { ...preferences.codeBlocks, wrap: !preferences.codeBlocks.wrap } })} />
             </Row>
             <Row label="网页搜索" detail="在 Markdown 中选中文字，右键可在浏览器中搜索。">
               <select aria-label="网页搜索" value={preferences.searchEngine}
@@ -138,12 +160,23 @@ export function Settings({ preferences, platform, library, windowsAcrylic, macRe
           </>}
           {page === '关于' && <>
             <Row label="Ymd" detail={version ? '当前版本 ' + version : '本地 Markdown 与 Excalidraw 编辑器。'} />
-            <Row label="软件更新" detail={release?.update ? '可下载 ' + release.update.version : release ? '已是当前发布渠道的最新版本。' : undefined}>
+            <Row label="软件更新" detail={updateProgress?.state === 'ready' ? release?.update?.version + ' 已下载'
+              : installing ? '正在准备安装…' : release?.update ? '可下载 ' + release.update.version
+              : release ? '已是当前发布渠道的最新版本。' : undefined}>
               <div className="setting-actions">
-                <button className="tool-button" disabled={checking} onClick={onCheckUpdates}>{checking ? '正在检查…' : '检查更新'}</button>
+                <button className="tool-button" disabled={checking || downloading || installing} onClick={onCheckUpdates}>{checking ? '正在检查…' : '检查更新'}</button>
+                {release?.update?.canDownload && !downloading && !installing &&
+                  (updateProgress?.state === 'ready'
+                    ? <button className="tool-button" onClick={onInstallUpdate}>重启并安装</button>
+                    : <button className="tool-button" onClick={onDownloadUpdate}>{updateProgress?.state === 'error' ? '重新下载' : '下载更新'}</button>)}
                 {release?.update && <button className="tool-button" onClick={() => onOpenRelease(release.update!.url)}>打开发布页</button>}
               </div>
             </Row>
+            {updateProgress?.state === 'downloading' && <div className="update-progress">
+              <progress aria-label="更新下载进度" max={updateProgress.total} value={updateProgress.received} />
+              <span>{Math.floor(100 * updateProgress.received / updateProgress.total)}%</span>
+            </div>}
+            {updateProgress?.state === 'error' && <p className="update-progress" role="alert">{updateProgress.message}</p>}
             <Row label="源代码"><div className="setting-actions">
               <button className="tool-button" onClick={() => onOpenRelease('https://github.com/junyi-deep/Ymd')}>在 GitHub 查看</button>
             </div></Row>

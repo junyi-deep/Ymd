@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import type { Command, Desktop } from '../shared/contracts'
+import type { Command, Desktop, VersionStatus } from '../shared/contracts'
 import type { PitchDesktop } from '../shared/pitch'
 
 const desktop: Desktop = {
@@ -45,6 +45,14 @@ const desktop: Desktop = {
   reveal: (path, directory) => ipcRenderer.invoke('ymd:reveal', path, directory),
   openLibraryDirectory: () => ipcRenderer.invoke('ymd:openLibraryDirectory'),
   checkForUpdates: () => ipcRenderer.invoke('ymd:checkForUpdates'),
+  downloadUpdate: () => ipcRenderer.invoke('ymd:downloadUpdate'),
+  installUpdate: () => ipcRenderer.invoke('ymd:installUpdate'),
+  setUpdateProxy: value => ipcRenderer.invoke('ymd:setUpdateProxy', value),
+  onUpdateStatus: callback => {
+    const listener = (_event: unknown, status: VersionStatus) => callback(status)
+    ipcRenderer.on('ymd:updateStatus', listener)
+    return () => ipcRenderer.removeListener('ymd:updateStatus', listener)
+  },
   setPreferences: preferences => ipcRenderer.invoke('ymd:setPreferences', preferences),
   setShortcutRecording: active => ipcRenderer.invoke('ymd:setShortcutRecording', active),
   finishClose: () => ipcRenderer.invoke('ymd:finishClose'),

@@ -1,6 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState, type CSSProperties, type MouseEvent, type ReactNode } from 'react'
 import { ArrowLeft, Check, ChevronRight, CircleAlert, Copy, FilePlus2, FileText, FolderInput, Home, ListChecks, ListTree, Network, PanelLeft, LocateFixed, Pencil, Pin, Plus, Save, Search, Settings2, Shapes, Star, Trash2, X } from 'lucide-react'
-import { defaultPreferences, windowMaterialFor, type Command, type DocumentFile, type EditorMode, type Entry, type FileKind, type Preferences, type Scope, type SearchHit, type TreeChange, type TreeMutation, type VersionStatus } from '../shared/contracts'
+import { defaultPreferences, defaultUpdateProxy, windowMaterialFor, type Command, type DocumentFile, type EditorMode, type Entry, type FileKind, type Preferences, type Scope, type SearchHit, type TreeChange, type TreeMutation, type UpdateProxyInput, type VersionStatus } from '../shared/contracts'
 import { FileTreeRow, FilesTree, type TreeDrag, type TreeRename } from './FilesTree'
 import { SearchDialog } from './SearchDialog'
 import { Settings } from './Settings'
@@ -30,7 +30,7 @@ function IconButton({ label, children, click, disabled }: { label: string; child
 }
 
 type Prompt =
-  | { type: 'close'; path?: string }
+  | { type: 'close'; path?: string; install?: boolean }
   | { type: 'reload' | 'trash'; session: Session }
   | { type: 'tree-trash'; entries: Entry[] }
 
@@ -54,9 +54,11 @@ export function App() {
   const [settings, setSettings] = useState(false)
   const [version, setVersion] = useState('')
   const [release, setRelease] = useState<VersionStatus>()
+  const [updateProxy, setUpdateProxy] = useState(defaultUpdateProxy)
+  const [dismissedUpdate, setDismissedUpdate] = useState<string>()
   const [checking, setChecking] = useState(false)
   const releaseCheckInFlight = useRef(false)
-  const checkedAtStartup = useRef(false)
+  const updateInstallInFlight = useRef(false)
   const [settingsPage, setSettingsPage] = useState<'外观' | '文档库' | '快捷键' | '关于'>('外观')
   const [searchOpen, setSearchOpen] = useState(false)
   const [jump, setJump] = useState<{ path: string; line: number; id: number }>()
@@ -114,6 +116,8 @@ export function App() {
       setMacReducesTransparency(result.macReducesTransparency)
       setPlatform(result.platform)
       setVersion(result.version)
+      setUpdateProxy(result.updateProxy)
+      if (result.release.update) setRelease(result.release)
       setPreferences(result.preferences)
       lastPreferences.current = result.preferences
     })
@@ -123,20 +127,35 @@ export function App() {
     query.addEventListener('change', onTheme)
     const unsubscribeTransparency = window.desktop.onReducedTransparency(setMacReducesTransparency)
     window.addEventListener('focus', onFocus)
+    const unsubscribeUpdate = window.desktop.onUpdateStatus(setRelease)
     const unsubscribe = window.desktop.onCommand(command => commandRef.current(command))
     return () => {
       unsubscribe()
       unsubscribeTransparency()
+      unsubscribeUpdate()
       query.removeEventListener('change', onTheme)
       window.removeEventListener('focus', onFocus)
     }
   }, [])
 
   useEffect(() => {
-    if (!version || !preferences.autoCheckUpdates || checkedAtStartup.current) return
-    checkedAtStartup.current = true
+    if (!version || !preferences.autoCheckUpdates && !preferences.autoDownloadUpdates) return
     void checkForUpdates(false)
-  }, [version, preferences.autoCheckUpdates])
+    const interval = window.setInterval(() => void checkForUpdates(false), 6 * 60 * 60_000)
+    return () => window.clearInterval(interval)
+  }, [version, preferences.autoCheckUpdates, preferences.autoDownloadUpdates])
+
+  useEffect(() => {
+    if (preferences.autoDownloadUpdates && release?.update?.canDownload && !release.progress) {
+      void window.desktop.downloadUpdate().catch(() => {})
+    }
+  }, [preferences.autoDownloadUpdates, release?.update?.version, release?.update?.canDownload, release?.progress?.state])
+
+  async function saveUpdateProxy(input: UpdateProxyInput) {
+    const saved = await window.desktop.setUpdateProxy(input)
+    setUpdateProxy(saved)
+    return saved
+  }
 
   useEffect(() => {
     document.documentElement.dataset.theme = dark ? 'dark' : 'light'
@@ -316,24 +335,35 @@ export function App() {
     })
   }
 
-  function finishClose(path?: string) {
+  function finishClose(path?: string, install = false) {
+    if (install) {
+      if (updateInstallInFlight.current) return
+      updateInstallInFlight.current = true
+      setBusy(true)
+      run(async () => {
+        try { await window.desktop.installUpdate(); setPrompt(undefined) }
+        finally { updateInstallInFlight.current = false; setBusy(false) }
+      })
+      return
+    }
     if (path) { outlineSessions.current.delete(path); sessions.close(path) }
     else run(() => window.desktop.finishClose())
     setPrompt(undefined)
   }
 
-  function requestClose(path?: string) {
+  function requestClose(path?: string, install = false) {
+    if (updateInstallInFlight.current) return
     flushEditor.current?.()
     if (sessions.hasPending(path)) {
-      run(async () => { await sessions.waitForPending(path); requestClose(path) })
+      run(async () => { await sessions.waitForPending(path); requestClose(path, install) })
       return
     }
     if (sessions.latest.current.some(document => (!path || document.path === path) && document.saved !== document.text)) {
-      setPrompt({ type: 'close', path })
-    } else finishClose(path)
+      setPrompt({ type: 'close', path, install })
+    } else finishClose(path, install)
   }
 
-  function saveAndClose(path?: string) {
+  function saveAndClose(path?: string, install = false) {
     run(async () => {
       setBusy(true)
       try {
@@ -345,9 +375,9 @@ export function App() {
             return
           }
         }
-        finishClose(path)
+        finishClose(path, install)
       } finally {
-        setBusy(false)
+        if (!updateInstallInFlight.current) setBusy(false)
       }
     })
   }
@@ -645,7 +675,8 @@ export function App() {
     <div className="window-body">
       {settings ? <Settings initialPage={settingsPage} {...{ preferences, platform, library, windowsAcrylic, macReducesTransparency, version, release, checking }}
         onLibraryChange={changeLibrary} onReturn={() => setSettings(false)}
-        onCheckUpdates={() => void checkForUpdates()}
+        onCheckUpdates={() => void checkForUpdates()} onDownloadUpdate={() => run(() => window.desktop.downloadUpdate())}
+        onInstallUpdate={() => requestClose(undefined, true)} updateProxy={updateProxy} onSaveUpdateProxy={saveUpdateProxy}
         onOpenRelease={url => run(() => window.desktop.openExternal(url))}
         onOpenDirectory={() => run(() => window.desktop.openLibraryDirectory())}
         onChange={updatePreferences} /> : <>
@@ -720,7 +751,7 @@ export function App() {
               : active.mode === 'markdown'
                 ? <MarkdownEditor key={active.path + ':' + active.reload} text={active.text} name={active.name} path={active.path} modified={active.modified} platform={platform} remoteImages={preferences.remoteImages} keyOverrides={preferences.shortcuts}
                   outline={preferences.markdownOutline}
-                  width={preferences.markdownPageWidth} setWidth={markdownPageWidth => updatePreferences({ markdownPageWidth })}
+                  width={preferences.markdownPageWidth} codeBlocks={preferences.codeBlocks} setWidth={markdownPageWidth => updatePreferences({ markdownPageWidth })}
                   updateOutline={patch => updatePreferences({ markdownOutline: { ...lastPreferences.current.markdownOutline, ...patch } })}
                   searchEngine={preferences.searchEngine} registerFlush={registerFlush}
                   find={find} jump={jump?.path === active.path ? jump : undefined} onChange={edit}
@@ -749,9 +780,12 @@ export function App() {
                   })} />
                 : active.mode === 'outline'
                   ? <OutlineEditor key={active.path + ':' + active.reload} text={active.text} name={active.name} path={active.path}
-                    platform={platform} remoteImages={preferences.remoteImages} sessions={outlineSessions.current} onChange={edit} />
+                    platform={platform} remoteImages={preferences.remoteImages} sessions={outlineSessions.current} onChange={edit}
+                    width={preferences.outlinePageWidth} setWidth={outlinePageWidth => updatePreferences({ outlinePageWidth })}
+                    remainderVisible={preferences.outlineRemainderVisible} setRemainderVisible={outlineRemainderVisible => updatePreferences({ outlineRemainderVisible })} />
                   : <MindMapEditor key={active.path + ':' + active.reload} text={active.text} name={active.name} path={active.path} dark={dark} onChange={edit} find={find}
                     platform={platform} keyOverrides={preferences.shortcuts} remoteImages={preferences.remoteImages}
+                    remainderVisible={preferences.mapRemainderVisible} setRemainderVisible={mapRemainderVisible => updatePreferences({ mapRemainderVisible })}
                     registerFlush={registerFlush} importWorkbook={importWorkbook} importing={importing}
                     readMapDocument={readMapDocument} followMapDocument={followMapDocument} consumedMapJump={consumedMapJump}
                     entryJump={mapJump?.path === active.path ? mapJump.target : undefined}
@@ -761,6 +795,12 @@ export function App() {
       </>}
     </div>
     {!prompt && notice && <div className="notice" role="alert"><CircleAlert size={17} />{notice}<IconButton label="关闭通知" click={() => setNotice('')}><X size={15} /></IconButton></div>}
+    {!settings && !prompt && !notice && release?.progress?.state === 'ready' && release.update &&
+      dismissedUpdate !== release.update.version && <div className="notice" role="status">
+        <span>{'Ymd ' + release.update.version + ' 已下载'}</span>
+        <button className="tool-button" onClick={() => requestClose(undefined, true)}>重启并安装</button>
+        <IconButton label="忽略更新通知" click={() => setDismissedUpdate(release.update!.version)}><X size={15} /></IconButton>
+      </div>}
     {treeMenu && !settings && <MarkdownMenu key={treeMenu.kind + ':' + (treeMenu.target?.path ?? '')}
       items={treeItems} close={() => setTreeMenu(undefined)} point={treeMenu} anchor={treeMenu.anchor} nativeStyle />}
     {searchOpen && <SearchDialog documents={sessions.documents} onOpen={openFromSearch} onClose={() => setSearchOpen(false)} />}
@@ -773,10 +813,10 @@ export function App() {
           <button className="primary" disabled={busy} onClick={() => mutateEntries('trash', prompt.entries, undefined, !!batch)}>移到回收站</button></footer>
       </div>}
       {prompt?.type === 'close' && <div>
-        <h2>保留更改</h2><p>还有未保存的文档。关闭前需要保存吗？</p>
+        <h2>保留更改</h2><p>{prompt.install ? '重启安装前是否保存未保存的文档？' : '还有未保存的文档。关闭前需要保存吗？'}</p>
         {notice && <p className="form-error" role="alert">{notice}</p>}
-        <footer><button onClick={() => setPrompt(undefined)} disabled={busy}>取消</button><button onClick={() => finishClose(prompt.path)} disabled={busy}>舍弃</button>
-          <button className="primary" onClick={() => saveAndClose(prompt.path)} disabled={busy}>保存</button></footer>
+        <footer><button onClick={() => setPrompt(undefined)} disabled={busy}>取消</button><button onClick={() => finishClose(prompt.path, prompt.install)} disabled={busy}>舍弃</button>
+          <button className="primary" onClick={() => saveAndClose(prompt.path, prompt.install)} disabled={busy}>保存</button></footer>
       </div>}
       {prompt?.type === 'trash' && <div>
         <h2>移到回收站</h2><p>将「{prompt.session.name}」移到系统回收站。</p>

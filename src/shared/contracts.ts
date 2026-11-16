@@ -7,6 +7,8 @@ export type Scope = 'library' | 'local'
 export type EditorMode = 'markdown' | 'outline' | 'map'
 export type Theme = 'system' | 'light' | 'dark'
 export type MarkdownPageWidth = 'narrow' | 'normal' | 'wide'
+export const markdownPageWidths = [['narrow', '窄'], ['normal', '标准'], ['wide', '宽']] as const
+export type CodeBlockPreferences = { lineNumbers: boolean; wrap: boolean }
 export const paneWidths = { sidebar: { min: 160, max: 440 }, outline: { min: 152, max: 420 } } as const
 export type SearchEngine = 'google' | 'baidu' | 'bing' | 'duckduckgo'
 
@@ -17,9 +19,21 @@ export const searchEngines: Record<SearchEngine, { label: string; url: string; p
   duckduckgo: { label: 'DuckDuckGo', url: 'https://duckduckgo.com/', parameter: 'q' },
 }
 
+export type UpdateProxyMode = 'system' | 'direct' | 'http'
+export interface UpdateProxy {
+  mode: UpdateProxyMode
+  address: string
+  username: string
+  hasPassword: boolean
+}
+export type UpdateProxyInput = Omit<UpdateProxy, 'hasPassword'> & { password?: string }
+export const defaultUpdateProxy: UpdateProxy = { mode: 'system', address: '', username: '', hasPassword: false }
+
 export interface VersionStatus {
   current: string
-  update?: { version: string; url: string }
+  update?: { version: string; url: string; canDownload: boolean }
+  progress?: { state: 'downloading'; received: number; total: number } |
+    { state: 'ready' | 'installing' } | { state: 'error'; message: string }
 }
 
 export interface Entry {
@@ -77,11 +91,16 @@ export interface Preferences {
   markdownOutline: MarkdownOutlinePreferences
   sidebarWidth?: number
   markdownPageWidth: MarkdownPageWidth
+  outlinePageWidth: MarkdownPageWidth
+  outlineRemainderVisible: boolean
+  mapRemainderVisible: boolean
+  codeBlocks: CodeBlockPreferences
   animations: boolean
   documentTheme: 'classic' | 'paper' | 'mono'
   autoSave: boolean
   remoteImages: boolean
   autoCheckUpdates: boolean
+  autoDownloadUpdates: boolean
   searchEngine: SearchEngine
   shortcuts: ShortcutOverrides
 }
@@ -96,8 +115,9 @@ export interface MarkdownOutlinePreferences {
 export const defaultPreferences: Preferences = {
   theme: 'system', size: 'normal', solidBackground: false, windowTransparency: 80, recentLimit: 10, animations: true, documentTheme: 'classic',
   markdownOutline: { position: 'right', numbering: 'none', visible: false },
-  markdownPageWidth: 'normal',
-  autoSave: false, remoteImages: false, autoCheckUpdates: false, searchEngine: 'google', shortcuts: {},
+  markdownPageWidth: 'normal', outlinePageWidth: 'normal', outlineRemainderVisible: true, mapRemainderVisible: true,
+  codeBlocks: { lineNumbers: false, wrap: false },
+  autoSave: false, remoteImages: false, autoCheckUpdates: false, autoDownloadUpdates: false, searchEngine: 'google', shortcuts: {},
 }
 
 export function windowMaterialFor(preferences: Preferences, platform: string, windowsAcrylic: boolean, macReducesTransparency: boolean) {
@@ -131,7 +151,7 @@ export function markdownImageExtension(name: string, type = '') {
 }
 
 export interface Desktop {
-  initialize(): Promise<{ library: Entry; recent: Entry[]; preferences: Preferences; platform: string; windowsAcrylic: boolean; macReducesTransparency: boolean; version: string }>
+  initialize(): Promise<{ library: Entry; recent: Entry[]; preferences: Preferences; platform: string; windowsAcrylic: boolean; macReducesTransparency: boolean; version: string; updateProxy: UpdateProxy; release: VersionStatus }>
   list(path: string): Promise<Entry[]>
   chooseLibraryDirectory(): Promise<Entry | null>
   resetLibraryDirectory(): Promise<Entry>
@@ -173,6 +193,10 @@ export interface Desktop {
   reveal(path: string, directory?: boolean): Promise<void>
   openLibraryDirectory(): Promise<void>
   checkForUpdates(): Promise<VersionStatus>
+  downloadUpdate(): Promise<void>
+  installUpdate(): Promise<void>
+  setUpdateProxy(value: UpdateProxyInput): Promise<UpdateProxy>
+  onUpdateStatus(callback: (status: VersionStatus) => void): () => void
   setPreferences(preferences: Preferences): Promise<Preferences>
   setShortcutRecording(active: boolean): Promise<void>
   finishClose(): Promise<void>

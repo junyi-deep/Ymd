@@ -1,0 +1,151 @@
+import { LanguageDescription } from '@codemirror/language'
+import { languages } from '@codemirror/language-data'
+import { classHighlighter, highlightTree } from '@lezer/highlight'
+import { WidgetType, type EditorView } from '@codemirror/view'
+import { createElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
+import { Check, Code2, Copy } from 'lucide-react'
+import type { CodeBlockPreferences } from '../../shared/contracts'
+
+interface CodeBlock {
+  from: number
+  editAt: number
+  code: string
+  language: string
+  quoteDepth: number
+}
+
+function fillCode(content: HTMLElement, code: string, colors: { from: number; to: number; classes: string }[]) {
+  let end = 0
+  const fragments = document.createDocumentFragment()
+  for (const { from, to, classes } of colors) {
+    if (from > end) fragments.append(document.createTextNode(code.slice(end, from)))
+    const span = document.createElement('span')
+    span.className = classes
+    span.textContent = code.slice(from, to)
+    fragments.append(span)
+    end = to
+  }
+  if (end < code.length) fragments.append(document.createTextNode(code.slice(end)))
+  if (!code || code.endsWith('\n')) {
+    const trailing = document.createElement('span')
+    trailing.ariaHidden = 'true'
+    trailing.className = 'md-code-trailing'
+    fragments.append(trailing)
+  }
+  content.replaceChildren(fragments)
+}
+
+export class CodePreview extends WidgetType {
+  constructor(readonly block: CodeBlock, readonly options: CodeBlockPreferences, readonly readOnly: boolean) { super() }
+
+  get estimatedHeight() { return Math.min(620, (this.block.code.match(/\n/g)?.length ?? 0) * 21 + 57) }
+
+  eq(other: CodePreview) {
+    return this.block.from === other.block.from && this.block.editAt === other.block.editAt &&
+      this.block.code === other.block.code && this.block.language === other.block.language && this.block.quoteDepth === other.block.quoteDepth &&
+      this.readOnly === other.readOnly && this.options.wrap === other.options.wrap && this.options.lineNumbers === other.options.lineNumbers
+  }
+
+  toDOM(view: EditorView) {
+    const { from, editAt, code, language, quoteDepth } = this.block
+    const figure = document.createElement('figure')
+    figure.className = 'md-code-preview'
+    figure.dataset.wrap = String(this.options.wrap)
+    if (quoteDepth) figure.style.paddingInlineStart = Math.min(44, 11 * quoteDepth) + 'px'
+    const toolbar = document.createElement('div')
+    toolbar.className = 'md-code-header'
+    const caption = document.createElement('span')
+    caption.textContent = language || '纯文本'
+    toolbar.append(caption)
+    function button(label: string, icon: typeof Copy, onClick: (button: HTMLButtonElement) => void) {
+      const element = document.createElement('button')
+      element.type = 'button'
+      element.className = 'icon-button'
+      element.title = label
+      element.ariaLabel = label
+      element.innerHTML = renderToStaticMarkup(createElement(icon, { size: 15, 'aria-hidden': true }))
+      element.addEventListener('click', () => onClick(element))
+      return element
+    }
+    if (!this.readOnly) toolbar.append(button('编辑代码块', Code2, () => {
+      // Derive the position from the current widget after edits above it.
+      const position = view.posAtDOM(figure)
+      const next = Math.min(position + editAt - from, view.state.doc.length)
+      view.dispatch({ selection: { anchor: next }, scrollIntoView: true })
+      view.focus()
+    }))
+    let resetCopy: number | undefined
+    const copyIcon = renderToStaticMarkup(createElement(Copy, { size: 15, 'aria-hidden': true }))
+    toolbar.append(button('复制代码', Copy, element => {
+      void navigator.clipboard.writeText(code).then(() => {
+        if (!element.isConnected) return
+        window.clearTimeout(resetCopy)
+        element.innerHTML = renderToStaticMarkup(createElement(Check, { size: 15, 'aria-hidden': true }))
+        element.ariaLabel = element.title = '已复制代码'
+        resetCopy = window.setTimeout(() => { element.innerHTML = copyIcon; element.ariaLabel = element.title = '复制代码' }, 1100)
+      }).catch(() => { if (element.isConnected) element.title = '复制失败' })
+    }))
+    const body = document.createElement('pre')
+    body.className = 'md-code-body'
+    body.tabIndex = 0
+    body.ariaLabel = (language || '纯文本') + '代码'
+    body.addEventListener('pointerdown', event => {
+      if (event.button === 0) body.focus({ preventScroll: true })
+    })
+    body.addEventListener('contextmenu', event => {
+      event.preventDefault()
+      event.stopPropagation()
+      const selection = document.getSelection()
+      const selected = selection?.anchorNode && selection.focusNode && body.contains(selection.anchorNode) &&
+        body.contains(selection.focusNode) ? selection.toString() : ''
+      const items = [{ id: 0, label: selected ? '复制所选代码' : '复制代码' }]
+      void window.desktop.markdownContextMenu(event.clientX, event.clientY, items)
+        .then(id => { if (id === 0) return navigator.clipboard.writeText(selected || code) }).catch(() => {})
+    })
+    const content = document.createElement('code')
+    const qualifier = language.split(/[\s,{]/, 1)[0]
+    const match = LanguageDescription.matchLanguageName(languages, qualifier, false)
+    const setCode = (colors: { from: number; to: number; classes: string }[]) => {
+      if (!this.options.lineNumbers) fillCode(content, code, colors)
+      else {
+        // Number each logical line while keeping the selectable text unchanged.
+        const lines = code.split('\n')
+        const rows = document.createDocumentFragment()
+        let position = 0, colorIndex = 0
+        for (const [index, line] of lines.entries()) {
+          const row = document.createElement('span')
+          row.className = 'md-code-line'
+          row.dataset.line = String(index + 1)
+          const last = position + line.length
+          while (colorIndex < colors.length && colors[colorIndex].to <= position) colorIndex++
+          const through = []
+          for (let color = colorIndex; color < colors.length && colors[color].from < last; color++) {
+            const range = colors[color]
+            through.push({ from: Math.max(0, range.from - position), to: Math.min(line.length, range.to - position), classes: range.classes })
+          }
+          fillCode(row, line, through)
+          rows.append(row)
+          if (index + 1 < lines.length) rows.append('\n')
+          position = last + 1
+        }
+        content.replaceChildren(rows)
+        content.dataset.numbered = ''
+      }
+    }
+
+    setCode([])
+    if (match && code.length <= 150_000) void (match.support ? Promise.resolve(match.support) : match.load()).then(support => {
+      // Avoid replacing an active native selection while a language is loading.
+      const textSelection = document.getSelection()
+      if (!figure.isConnected || textSelection?.anchorNode && figure.contains(textSelection.anchorNode)) return
+      const colors: { from: number; to: number; classes: string }[] = []
+      highlightTree(support.language.parser.parse(code), classHighlighter, (from, to, classes) => colors.push({ from, to, classes }))
+      setCode(colors)
+      view.requestMeasure()
+    }).catch(() => {})
+    body.append(content)
+    figure.append(toolbar, body)
+    return figure
+  }
+}

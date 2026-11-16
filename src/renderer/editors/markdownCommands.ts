@@ -1,5 +1,6 @@
 import { EditorSelection, Prec, Transaction, type ChangeSpec } from '@codemirror/state'
 import { EditorView, type Command } from '@codemirror/view'
+import { syntaxTree } from '@codemirror/language'
 import { indentLess, indentMore } from '@codemirror/commands'
 import { searchEngines, type SearchEngine } from '../../shared/contracts'
 import { inputChord, markdownShortcuts, shortcutAccelerator, shortcutMenuLabel, ShortcutSequence, shortcutsFor, shortcutValue,
@@ -33,6 +34,42 @@ function paragraph(prefix: string | ((source: string) => string | undefined)): C
     view.dispatch({ changes, userEvent: 'input.format', scrollIntoView: true })
     return true
   }
+}
+
+export const tabInList = (outdent = false): Command => view => {
+  const { state } = view
+  if (state.readOnly || !view.contentDOM.contains(view.dom.ownerDocument.activeElement)) return false
+  const line = state.doc.lineAt(state.selection.main.head)
+  let node = syntaxTree(state).resolveInner(Math.max(line.from, Math.min(line.to, state.selection.main.head)), -1)
+  while (node.parent && node.name !== 'ListItem') node = node.parent
+  if (node.name !== 'ListItem') {
+    node = syntaxTree(state).resolve(line.from, 1)
+    while (node.parent && node.name !== 'ListItem') node = node.parent
+  }
+  if (node.name !== 'ListItem') return false
+
+  const previous = node.prevSibling?.getChild('ListMark')
+  const parent = node.parent?.parent?.getChild('ListMark')
+  const delta = outdent ? parent : previous
+  if (!delta || !state.selection.main.empty) {
+    if (!state.selection.main.empty) (outdent ? indentLess : indentMore)(view)
+    return true
+  }
+  const padding = /^[ \t]+/.exec(state.sliceDoc(delta.to, state.doc.lineAt(delta.to).to))?.[0].length ?? 1
+  const width = delta.to - delta.from + padding
+  const first = state.doc.lineAt(node.from).number
+  const last = state.doc.lineAt(node.to).number
+  const changes: ChangeSpec[] = []
+  for (let index = first; index <= last; index++) {
+    const row = state.doc.line(index)
+    if (!row.text.trim()) continue
+    const leading = /^ */.exec(row.text)![0].length
+    changes.push(outdent
+      ? { from: row.from, to: row.from + Math.min(leading, width) }
+      : { from: row.from, insert: ' '.repeat(width) })
+  }
+  if (changes.length) view.dispatch({ changes, userEvent: 'input.indent', scrollIntoView: true })
+  return true
 }
 
 const headingLevel = (change: number) => paragraph(source => {

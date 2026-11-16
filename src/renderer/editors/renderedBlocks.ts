@@ -1,6 +1,8 @@
-import { EditorState, StateField, type Range } from '@codemirror/state'
+import { EditorState, Facet, StateField, type Range } from '@codemirror/state'
 import { syntaxTree } from '@codemirror/language'
 import { Decoration, EditorView, WidgetType, type DecorationSet } from '@codemirror/view'
+import type { CodeBlockPreferences } from '../../shared/contracts'
+import { CodePreview } from './markdownCodePreview'
 import { displayMath, renderBlockPreview } from './markdownPreviewMedia'
 
 class RenderedBlock extends WidgetType {
@@ -38,6 +40,10 @@ class RenderedBlock extends WidgetType {
   }
 }
 
+export const codeBlockPreferences = Facet.define<CodeBlockPreferences, CodeBlockPreferences>({
+  combine: values => values[0] ?? { lineNumbers: false, wrap: false },
+})
+
 function previews(state: EditorState): DecorationSet {
   const ranges: Range<Decoration>[] = []
   syntaxTree(state).iterate({ enter(node) {
@@ -49,16 +55,36 @@ function previews(state: EditorState): DecorationSet {
       ranges.push(Decoration.replace({ block: true, widget: new RenderedBlock(math[1], 'math', state.readOnly) }).range(node.from, node.to))
       return false
     }
-    if (node.name !== 'FencedCode') return
+    if (node.name !== 'FencedCode' && node.name !== 'CodeBlock') return
+    const fenced = node.name === 'FencedCode'
     const info = node.node.getChild('CodeInfo')
     const end = node.node.lastChild
-    if (!info || end?.name !== 'CodeMark' || end.from <= info.to ||
-      state.sliceDoc(info.from, info.to).trim().toLowerCase() !== 'mermaid') return false
-    if (state.selection.ranges.some(range => !state.readOnly && range.from <= node.to && range.to >= node.from)) return false
-    const closing = state.doc.lineAt(end.from)
-    if (state.sliceDoc(end.to, closing.to).trim()) return false
-    const code = node.node.getChildren('CodeText').map(part => state.sliceDoc(part.from, part.to)).join('').trim()
-    if (code) ranges.push(Decoration.replace({ block: true, widget: new RenderedBlock(code, 'mermaid', state.readOnly) }).range(node.from, closing.to))
+    const closed = fenced && end?.name === 'CodeMark' && end.from > node.from
+    const last = state.doc.lineAt(node.to)
+    const to = closed && !state.sliceDoc(node.to, last.to).trim() ? last.to : node.to
+    const from = state.doc.lineAt(node.from)
+    const inside = !state.readOnly && state.selection.ranges.some(range =>
+      range.empty ? range.from > node.from && range.from < to : range.from < to && range.to > node.from)
+    if (inside || fenced && !closed) return false
+    const language = info ? state.sliceDoc(info.from, info.to).trim() : ''
+    const blocks = node.node.getChildren('CodeText')
+    let line = (fenced ? from.number + 1 : from.number)
+    let code = ''
+    for (const part of blocks) {
+      const start = state.doc.lineAt(part.from).number
+      code += '\n'.repeat(Math.max(0, start - line)) + state.sliceDoc(part.from, part.to)
+      line = state.doc.lineAt(part.to).number
+    }
+    code += '\n'.repeat(Math.max(0, last.number - Number(closed) - line))
+    if (language.toLowerCase() === 'mermaid' && code.trim()) {
+      ranges.push(Decoration.replace({ block: true, widget: new RenderedBlock(code.trim(), 'mermaid', state.readOnly) }).range(node.from, to))
+    } else {
+      const prefix = state.sliceDoc(from.from, node.from)
+      const start = /^[ \t>]*$/.test(prefix) ? from.from : node.from
+      const editAt = fenced ? node.from + 1 : Math.min(node.from + 1, to)
+      const widget = new CodePreview({ from: start, editAt, code, language, quoteDepth: (prefix.match(/>/g) ?? []).length }, state.facet(codeBlockPreferences), state.readOnly)
+      ranges.push(Decoration.replace({ block: true, widget }).range(start, to))
+    }
     return false
   } })
   return Decoration.set(ranges)
@@ -67,7 +93,8 @@ function previews(state: EditorState): DecorationSet {
 export const renderedBlocks = StateField.define({
   create: previews,
   update(value, transaction) {
-    return transaction.startState.readOnly !== transaction.state.readOnly || transaction.docChanged || transaction.selection || syntaxTree(transaction.startState) !== syntaxTree(transaction.state)
+    return transaction.startState.readOnly !== transaction.state.readOnly || transaction.docChanged || transaction.selection ||
+      transaction.startState.facet(codeBlockPreferences) !== transaction.state.facet(codeBlockPreferences) || syntaxTree(transaction.startState) !== syntaxTree(transaction.state)
       ? previews(transaction.state) : value
   },
   provide: field => EditorView.decorations.from(field),
