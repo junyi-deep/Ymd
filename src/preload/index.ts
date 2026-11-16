@@ -48,6 +48,11 @@ const desktop: Desktop = {
     ipcRenderer.on('ymd:command', listener)
     return () => ipcRenderer.removeListener('ymd:command', listener)
   },
+  onReducedTransparency: callback => {
+    const listener = (_event: unknown, reduce: boolean) => callback(reduce)
+    ipcRenderer.on('ymd:reducedTransparency', listener)
+    return () => ipcRenderer.removeListener('ymd:reducedTransparency', listener)
+  },
 }
 
 contextBridge.exposeInMainWorld('desktop', desktop)

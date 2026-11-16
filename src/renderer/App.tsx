@@ -48,7 +48,7 @@ export function App() {
   const [preferences, setPreferences] = useState(defaultPreferences)
   const lastPreferences = useRef(preferences)
   const [systemDark, setSystemDark] = useState(() => matchMedia('(prefers-color-scheme: dark)').matches)
-  const [reducedTransparency, setReducedTransparency] = useState(() => matchMedia('(prefers-reduced-transparency: reduce)').matches)
+  const [macReducesTransparency, setMacReducesTransparency] = useState(false)
   const [sidebar, setSidebar] = useState(true)
   const [settings, setSettings] = useState(false)
   const [version, setVersion] = useState('')
@@ -75,7 +75,6 @@ export function App() {
   const commandRef = useRef<(command: Command) => void>(() => {})
   const openIntent = useRef(0)
   const dark = preferences.theme === 'dark' || (preferences.theme === 'system' && systemDark)
-  const macReducesTransparency = platform === 'darwin' && reducedTransparency
 
   const message = (error: unknown) => String(error instanceof Error ? error.message : error).replace(/^Error invoking remote method '[^']+': Error: /, '')
   function run(action: () => Promise<unknown>) {
@@ -111,24 +110,23 @@ export function App() {
       setLibrary(result.library)
       setRecent(result.recent)
       setWindowsAcrylic(result.windowsAcrylic)
+      setMacReducesTransparency(result.macReducesTransparency)
       setPlatform(result.platform)
       setVersion(result.version)
       setPreferences(result.preferences)
       lastPreferences.current = result.preferences
     })
     const query = matchMedia('(prefers-color-scheme: dark)')
-    const transparency = matchMedia('(prefers-reduced-transparency: reduce)')
     const onTheme = () => setSystemDark(query.matches)
-    const onTransparency = () => setReducedTransparency(transparency.matches)
     const onFocus = () => setRevision(value => value + 1)
     query.addEventListener('change', onTheme)
-    transparency.addEventListener('change', onTransparency)
+    const unsubscribeTransparency = window.desktop.onReducedTransparency(setMacReducesTransparency)
     window.addEventListener('focus', onFocus)
     const unsubscribe = window.desktop.onCommand(command => commandRef.current(command))
     return () => {
       unsubscribe()
+      unsubscribeTransparency()
       query.removeEventListener('change', onTheme)
-      transparency.removeEventListener('change', onTransparency)
       window.removeEventListener('focus', onFocus)
     }
   }, [])

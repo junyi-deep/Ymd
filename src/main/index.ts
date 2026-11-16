@@ -56,8 +56,9 @@ function normalizePreferences(value: Partial<Preferences> | null): Preferences {
   }
 }
 
+const macReducesTransparency = () => process.platform === 'darwin' && nativeTheme.prefersReducedTransparency
 const glassEnabled = () => !preferences.solidBackground &&
-  (process.platform === 'darwin' ? !nativeTheme.prefersReducedTransparency : windowsAcrylic)
+  (process.platform === 'darwin' ? !macReducesTransparency() : windowsAcrylic)
 const windowColor = () => nativeTheme.shouldUseDarkColors ? '#222323' : '#fdfdfd'
 const overlayColors = () => ({ color: windowColor(), symbolColor: nativeTheme.shouldUseDarkColors ? '#ededee' : '#222528' })
 
@@ -70,6 +71,7 @@ function applyBackground() {
     window?.setTitleBarOverlay(overlayColors())
   }
   window?.setBackgroundColor(glass ? '#00000000' : windowColor())
+  if (process.platform === 'darwin') window?.webContents.send('ymd:reducedTransparency', macReducesTransparency())
 }
 
 function command(name: Command) {
@@ -260,7 +262,8 @@ void app.whenReady().then(async () => {
     return library
   }
 
-  handle('initialize', () => ({ library, recent, preferences, platform: process.platform, windowsAcrylic, version: app.getVersion() }))
+  handle('initialize', () => ({ library, recent, preferences, platform: process.platform, windowsAcrylic,
+    macReducesTransparency: macReducesTransparency(), version: app.getVersion() }))
   handle('checkForUpdates', () => readReleaseStatus(app.getVersion()))
   handle('openLibraryDirectory', async () => {
     const message = await shell.openPath(library.path)

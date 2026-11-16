@@ -61,16 +61,9 @@ async function waitFor(read, matches, label) {
 
 async function check(window) {
   const evaluate = source => window.webContents.executeJavaScript(source)
-  const emulateTransparencyPreference = async reduce => {
+  const emulateTransparencyPreference = reduce => {
     reducesTransparency = reduce
     nativeTheme.emit('updated')
-    await window.webContents.debugger.sendCommand('Emulation.setEmulatedMedia', {
-      features: [{ name: 'prefers-reduced-transparency', value: reduce ? 'reduce' : 'no-preference' }],
-    })
-  }
-  if (!windows) {
-    window.webContents.debugger.attach()
-    await emulateTransparencyPreference(false)
   }
   const snapshot = () => evaluate(`(() => {
     const overlay = navigator.windowControlsOverlay
@@ -139,15 +132,14 @@ async function check(window) {
   else {
     assert.equal(vibrancyCalls.at(-1), 'hud')
     assert.equal(await evaluate(`document.querySelector('${slider}').value`), '50')
-    await emulateTransparencyPreference(true)
+    emulateTransparencyPreference(true)
     await waitMaterial('solid')
     assert.equal(vibrancyCalls.at(-1), null)
     assert.equal(await evaluate(`document.querySelector('${switcher}').disabled && document.querySelector('${slider}') === null`), true)
-    await emulateTransparencyPreference(false)
+    emulateTransparencyPreference(false)
     await waitMaterial(glass)
     assert.equal(vibrancyCalls.at(-1), 'hud')
     assert.equal(await evaluate(`document.querySelector('${slider}').value`), '50')
-    window.webContents.debugger.detach()
   }
   console.log(windows ? 'Windows DWM Acrylic (3 → 1 → 3) and native caption layout verified.' : 'macOS Vibrancy, opaque mode, live tint and persistence verified.')
 }

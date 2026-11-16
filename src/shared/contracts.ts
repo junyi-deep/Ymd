@@ -111,7 +111,7 @@ export function markdownImageExtension(name: string, type = '') {
 }
 
 export interface Desktop {
-  initialize(): Promise<{ library: Entry; recent: Entry[]; preferences: Preferences; platform: string; windowsAcrylic: boolean; version: string }>
+  initialize(): Promise<{ library: Entry; recent: Entry[]; preferences: Preferences; platform: string; windowsAcrylic: boolean; macReducesTransparency: boolean; version: string }>
   list(path: string): Promise<Entry[]>
   chooseLibraryDirectory(): Promise<Entry | null>
   resetLibraryDirectory(): Promise<Entry>
@@ -153,4 +153,5 @@ export interface Desktop {
   setShortcutRecording(active: boolean): Promise<void>
   finishClose(): Promise<void>
   onCommand(callback: (command: Command) => void): () => void
+  onReducedTransparency(callback: (reduce: boolean) => void): () => void
 }
