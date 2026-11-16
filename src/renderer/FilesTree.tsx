@@ -1,15 +1,16 @@
 import { useEffect, useState, type DragEvent, type MouseEvent } from 'react'
-import { ChevronDown, ChevronRight, Ellipsis, FileText, Folder, FolderOpen, Plus, Shapes } from 'lucide-react'
+import { Check, ChevronDown, ChevronRight, Ellipsis, FileText, Folder, FolderOpen, Minus, Plus, Shapes, Trash2 } from 'lucide-react'
 import type { Entry } from '../shared/contracts'
 
 export const DocumentIcon = ({ kind }: { kind: Entry['kind'] }) => kind === 'drawing' ? <Shapes size={17} /> : <FileText size={17} />
 
 type EntryAction = (entry: Entry, x: number, y: number) => void
+export type TreeDrop = 'inside' | 'before' | 'after'
 export interface TreeDrag {
-  start: (entry: Entry) => void
+  start: (entry: Entry, reorderable: boolean) => void
   end: () => void
-  allowed: (target: Entry) => boolean
-  move: (target: Entry) => void
+  allowed: (target: Entry, place: TreeDrop) => boolean
+  move: (target: Entry, place: TreeDrop) => void
 }
 const dragType = 'application/x-ymd-entry'
 export interface TreeRename {
@@ -21,7 +22,7 @@ export interface TreeRename {
   cancel: () => void
 }
 
-export function FileTreeRow({ entry, depth, selected, open, onClick, onMenu, onCreate, checked, onCheck, rename, drag, onExpand }: {
+export function FileTreeRow({ entry, depth, selected, open, onClick, onMenu, onCreate, checked, onCheck, rename, drag, onExpand, onDelete, onRemove, reorderable = false }: {
   entry: Entry
   depth: number
   selected?: boolean
@@ -34,11 +35,20 @@ export function FileTreeRow({ entry, depth, selected, open, onClick, onMenu, onC
   rename?: TreeRename
   drag?: TreeDrag
   onExpand?: () => void
+  onDelete?: () => void
+  onRemove?: () => void
+  reorderable?: boolean
 }) {
   const folder = entry.kind === 'directory'
-  const [dropTarget, setDropTarget] = useState(false)
-  function accepts(event: DragEvent) {
-    return folder && drag?.allowed(entry) && event.dataTransfer.types.includes(dragType)
+  const [dropTarget, setDropTarget] = useState<TreeDrop>()
+  const [confirm, setConfirm] = useState(false)
+  function dropPlace(event: DragEvent): TreeDrop | undefined {
+    if (!drag || !event.dataTransfer.types.includes(dragType)) return
+    const bounds = event.currentTarget.getBoundingClientRect()
+    const ratio = (event.clientY - bounds.top) / bounds.height
+    const place = reorderable && (!folder || ratio < .25 || ratio > .75)
+      ? ratio < .5 ? 'before' : 'after' : 'inside'
+    if ((folder || place !== 'inside') && drag.allowed(entry, place)) return place
   }
   function anchor(event: MouseEvent<HTMLButtonElement>, action: (x: number, y: number) => void) {
     const bounds = event.currentTarget.getBoundingClientRect()
@@ -52,19 +62,21 @@ export function FileTreeRow({ entry, depth, selected, open, onClick, onMenu, onC
   return <div className="tree-item" data-selected={selected || checked} data-drop-target={dropTarget}
     style={{ paddingInlineStart: 5 + depth * 17 }}
     onDragOver={event => {
-      if (!accepts(event)) return
+      const place = dropPlace(event)
+      setDropTarget(place)
+      if (!place) return
       event.preventDefault()
       event.dataTransfer.dropEffect = 'move'
-      if (!dropTarget) setDropTarget(true)
     }}
     onDragLeave={event => {
-      if (!(event.relatedTarget instanceof Node && event.currentTarget.contains(event.relatedTarget))) setDropTarget(false)
+      if (!(event.relatedTarget instanceof Node && event.currentTarget.contains(event.relatedTarget))) setDropTarget(undefined)
     }}
     onDrop={event => {
-      setDropTarget(false)
-      if (!accepts(event)) return
+      setDropTarget(undefined)
+      const place = dropPlace(event)
+      if (!place) return
       event.preventDefault()
-      drag?.move(entry)
+      drag?.move(entry, place)
     }}
     onContextMenu={event => {
       event.preventDefault()
@@ -84,18 +96,24 @@ export function FileTreeRow({ entry, depth, selected, open, onClick, onMenu, onC
       <button className="tree-row" title={entry.name} aria-expanded={folder && checked === undefined ? open : undefined}
         draggable={!!drag} onDragStart={event => {
           if (!drag) return
-          drag.start(entry)
+          drag.start(entry, reorderable)
           event.dataTransfer.setData(dragType, entry.path)
           event.dataTransfer.effectAllowed = 'move'
         }} onDragEnd={() => drag?.end()} onClick={onClick}>
         {!(checked !== undefined && folder) && glyph}<span>{entry.name}</span>
       </button>}
-    {checked === undefined && !rename && <>
+    {checked === undefined && !rename && <div className="tree-row-actions">
+      {onRemove && <button type="button" className="icon-button tree-row-action" aria-label={'移除 ' + entry.name} title="从本机文件移除"
+        onClick={onRemove}><Minus size={15} /></button>}
+      {onDelete && <button type="button" className="icon-button tree-row-action tree-delete" data-confirm={confirm}
+        aria-label={(confirm ? '确认删除 ' : '删除 ') + entry.name} title={confirm ? '确认移到回收站' : '移到回收站'}
+        onBlur={() => setConfirm(false)} onKeyDown={event => { if (event.key === 'Escape') setConfirm(false) }}
+        onClick={() => { if (confirm) onDelete(); setConfirm(!confirm) }}>{confirm ? <Check size={15} /> : <Trash2 size={15} />}</button>}
       <button type="button" className="icon-button tree-row-action" aria-haspopup="menu"
         aria-label={'更多操作 ' + entry.name} title="更多操作" onClick={event => anchor(event, onMenu)}><Ellipsis size={15} /></button>
       {onCreate && <button type="button" className="icon-button tree-row-action" aria-haspopup="menu"
         aria-label={'新建于 ' + entry.name} title="新建" onClick={event => anchor(event, onCreate)}><Plus size={15} /></button>}
-    </>}
+    </div>}
   </div>
 }
 
@@ -107,6 +125,12 @@ interface Props {
   expanded?: boolean
   onOpen: (entry: Entry) => void
   onExpand?: (entry: Entry) => void
+  expandedPaths: ReadonlySet<string>
+  hiddenPaths?: ReadonlySet<string>
+  onToggle: (entry: Entry, open: boolean) => void
+  onDelete?: (entry: Entry) => void
+  onRemove?: (entry: Entry) => void
+  reorderable?: boolean
   onCreate?: EntryAction
   onMenu: EntryAction
   selection?: ReadonlyMap<string, Entry>
@@ -115,13 +139,14 @@ interface Props {
   onSelect?: (entry: Entry) => void
 }
 
-export function FilesTree({ directory, active, revision, depth = 0, expanded = false, onOpen, onExpand, onCreate, onMenu, selection, onSelect, rename, drag }: Props) {
-  const [open, setOpen] = useState(expanded)
+export function FilesTree({ directory, active, revision, depth = 0, expanded = false, expandedPaths, hiddenPaths, onToggle,
+  onOpen, onExpand, onCreate, onMenu, selection, onSelect, rename, drag, onDelete, onRemove, reorderable }: Props) {
+  const open = expanded || expandedPaths.has(directory.path)
   const [entries, setEntries] = useState<Entry[]>()
   const [error, setError] = useState(false)
   const toggleOpen = () => {
     if (!open) onExpand?.(directory)
-    setOpen(!open)
+    onToggle(directory, !open)
   }
 
   useEffect(() => {
@@ -139,22 +164,25 @@ export function FilesTree({ directory, active, revision, depth = 0, expanded = f
   return <>
     {!expanded && <FileTreeRow entry={directory} depth={depth} open={open}
       rename={rename?.path === directory.path ? rename : undefined}
-      drag={selection ? undefined : drag} onExpand={toggleOpen}
+      drag={selection ? undefined : drag} onExpand={toggleOpen} reorderable={reorderable}
+      onDelete={onDelete && (() => onDelete(directory))} onRemove={onRemove && (() => onRemove(directory))}
       checked={selection?.has(directory.path)} onCheck={() => onSelect?.(directory)}
       onClick={event => selection || event.shiftKey && onSelect ? onSelect?.(directory) : toggleOpen()}
       onMenu={(x, y) => onMenu(directory, x, y)} onCreate={onCreate && ((x, y) => {
-        setOpen(true)
+        if (!open) onToggle(directory, true)
         onCreate(directory, x, y)
       })} />}
     {open && (error ? <p className="tree-empty">无法读取目录</p> :
       !entries ? <p className="tree-empty">正在读取…</p> : !entries.length ? (
         expanded && <p className="tree-empty">还没有文档</p>
-      ) : entries.map(entry => {
+      ) : entries.filter(entry => !hiddenPaths?.has(entry.path)).map(entry => {
         const level = expanded ? depth : depth + 1
         return entry.kind === 'directory'
-          ? <FilesTree key={entry.path} directory={entry} depth={level} {...{ active, revision, onOpen, onExpand, onCreate, onMenu, selection, onSelect, rename, drag }} />
+          ? <FilesTree key={entry.path} directory={entry} depth={level}
+            {...{ active, revision, expandedPaths, hiddenPaths, onToggle, onOpen, onExpand, onCreate, onMenu, selection, onSelect, rename, drag, onDelete, onRemove }} />
           : <FileTreeRow key={entry.path} depth={level} entry={entry} selected={entry.path === active}
             drag={selection ? undefined : drag}
+            onDelete={onDelete && (() => onDelete(entry))} onRemove={onRemove && (() => onRemove(entry))}
             rename={rename?.path === entry.path ? rename : undefined}
             checked={selection?.has(entry.path)} onCheck={() => onSelect?.(entry)}
             onClick={event => selection || event.shiftKey && onSelect ? onSelect?.(entry) : onOpen(entry)}

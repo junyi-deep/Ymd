@@ -2,7 +2,7 @@ import type MindMap from 'simple-mind-map'
 import type { MapNode } from 'simple-mind-map'
 import { readAudioNote } from './mapAudio'
 import { readEquation } from './mapEquation'
-import { artTransferType, findArt, type MapArt } from './mapStickers'
+import { artTransferType, loadMapSticker, type MapArt } from './mapStickers'
 
 export const imagePlacements = [
   ['top', '上方'], ['bottom', '下方'], ['left', '左侧'], ['right', '右侧'],
@@ -27,8 +27,7 @@ export function addTopicImage(map: MindMap, node: MapNode, url: string, title: s
 
 export function applyArt(map: MindMap, node: MapNode, art: MapArt) {
   if (!topicAcceptsArt(node)) return
-  const side = art.kind === '贴纸' ? 48 : 88
-  addTopicImage(map, node, art.source, art.label, { width: side, height: side })
+  addTopicImage(map, node, art.source, art.label, { width: 56, height: 56 })
 }
 
 export function removeTopicImage(map: MindMap, node: MapNode) {
@@ -112,10 +111,15 @@ export function installTopicImageGestures(map: MindMap, canvas: HTMLElement, edi
     if (!id) return
     event.preventDefault()
     const hit = target(event.target)
-    const art = findArt(id)
-    if (!hit || !art || !topicAcceptsArt(hit.node)) return
-    hit.node.active()
-    applyArt(map, hit.node, art)
+    if (!hit || !topicAcceptsArt(hit.node)) return
+    const uid = hit.node.uid
+    void loadMapSticker(id).then(art => {
+      if (!art || !canvas.isConnected) return
+      const node = map.renderer.findNodeByUid(uid)
+      if (!node || !topicAcceptsArt(node)) return
+      node.active()
+      applyArt(map, node, art)
+    }).catch(() => {})
   }
   function dragleave(event: DragEvent) {
     if (!(event.relatedTarget instanceof Node) || !canvas.contains(event.relatedTarget)) highlight()

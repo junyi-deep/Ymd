@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState, type CSSProperties, type MouseEvent, type ReactNode } from 'react'
-import { ArrowLeft, Check, ChevronRight, CircleAlert, Copy, FilePlus2, FileText, FolderInput, Home, ListChecks, ListTree, Network, PanelLeft, LocateFixed, Pencil, Pin, Plus, Save, Search, Settings2, Shapes, Star, Trash2, X } from 'lucide-react'
+import { AppWindow, ArrowLeft, Check, ChevronRight, CircleAlert, Copy, FilePlus2, FileText, FolderInput, Home, ListChecks, ListTree, Network, PanelLeft, LocateFixed, Minus, Pencil, Pin, Plus, Save, Search, Settings2, Shapes, Star, Trash2, X } from 'lucide-react'
 import { defaultPreferences, defaultUpdateProxy, windowMaterialFor, type Command, type DocumentFile, type EditorMode, type Entry, type FileKind, type Preferences, type RecoveryEntry, type Scope, type SearchHit, type TreeChange, type TreeMutation, type UpdateProxyInput, type VersionStatus } from '../shared/contracts'
 import { FileTreeRow, FilesTree, type TreeDrag, type TreeRename } from './FilesTree'
 import { SearchDialog } from './SearchDialog'
@@ -10,7 +10,8 @@ import { useDocuments, type Session } from './documents'
 import { MarkdownEditor } from './editors/Markdown'
 import { OutlineEditor } from './editors/Outline'
 import type { OutlineSession } from './editors/outlineEditing'
-import { copyMapAppearance, discardInterruptedMapImports, loadMapAppearance, relocateMapAppearance, saveImportedMap, styledMapPaths } from './editors/mapAppearance'
+import type { DocumentViewPosition } from './editors/viewPosition'
+import { copyMapAppearance, discardInterruptedMapImports, initializeMapSettings, loadMapAppearance, relocateMapAppearance, saveImportedMap, styledMapPaths } from './editors/mapAppearance'
 import { forgetAudio, storeAudio } from './editors/mapAudio'
 import { mapDocumentPath, mapDocumentSheets, registerMapDocument, registeredMapPaths, relocateMapDocument, removeMapDocument } from './editors/mapDocumentLinks'
 import { findTopic, type TopicLink } from './editors/mapTopicLinks'
@@ -35,6 +36,7 @@ type Prompt =
   | { type: 'recovery' }
   | { type: 'trash'; session: Session }
   | { type: 'tree-trash'; entries: Entry[] }
+  | { type: 'clear-recent' }
 
 export function App() {
   const sessions = useDocuments()
@@ -42,11 +44,12 @@ export function App() {
   const active = sessions.active
   const [library, setLibrary] = useState<Entry>()
   const [recent, setRecent] = useState<Entry[]>([])
+  const [defaultStickerDirectory, setDefaultStickerDirectory] = useState('')
   const [documentHistory, setDocumentHistory] = useState<Entry[]>([])
   const [treeMenu, setTreeMenu] = useState<{ kind: 'create' | 'open' | 'entry' | 'batch'; target?: Entry; x: number; y: number; recent?: boolean; anchor?: HTMLButtonElement }>()
   const [batch, setBatch] = useState<Map<string, Entry>>()
   const [renamingEntry, setRenamingEntry] = useState<{ entry: Entry; name: string }>()
-  const draggingEntry = useRef<Entry>(undefined)
+  const draggingEntry = useRef<{ entry: Entry; reorderable: boolean }>(undefined)
   const [windowsAcrylic, setWindowsAcrylic] = useState(false)
   const [platform, setPlatform] = useState('')
   const [preferences, setPreferences] = useState(defaultPreferences)
@@ -62,7 +65,7 @@ export function App() {
   const [checking, setChecking] = useState(false)
   const releaseCheckInFlight = useRef(false)
   const updateInstallInFlight = useRef(false)
-  const [settingsPage, setSettingsPage] = useState<'外观' | '文档库' | '快捷键' | '关于'>('外观')
+  const [settingsPage, setSettingsPage] = useState<'外观' | '存储' | '快捷键' | '关于'>('外观')
   const [searchOpen, setSearchOpen] = useState(false)
   const [jump, setJump] = useState<{ path: string; line: number; id: number }>()
   const [mapJump, setMapJump] = useState<{ path: string; target: TopicLink }>()
@@ -80,6 +83,7 @@ export function App() {
   const [rename, setRename] = useState<{ session: Session; name: string }>()
   const flushEditor = useRef<(() => void) | undefined>(undefined)
   const outlineSessions = useRef(new Map<string, OutlineSession>())
+  const viewPositions = useRef(new Map<string, DocumentViewPosition>())
   const registerFlush = useCallback((flush?: () => void) => { flushEditor.current = flush }, [])
   const modal = useRef<HTMLDialogElement>(null)
   const commandRef = useRef<(command: Command) => void>(() => {})
@@ -120,6 +124,7 @@ export function App() {
       setLibrary(result.library)
       setRecent(result.recent)
       setDocumentHistory(result.documentHistory)
+      setDefaultStickerDirectory(result.defaultStickerDirectory)
       setWindowsAcrylic(result.windowsAcrylic)
       setMacReducesTransparency(result.macReducesTransparency)
       setPlatform(result.platform)
@@ -294,6 +299,7 @@ export function App() {
     if (openMap) sessions.patch(file.path, { mode: 'map' })
     setSettings(false)
     void window.desktop.recordDocumentOpen(file.path).catch(() => {})
+    if (scope === 'local') void window.desktop.touchRecent(file.path).catch(() => {})
   }
 
   async function readMapDocument(path: string): Promise<DocumentFile> {
@@ -490,6 +496,7 @@ export function App() {
     flushEditor.current?.()
     run(async () => {
       const file = await window.desktop.create(directory.path, kind)
+      if (file.kind === 'markdown') initializeMapSettings(file.path, lastPreferences.current.mapDefaults)
       setRevision(value => value + 1)
       if (intent === openIntent.current) showFile(file)
     })
@@ -534,9 +541,12 @@ export function App() {
         remapped.set(old, next)
         const outline = outlineSessions.current.get(old)
         outlineSessions.current.delete(old)
+        const position = viewPositions.current.get(old)
+        viewPositions.current.delete(old)
         if (next) {
           sessions.relocate(old, next, name, scopeOf(next))
           if (outline) outlineSessions.current.set(next, outline)
+          if (position) viewPositions.current.set(next, position)
         } else sessions.close(old)
       }
     }
@@ -632,7 +642,11 @@ export function App() {
       onOpen={file => openPath(file.path, scope)}
       onCreate={(target, x, y) => setTreeMenu({ kind: 'create', target, x, y })}
       selection={scope === 'library' ? batch : undefined} onSelect={scope === 'library' ? toggleBatch : undefined}
-      drag={scope === 'library' && !busy ? treeDrag : undefined} rename={treeRename}
+      expandedPaths={expandedFolders} hiddenPaths={scope === 'local' ? hiddenLocalEntries : undefined}
+      onToggle={(folder, open) => run(() => window.desktop.setFolderExpanded(folder.path, open))}
+      onDelete={busy ? undefined : target => mutateEntries('trash', [target])}
+      onRemove={scope === 'local' ? removeLocalEntry : undefined}
+      reorderable={scope === 'local'} drag={!busy ? treeDrag : undefined} rename={treeRename}
       onMenu={(target, x, y) => {
         if (scope === 'library' && batch) {
           if (!batch.has(target.path)) toggleBatch(target)
@@ -640,19 +654,29 @@ export function App() {
         } else setTreeMenu({ kind: 'entry', target, x, y, recent: scope === 'local' && target.path === entry.path })
       }}
       onExpand={scope === 'local' ? directory => {
-        if (directory.path === entry.path) run(async () => setRecent(await window.desktop.touchRecent(directory.path)))
+        void window.desktop.touchRecent(directory.path).catch(() => {})
       } : undefined} />
+  }
+  function removeLocalEntry(entry: Entry) {
+    run(async () => {
+      if (recent.some(item => item.path === entry.path)) setRecent(await window.desktop.removeRecent(entry.path))
+      else await window.desktop.hideLocalEntry(entry.path)
+    })
   }
 
   if (!library) return <div className="startup">{notice || '正在打开文档库…'}</div>
 
   const dirty = active && active.saved !== active.text
+  let position = active && viewPositions.current.get(active.path)
+  if (active && !position) viewPositions.current.set(active.path, position = {})
   const edit = (text: string) => { if (active) sessions.patch(active.path, { text }) }
   const homeHint = (id: AppShortcut) => {
     const key = shortcutValue(preferences.shortcuts, id, platform)
     return key ? <kbd aria-hidden="true">{shortcutLabel(key, platform)}</kbd> : <ChevronRight size={16} />
   }
   const local = recent.filter(entry => entry.path !== library.path && (entry.kind === 'directory' || scopeOf(entry.path) === 'local')).slice(0, preferences.recentLimit)
+  const expandedFolders = new Set(preferences.expandedFolders)
+  const hiddenLocalEntries = new Set(preferences.hiddenLocalEntries)
   const treeRename: TreeRename | undefined = renamingEntry && {
     path: renamingEntry.entry.path, name: renamingEntry.name, busy,
     change: name => setRenamingEntry({ ...renamingEntry, name }),
@@ -661,13 +685,20 @@ export function App() {
   }
   const activeScope = active && scopeOf(active.path)
   const treeDrag: TreeDrag = {
-    start: entry => { draggingEntry.current = entry },
+    start: (entry, reorderable) => { draggingEntry.current = { entry, reorderable } },
     end: () => { draggingEntry.current = undefined },
-    allowed: target => !!draggingEntry.current && !within(draggingEntry.current, target.path),
-    move: target => {
+    allowed: (target, place) => {
+      const source = draggingEntry.current
+      return !!source && source.entry.path !== target.path && (place === 'inside'
+        ? !within(source.entry, target.path) && scopeOf(source.entry.path) === scopeOf(target.path)
+        : source.reorderable)
+    },
+    move: (target, place) => {
       const source = draggingEntry.current
       draggingEntry.current = undefined
-      if (source) mutateEntries('move', [source], undefined, false, target.path)
+      if (!source) return
+      if (place === 'inside') mutateEntries('move', [source.entry], undefined, false, target.path)
+      else run(async () => setRecent(await window.desktop.reorderRecent(source.entry.path, target.path, place === 'after')))
     },
   }
   const newItems = (directory: Entry): MenuItem[] => [
@@ -682,7 +713,7 @@ export function App() {
     { label: '删除', icon: <Trash2 size={16} />, disabled: !chosen.length, run: () => setPrompt({ type: 'tree-trash', entries: chosen }) },
   ]
   const treeItems: MenuItem[] = treeMenu?.kind === 'batch' ? batchItems : treeMenu?.kind === 'open' ? [
-    { label: '新建窗口', run: () => run(() => window.desktop.newWindow()) },
+    { label: '新建窗口', icon: <AppWindow size={16} />, run: () => run(() => window.desktop.newWindow()) },
     { label: '打开文件…', icon: <FileText size={16} />, run: openFile },
     { label: '打开文件夹…', icon: <FolderInput size={16} />, run: openDirectory },
   ] : treeMenu?.kind === 'entry' && treeMenu.target ? (() => {
@@ -691,8 +722,7 @@ export function App() {
       run: () => run(() => window.desktop.reveal(target.path, target.kind === 'directory')) }]
     if (target.kind === 'directory') items.unshift({ label: '新建', icon: <Plus size={16} />, children: newItems(target) })
     else {
-      items.unshift({ label: '打开', run: () => openPath(target.path) },
-        { label: '在新窗口打开', run: () => run(() => window.desktop.newWindow(target.path)) })
+      items.unshift({ label: '在新窗口打开', icon: <AppWindow size={16} />, run: () => run(() => window.desktop.newWindow(target.path)) })
       items.push({ label: marks.pinned.includes(target.path) ? '取消置顶' : '置顶', icon: <Pin size={16} />, run: () => marks.toggle('pinned', target.path) })
       items.push({ label: marks.starred.includes(target.path) ? '取消收藏' : '收藏', icon: <Star size={16} />, run: () => marks.toggle('starred', target.path) })
     }
@@ -706,7 +736,7 @@ export function App() {
       name: target.kind === 'directory' ? target.name : target.name.replace(/\.[^.]+$/, '') }) })
     if (scopeOf(target.path) === 'library') items.push({ label: '删除', icon: <Trash2 size={16} />, separator: true,
       run: () => setPrompt({ type: 'tree-trash', entries: [target] }) })
-    if (treeMenu.recent) items.push({ label: '从最近记录移除', separator: true, run: () => run(async () => setRecent(await window.desktop.removeRecent(target.path))) })
+    if (treeMenu.recent) items.push({ label: '从最近记录移除', icon: <Minus size={16} />, separator: true, run: () => removeLocalEntry(target) })
     return items
   })() : newItems(treeMenu?.target ?? library)
   const menuAt = (event: MouseEvent<HTMLButtonElement>, kind: 'create' | 'open', target?: Entry) => {
@@ -758,14 +788,15 @@ export function App() {
             </IconButton>}
             {active && <IconButton label="在文件管理器中显示" click={() => run(() => window.desktop.reveal(active.path))}><LocateFixed size={16} /></IconButton>}
             <IconButton label="搜索文档" click={() => commandRef.current('search')}><Search size={18} /></IconButton>
-            <IconButton label="新建文档" click={() => create()}><Plus size={19} /></IconButton>
-            <IconButton label="新建绘图" click={() => create('drawing')}><Shapes size={17} /></IconButton>
           </>}
         </div>
       </div>
     </header>
     <div className="window-body">
       {settings ? <Settings initialPage={settingsPage} {...{ preferences, platform, library, windowsAcrylic, macReducesTransparency, version, release, checking }}
+        defaultStickerDirectory={defaultStickerDirectory}
+        onStorageChange={(kind, reset) => run(() => window.desktop.changeStorageDirectory(kind, reset))}
+        onOpenStorage={kind => run(() => window.desktop.openStorageDirectory(kind))}
         onLibraryChange={changeLibrary} onReturn={() => setSettings(false)}
         onCheckUpdates={() => void checkForUpdates()} onDownloadUpdate={() => run(() => window.desktop.downloadUpdate())}
         onInstallUpdate={() => requestClose(undefined, true)} updateProxy={updateProxy} onSaveUpdateProxy={saveUpdateProxy}
@@ -796,16 +827,19 @@ export function App() {
             </section>
             <section>
               <div className="section-heading"><h2>本机文件</h2>
+                <div className="section-actions">
+                <IconButton label="清空本机文件" click={() => setPrompt({ type: 'clear-recent' })} disabled={!local.length}><Trash2 size={16} /></IconButton>
                 <button className="icon-button" type="button" aria-label="添加本机文件或文件夹" title="打开" aria-haspopup="menu"
                   onClick={event => menuAt(event, 'open')}><Plus size={17} /></button>
+                </div>
               </div>
               {local.length ? local.map(entry => entry.kind === 'directory' ? tree(entry, 'local', false) :
                 <FileTreeRow key={entry.path} entry={entry} depth={0} selected={active?.path === entry.path}
                   rename={treeRename?.path === entry.path ? treeRename : undefined}
-                  onClick={() => {
-                    openPath(entry.path, 'local')
-                    run(async () => setRecent(await window.desktop.touchRecent(entry.path)))
-                  }} onMenu={(x, y) => setTreeMenu({ kind: 'entry', target: entry, x, y, recent: true })} />)
+                  reorderable drag={!busy ? treeDrag : undefined} onRemove={() => removeLocalEntry(entry)}
+                  onDelete={busy ? undefined : () => mutateEntries('trash', [entry])}
+                  onClick={() => openPath(entry.path, 'local')}
+                  onMenu={(x, y) => setTreeMenu({ kind: 'entry', target: entry, x, y, recent: true })} />)
                 : <button className="tree-row subtle" onClick={event => menuAt(event, 'open')}><FileText size={17} /><span>打开本机文件或文件夹…</span></button>}
             </section>
           </div>
@@ -859,7 +893,7 @@ export function App() {
                 })}
                 reveal={() => run(() => window.desktop.reveal(active.path))} />
               : active.mode === 'markdown'
-                ? <MarkdownEditor key={active.path + ':' + active.reload} text={active.text} name={active.name} path={active.path} modified={active.modified} platform={platform} remoteImages={preferences.remoteImages} keyOverrides={preferences.shortcuts}
+                ? <MarkdownEditor key={active.path + ':' + active.reload} text={active.text} name={active.name} path={active.path} modified={active.modified} platform={platform} remoteImages={preferences.remoteImages} keyOverrides={preferences.shortcuts} position={position!}
                   outline={preferences.markdownOutline}
                   width={preferences.markdownPageWidth} codeBlocks={preferences.codeBlocks} setWidth={markdownPageWidth => updatePreferences({ markdownPageWidth })}
                   updateOutline={patch => updatePreferences({ markdownOutline: { ...lastPreferences.current.markdownOutline, ...patch } })}
@@ -889,11 +923,15 @@ export function App() {
                     if (file) { setRecent(await window.desktop.listRecent()); setRevision(value => value + 1); showFile(file) }
                   })} />
                 : active.mode === 'outline'
-                  ? <OutlineEditor key={active.path + ':' + active.reload} text={active.text} name={active.name} path={active.path}
+                  ? <OutlineEditor key={active.path + ':' + active.reload} text={active.text} name={active.name} path={active.path} position={position!}
                     platform={platform} remoteImages={preferences.remoteImages} sessions={outlineSessions.current} onChange={edit}
                     width={preferences.outlinePageWidth} setWidth={outlinePageWidth => updatePreferences({ outlinePageWidth })}
                     remainderVisible={preferences.outlineRemainderVisible} setRemainderVisible={outlineRemainderVisible => updatePreferences({ outlineRemainderVisible })} />
-                  : <MindMapEditor key={active.path + ':' + active.reload} text={active.text} name={active.name} path={active.path} dark={dark} onChange={edit} find={find}
+                  : <MindMapEditor key={active.path + ':' + active.reload} text={active.text} name={active.name} path={active.path} dark={dark} onChange={edit} find={find} position={position!}
+                    overviewPreferences={preferences.mapOverview} panelWidth={preferences.mapPanelWidth}
+                    resizePanel={mapPanelWidth => updatePreferences({ mapPanelWidth })}
+                    rememberSettings={patch => updatePreferences({ mapDefaults: { ...lastPreferences.current.mapDefaults, ...patch } })}
+                    stickerDirectory={preferences.stickerDirectory}
                     platform={platform} keyOverrides={preferences.shortcuts} remoteImages={preferences.remoteImages}
                     remainderVisible={preferences.mapRemainderVisible} setRemainderVisible={mapRemainderVisible => updatePreferences({ mapRemainderVisible })}
                     registerFlush={registerFlush} importWorkbook={importWorkbook} importing={importing}
@@ -915,6 +953,15 @@ export function App() {
       items={treeItems} close={() => setTreeMenu(undefined)} point={treeMenu} anchor={treeMenu.anchor} nativeStyle />}
     {searchOpen && <SearchDialog documents={sessions.documents} onOpen={openFromSearch} onClose={() => setSearchOpen(false)} />}
     <dialog ref={modal} onCancel={event => { event.preventDefault(); if (!busy) dismissPrompt() }} onClose={() => setNotice('')}>
+      {prompt?.type === 'clear-recent' && <div>
+        <h2>清空本机文件</h2><p>从侧栏移除列表记录。磁盘文件和仍在窗口中打开的文档及其文件夹会保留。</p>
+        {notice && <p className="form-error" role="alert">{notice}</p>}
+        <footer><button disabled={busy} onClick={dismissPrompt}>取消</button><button className="primary" disabled={busy}
+          onClick={() => run(async () => {
+            setBusy(true)
+            try { setRecent(await window.desktop.clearRecent()); setPrompt(undefined) } finally { setBusy(false) }
+          })}>清空</button></footer>
+      </div>}
       {prompt?.type === 'tree-trash' && <div>
         <h2>移到回收站</h2>
         <p>{prompt.entries.length === 1 ? '将「' + prompt.entries[0].name + '」移到系统回收站。' : '将选中的 ' + prompt.entries.length + ' 项移到系统回收站。'}</p>

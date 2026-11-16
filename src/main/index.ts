@@ -1,11 +1,11 @@
 import { app, BrowserWindow, clipboard, ClipboardItem, dialog, ipcMain, Menu, nativeImage, nativeTheme, net, protocol, screen, session, shell } from 'electron'
 import type { IpcMainInvokeEvent, WebContents, MediaAccessPermissionRequest, MenuItemConstructorOptions } from 'electron'
-import { mkdir, readdir, readFile, writeFile, rename, open } from 'node:fs/promises'
+import { mkdir, readdir, readFile, writeFile, rename, open, lstat, realpath, stat } from 'node:fs/promises'
 import { renameSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { defaultPreferences, documentHistoryLimit, mapExportExtensions, markdownImageExtensions, paneWidths, searchEngines, windowMaterialFor } from '../shared/contracts'
-import type { Command, ContextMenuItem, Desktop, DocumentFile, Entry, FileKind, MapExportKind, MapShotRect, MarkdownImageUpload, Preferences, TreeChange, TreeMutation } from '../shared/contracts'
+import { defaultPreferences, documentHistoryLimit, mapExportExtensions, markdownImageExtension, markdownImageExtensions, paneWidths, recentFilesLimit, searchEngines, windowMaterialFor } from '../shared/contracts'
+import type { Command, ContextMenuItem, Desktop, DocumentFile, Entry, FileKind, MapExportKind, MapShotRect, MarkdownImageUpload, Preferences, StorageDirectory, TreeChange, TreeMutation } from '../shared/contracts'
 import { Files, containsPath, fileKind } from './files'
 import { LocalMapLocations } from './localMapLocations'
 import { searchRoots } from './search'
@@ -47,15 +47,22 @@ function normalizePreferences(value: Partial<Preferences> | null): Preferences {
   const transparency = value?.windowTransparency
   const width = (raw: unknown, { min, max }: { min: number; max: number }) =>
     typeof raw === 'number' && Number.isFinite(raw) ? Math.min(max, Math.max(min, Math.round(raw))) : undefined
+  const directory = (raw: unknown) => typeof raw === 'string' && path.isAbsolute(raw) ? raw : undefined
+  const map = value?.mapDefaults
   return {
     theme: value?.theme === 'dark' || value?.theme === 'light' ? value.theme : 'system',
     size: value?.size === 'small' || value?.size === 'large' ? value.size : 'normal',
     solidBackground: value?.solidBackground === true,
     windowTransparency: typeof transparency === 'number' && Number.isFinite(transparency)
       ? Math.min(100, Math.max(0, Math.round(transparency / 5) * 5)) : defaultPreferences.windowTransparency,
-    libraryDirectory: typeof value?.libraryDirectory === 'string' && path.isAbsolute(value.libraryDirectory) ? value.libraryDirectory : undefined,
+    libraryDirectory: directory(value?.libraryDirectory),
+    attachmentDirectory: directory(value?.attachmentDirectory),
+    attachmentDirectories: Array.isArray(value?.attachmentDirectories) ? [...new Set(value.attachmentDirectories.flatMap(item => directory(item) ?? []))] : [],
+    stickerDirectory: directory(value?.stickerDirectory),
+    expandedFolders: Array.isArray(value?.expandedFolders) ? [...new Set(value.expandedFolders.flatMap(item => directory(item) ?? []).slice(0, 3000))] : [],
+    hiddenLocalEntries: Array.isArray(value?.hiddenLocalEntries) ? [...new Set(value.hiddenLocalEntries.flatMap(item => directory(item) ?? []).slice(0, 3000))] : [],
     recentLimit: typeof value?.recentLimit === 'number' && Number.isFinite(value.recentLimit)
-      ? Math.min(100, Math.max(1, Math.round(value.recentLimit))) : defaultPreferences.recentLimit,
+      ? Math.min(recentFilesLimit, Math.max(1, Math.round(value.recentLimit))) : defaultPreferences.recentLimit,
     markdownOutline: {
       width: width(value?.markdownOutline?.width, paneWidths.outline),
       position: value?.markdownOutline?.position === 'left' ? 'left' : 'right',
@@ -68,12 +75,24 @@ function normalizePreferences(value: Partial<Preferences> | null): Preferences {
     outlinePageWidth: value?.outlinePageWidth === 'narrow' || value?.outlinePageWidth === 'wide' ? value.outlinePageWidth : 'normal',
     outlineRemainderVisible: value?.outlineRemainderVisible !== false,
     mapRemainderVisible: value?.mapRemainderVisible !== false,
+    mapPanelWidth: width(value?.mapPanelWidth, paneWidths.map),
+    mapOverview: { visible: value?.mapOverview?.visible === true, position: value?.mapOverview?.position === 'right' ? 'right' : 'left' },
+    mapDefaults: {
+      layout: typeof map?.layout === 'string' && /^[A-Za-z]{1,32}$/.test(map.layout) ? map.layout : undefined,
+      palette: map?.palette === 'ocean' || map?.palette === 'coral' || map?.palette === 'night' || map?.palette === 'graphite' ? map.palette : undefined,
+      font: typeof map?.font === 'string' && map.font.length > 0 && map.font.length <= 160 && !/[\u0000-\u001f]/.test(map.font) ? map.font : undefined,
+      background: typeof map?.background === 'string' && /^(?:#[\da-f]{6}|transparent)$/i.test(map.background) ? map.background : undefined,
+      lineWidth: width(map?.lineWidth, { min: 1, max: 8 }),
+      lineStyle: map?.lineStyle === 'straight' || map?.lineStyle === 'direct' || map?.lineStyle === 'curve' ? map.lineStyle : undefined,
+      compact: typeof map?.compact === 'boolean' ? map.compact : undefined,
+      colored: typeof map?.colored === 'boolean' ? map.colored : undefined,
+    },
     codeBlocks: { lineNumbers: value?.codeBlocks?.lineNumbers === true, wrap: value?.codeBlocks?.wrap === true },
     animations: value?.animations !== false,
     documentTheme: value?.documentTheme === 'paper' || value?.documentTheme === 'mono' ? value.documentTheme : 'classic',
     autoSave: value?.autoSave !== false,
     remoteImages: value?.remoteImages === true,
-    autoCheckUpdates: value?.autoCheckUpdates === true,
+    autoCheckUpdates: value?.autoCheckUpdates !== false,
     autoDownloadUpdates: value?.autoDownloadUpdates === true,
     searchEngine: value?.searchEngine && Object.hasOwn(searchEngines, value.searchEngine) ? value.searchEngine : 'google',
     shortcuts: readShortcutOverrides(value?.shortcuts, process.platform),
@@ -185,7 +204,7 @@ function createWindow(initialFile?: DocumentFile) {
     webPreferences: { preload: path.join(__dirname, '../preload/index.js'), contextIsolation: true, sandbox: true, nodeIntegration: false },
   })
   const editor: EditorWindow = { window, initialFile, closing: false, recording: false,
-    keys: new ShortcutSequence(), documents: new Set(), watchRevision: 0, draftRevisions: new Map() }
+    keys: new ShortcutSequence(), documents: new Set(initialFile ? [initialFile.path] : []), watchRevision: 0, draftRevisions: new Map() }
   editors.set(window.id, editor)
   lastEditor = editor
   applyBackground(window)
@@ -251,6 +270,7 @@ void app.whenReady().then(async () => {
     if (permission === 'media') {
       return !!editorFor(contents) && details.isMainFrame && details.mediaType === 'audio' && contents?.getURL() === rendererUrl
     }
+    if (permission === 'local-fonts') return !!editorFor(contents) && details.isMainFrame && contents?.getURL() === rendererUrl
     return permission !== 'display-capture'
   })
   session.defaultSession.setPermissionRequestHandler((contents, permission, reply, details) => {
@@ -260,6 +280,7 @@ void app.whenReady().then(async () => {
         types?.length === 1 && types[0] === 'audio')
       return
     }
+    if (permission === 'local-fonts') return reply(!!editorFor(contents) && details.isMainFrame && details.requestingUrl === rendererUrl)
     reply(permission !== 'display-capture')
   })
   protocol.handle('ymd', request => {
@@ -285,6 +306,7 @@ void app.whenReady().then(async () => {
   const settings = path.join(data, 'preferences.json')
   const recentFile = path.join(data, 'recent.json')
   const defaultLibrary = path.join(app.getPath('home'), '.ymd')
+  const defaultStickerDirectory = path.join(data, 'stickers')
   const localMapLocations = new LocalMapLocations(path.join(data, 'map-locations.json'))
   let oldProject: unknown
   try {
@@ -294,6 +316,12 @@ void app.whenReady().then(async () => {
   } catch {
     preferences = defaultPreferences
   }
+  function updateAttachmentDirectories() {
+    files.attachmentDirectory = preferences.attachmentDirectory
+    files.attachmentDirectories = [...new Set([...(preferences.attachmentDirectories ?? []),
+      ...(preferences.attachmentDirectory ? [preferences.attachmentDirectory] : [])])]
+  }
+  updateAttachmentDirectories()
   let library = (preferences.libraryDirectory && await files.authorizeDirectory(preferences.libraryDirectory).catch(() => null))
     || await files.library(defaultLibrary)
   let recent: Entry[] = []
@@ -301,20 +329,29 @@ void app.whenReady().then(async () => {
   let treeWrite: Promise<TreeChange[] | null> = Promise.resolve(null)
   const temporaryRoots = new Set<Entry>()
   const roots = () => [library, ...recent.filter(entry => entry.kind === 'directory' && entry.path !== library.path), ...temporaryRoots]
-  const writeRecent = (change: (items: Entry[]) => Entry[]) => {
+  const writeRecent = (change: (items: Entry[]) => Entry[], publish = true) => {
     const task = recentWrite.catch(() => {}).then(async () => {
-      const next = change(recent).slice(0, 100)
+      const changed = change(recent)
+      if (changed === recent) return recent
+      const next = changed.slice(0, recentFilesLimit)
       await writeFile(recentFile + '.tmp', JSON.stringify(next), { flush: true })
       await rename(recentFile + '.tmp', recentFile)
       recent = next
-      files.retainRoots(roots())
-      broadcast('ymd:workspaceChanged', { library, recent })
+      if (publish) {
+        files.retainRoots(roots())
+        broadcast('ymd:workspaceChanged', { library, recent })
+      }
       return recent
     })
     recentWrite = task
     return task
   }
-  const remember = (entry: Entry) => writeRecent(items => [entry, ...items.filter(item => item.path !== entry.path)])
+  const remember = (entry: Entry) => writeRecent(items => {
+    const opened = { ...entry, lastOpened: Date.now() }
+    return items.some(item => item.path === entry.path)
+      ? items.map(item => item.path === entry.path ? opened : item)
+      : [opened, ...items]
+  })
   const oldLibrary = path.join(data, 'Documents')
   await mkdir(data, { recursive: true })
   const storedRecent = await readFile(recentFile, 'utf8').catch(error => {
@@ -331,15 +368,18 @@ void app.whenReady().then(async () => {
       const entry = await files.authorizeDirectory(location).catch(() => null)
       if (entry && entry.path !== library.path && !recent.some(item => item.path === entry.path)) recent.push(entry)
     }
-    await writeRecent(items => items)
+    await writeRecent(items => [...items])
   } else {
     let parsed: unknown
     try { parsed = JSON.parse(storedRecent) } catch {}
-    if (Array.isArray(parsed)) for (const saved of parsed.slice(0, 100)) {
+    if (Array.isArray(parsed)) for (const saved of parsed.slice(0, recentFilesLimit)) {
       if (typeof saved?.path !== 'string' || !path.isAbsolute(saved.path)) continue
       const entry = await (saved.kind === 'directory' ? files.authorizeDirectory(saved.path) : files.authorizeFileEntry(saved.path)).catch(() => null)
-      if (entry && !recent.some(item => item.path === entry.path)) recent.push(entry)
+      if (entry && !recent.some(item => item.path === entry.path)) {
+        recent.push({ ...entry, lastOpened: Number.isFinite(saved.lastOpened) ? saved.lastOpened : undefined })
+      }
     }
+    recent.sort((left, right) => (right.lastOpened ?? 0) - (left.lastOpened ?? 0))
     files.retainRoots(roots())
   }
 
@@ -372,14 +412,17 @@ void app.whenReady().then(async () => {
     return task
   }
 
+  function relocatedPath(file: string, changes: TreeChange[]) {
+    const change = changes.find(change => !change.error && (change.source.path === file ||
+      change.source.kind === 'directory' && containsPath(change.source.path, file)))
+    if (!change) return file
+    if (change.target) return path.join(change.target.path, path.relative(change.source.path, file))
+  }
+
   function relocateRecentEntries(entries: Entry[], changes: TreeChange[]) {
     return entries.flatMap(entry => {
-      const change = changes.find(change => !change.error && (change.source.path === entry.path ||
-        change.source.kind === 'directory' && containsPath(change.source.path, entry.path)))
-      if (!change) return [entry]
-      if (!change.target) return []
-      const updatedPath = path.join(change.target.path, path.relative(change.source.path, entry.path))
-      return [{ ...entry, path: updatedPath, name: path.basename(updatedPath) }]
+      const next = relocatedPath(entry.path, changes)
+      return next === entry.path ? [entry] : next ? [{ ...entry, path: next, name: path.basename(next) }] : []
     })
   }
 
@@ -410,7 +453,7 @@ void app.whenReady().then(async () => {
     const initialFile = editor.initialFile
     editor.initialFile = undefined
     return { library, recent, preferences, platform: process.platform, windowsAcrylic, initialFile,
-      recoveries: recovery.list(), documentHistory, macReducesTransparency: macReducesTransparency(), version: app.getVersion(),
+      recoveries: recovery.list(), documentHistory, defaultStickerDirectory, macReducesTransparency: macReducesTransparency(), version: app.getVersion(),
       updateProxy: releases.network.publicProxy(), release: releases.status }
   })
   handle('newWindow', async (file?: string) => {
@@ -491,18 +534,103 @@ void app.whenReady().then(async () => {
     return result.canceled ? null : updateLibrary(result.filePaths[0])
   })
   handle('resetLibraryDirectory', () => updateLibrary())
+  function resourceDirectory(kind: StorageDirectory) {
+    if (kind === 'stickers') return preferences.stickerDirectory ?? defaultStickerDirectory
+    if (kind === 'attachments') return preferences.attachmentDirectory
+    throw new Error('未知的存储目录。')
+  }
+  async function checkedStorageDirectory(kind: StorageDirectory) {
+    const directory = resourceDirectory(kind)
+    if (!directory) throw new Error('附件保存在各文档旁的 assets 文件夹。')
+    const isDefault = kind === 'stickers' && !preferences.stickerDirectory
+    if (isDefault) await mkdir(directory, { recursive: true })
+    if (!(await lstat(directory)).isDirectory() || !isDefault && await realpath(directory) !== directory) throw new Error('存储目录已移动或无效。')
+    return directory
+  }
+  const listStickers = async () => {
+    const directory = await checkedStorageDirectory('stickers')
+    return (await readdir(directory, { withFileTypes: true }))
+      .filter(entry => entry.isFile() && !entry.name.startsWith('.') && markdownImageExtension(entry.name))
+      .map(entry => entry.name).sort((left, right) => left.localeCompare(right, undefined, { numeric: true }))
+  }
+  handleEditor('changeStorageDirectory', async ({ window }, kind: StorageDirectory, reset?: boolean) => {
+    const currentDirectory = resourceDirectory(kind)
+    let selected: string | undefined
+    if (!reset) {
+      const result = await dialog.showOpenDialog(window, { defaultPath: currentDirectory, properties: ['openDirectory'] })
+      if (result.canceled) return
+      selected = await realpath(result.filePaths[0])
+      if (!(await stat(selected)).isDirectory()) throw new Error('请选择文件夹。')
+    }
+    await storePreferences(current => kind === 'stickers' ? { ...current, stickerDirectory: selected }
+      : { ...current, attachmentDirectory: selected, attachmentDirectories: [...new Set([
+        ...(current.attachmentDirectories ?? []), ...(current.attachmentDirectory ? [current.attachmentDirectory] : []),
+      ])] })
+    updateAttachmentDirectories()
+    broadcast('ymd:preferences', preferences)
+  })
+  handle('openStorageDirectory', async (kind: StorageDirectory) => {
+    const message = await shell.openPath(await checkedStorageDirectory(kind))
+    if (message) throw new Error(message)
+  })
+  handle('listMapStickers', listStickers)
+  handle('readMapSticker', async (name: string) => {
+    if (typeof name !== 'string' || path.basename(name) !== name || name.startsWith('.') || !markdownImageExtension(name)) return null
+    const file = path.join(await checkedStorageDirectory('stickers'), name)
+    if (!(await lstat(file).catch(() => null))?.isFile()) return null
+    return files.imageData(file)
+  })
+  handleEditor('importMapStickers', async ({ window }) => {
+    const directory = await checkedStorageDirectory('stickers')
+    const result = await dialog.showOpenDialog(window, { properties: ['openFile', 'multiSelections'],
+      filters: [{ name: '图片', extensions: Object.keys(markdownImageExtensions) }] })
+    if (!result.canceled) await files.importStickers(directory, result.filePaths)
+    return listStickers()
+  })
   handleEditor('chooseLocalDirectory', async ({ window }) => {
     const result = await dialog.showOpenDialog(window!, { properties: ['openDirectory'] })
     if (result.canceled) return null
     const entry = await files.authorizeDirectory(result.filePaths[0])
+    if (preferences.hiddenLocalEntries.some(file => containsPath(entry.path, file))) {
+      await storePreferences(current => ({ ...current, hiddenLocalEntries: current.hiddenLocalEntries.filter(file => !containsPath(entry.path, file)) }))
+      broadcast('ymd:preferences', preferences)
+    }
     return remember(entry)
   })
   handle('listRecent', () => recent)
   handle('touchRecent', (file: string) => writeRecent(items => {
-    const entry = items.find(item => item.path === file)
-    return entry ? [entry, ...items.filter(item => item.path !== file)] : items
-  }))
+    const matches = items.filter(entry => entry.path === file || entry.kind === 'directory' && containsPath(entry.path, file))
+    if (!matches.length) return items
+    const now = Date.now()
+    return items.map(entry => matches.includes(entry) ? { ...entry, lastOpened: now } : entry)
+  }, false))
   handle('removeRecent', (file: string) => writeRecent(items => items.filter(item => item.path !== file)))
+  handle('clearRecent', () => writeRecent(items => {
+    const opened = [...editors.values()].flatMap(editor => [...editor.documents])
+    return items.filter(entry => opened.some(file => file === entry.path || entry.kind === 'directory' && containsPath(entry.path, file)))
+  }))
+  handle('reorderRecent', (file: string, target: string, after: boolean) => writeRecent(items => {
+    const entry = items.find(item => item.path === file)
+    if (!entry || file === target) return items
+    const next = items.filter(item => item !== entry)
+    const index = next.findIndex(item => item.path === target)
+    if (index === -1) return items
+    next.splice(index + Number(after === true), 0, entry)
+    return next
+  }))
+  handle('setFolderExpanded', async (folder: string, expanded: boolean) => {
+    const authorized = expanded ? await files.authorizedDirectory(folder) : folder
+    await storePreferences(current => ({ ...current, expandedFolders: expanded
+      ? [...new Set([...current.expandedFolders, authorized])].slice(-3000)
+      : current.expandedFolders.filter(item => item !== authorized) }))
+    broadcast('ymd:preferences', preferences)
+  })
+  handle('hideLocalEntry', async (file: string) => {
+    if (typeof file !== 'string' || !path.isAbsolute(file) ||
+        !recent.some(entry => entry.kind === 'directory' && entry.path !== file && containsPath(entry.path, file))) return
+    await storePreferences(current => ({ ...current, hiddenLocalEntries: [...new Set([...current.hiddenLocalEntries, file])].slice(-3000) }))
+    broadcast('ymd:preferences', preferences)
+  })
   handle('recordDocumentOpen', (file: string) => updateDocumentHistory(async entries => {
     if (entries[0]?.path === file) return entries
     const canonical = await files.authorizedFile(file)
@@ -541,7 +669,8 @@ void app.whenReady().then(async () => {
       if (editor.search === controller) editor.search = undefined
     }
   })
-  handleEditor('chooseFile', async ({ window }, kind?: FileKind) => {
+  handleEditor('chooseFile', async (editor, kind?: FileKind) => {
+    const { window } = editor
     const filters = kind === 'markdown' ? [{ name: 'Markdown', extensions: ['md'] }]
       : kind === 'drawing' ? [{ name: 'Excalidraw', extensions: ['excalidraw'] }]
       : [{ name: 'Markdown 与 Excalidraw', extensions: ['md', 'excalidraw'] }]
@@ -553,6 +682,7 @@ void app.whenReady().then(async () => {
     const file = result.filePaths[0]
     if (kind && fileKind(file) !== kind) throw new Error('所选文件类型与请求不符。')
     const document = await files.authorizeFile(file)
+    editor.documents.add(document.path)
     const relative = path.relative(library.path, document.path)
     if (path.isAbsolute(relative) || relative.split(path.sep)[0] === '..') {
       const { path, name, kind } = document
@@ -579,7 +709,6 @@ void app.whenReady().then(async () => {
     if (operation === 'move') {
       if (mutation.destination !== undefined) {
         const path = await files.authorizedDirectory(mutation.destination)
-        if (!containsPath(library.path, path)) throw new Error('请选择文档库中的文件夹。')
         destination = await files.authorizeDirectory(path)
       } else {
         const dialogResult = await dialog.showOpenDialog(window!, { defaultPath: library.path, properties: ['openDirectory'] })
@@ -619,7 +748,10 @@ void app.whenReady().then(async () => {
       }
       if (!copying) {
         await writeRecent(items => {
-          const updated = relocateRecentEntries(items, changes)
+          const absorbed = new Set(operation === 'move' ? changes.flatMap(change => change.target && items.some(entry =>
+            entry.kind === 'directory' && entry.path !== change.source.path && containsPath(entry.path, change.target!.path))
+            ? [change.source.path] : []) : [])
+          const updated = relocateRecentEntries(items.filter(item => !absorbed.has(item.path)), changes)
           for (const change of changes) {
             const target = change.target
             if (target && !containsPath(library.path, target.path) &&
@@ -628,6 +760,16 @@ void app.whenReady().then(async () => {
           return [...new Map(updated.map(entry => [entry.path, entry])).values()]
         }).catch(error => { console.warn('无法保存最近打开记录。', error) })
         await updateDocumentHistory(entries => relocateRecentEntries(entries, changes)).catch(error => { console.warn('无法保存文档历史。', error) })
+        const completed = changes.filter(change => !change.error)
+        if (completed.length && (destination || completed.some(change => change.source.kind === 'directory') ||
+            preferences.hiddenLocalEntries.some(file => completed.some(change => change.source.path === file)))) {
+          await storePreferences(current => ({
+            ...current,
+            expandedFolders: [...new Set([...current.expandedFolders.flatMap(file => relocatedPath(file, completed) ?? []),
+              ...(destination ? [destination.path] : [])])].slice(-3000),
+            hiddenLocalEntries: [...new Set(current.hiddenLocalEntries.flatMap(file => relocatedPath(file, completed) ?? []))],
+          })).then(() => broadcast('ymd:preferences', preferences), error => { console.warn('无法保存文件树状态。', error) })
+        }
       }
       return changes
     } finally {
@@ -893,7 +1035,9 @@ void app.whenReady().then(async () => {
     let changedShortcuts = false
     let changedBackground = false
     const updated = await storePreferences(current => {
-      const next = normalizePreferences({ ...current, ...value, libraryDirectory: current.libraryDirectory })
+      const next = normalizePreferences({ ...current, ...value, libraryDirectory: current.libraryDirectory,
+        attachmentDirectory: current.attachmentDirectory, attachmentDirectories: current.attachmentDirectories,
+        stickerDirectory: current.stickerDirectory, expandedFolders: current.expandedFolders, hiddenLocalEntries: current.hiddenLocalEntries })
       changedShortcuts = JSON.stringify(current.shortcuts) !== JSON.stringify(next.shortcuts)
       changedBackground = current.theme !== next.theme || windowMaterial(current) !== windowMaterial(next)
       return next
@@ -907,6 +1051,8 @@ void app.whenReady().then(async () => {
   handleEditor('cancelClose', editor => { editor.resolveClose?.(false); editor.resolveClose = undefined })
   handleEditor('finishClose', async editor => {
     await historyWrite.catch(() => {})
+    await recentWrite.catch(() => {})
+    await preferenceWrite.catch(() => {})
     await recovery.wait()
     editor.closing = true
     editor.window.close()

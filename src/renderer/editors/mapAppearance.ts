@@ -1,4 +1,5 @@
 import type { PitchOptions } from '../../shared/pitch'
+import type { MapCanvasSettings } from '../../shared/contracts'
 import type MindMap from 'simple-mind-map'
 import { readAudioNote } from './mapAudio'
 
@@ -24,15 +25,7 @@ export const palettes = {
 }
 export type Palette = keyof typeof palettes
 
-export interface MapSettings {
-  layout: string
-  palette: Palette
-  background?: string
-  font: string
-  lineWidth: number
-  lineStyle?: 'curve' | 'straight' | 'direct'
-  compact?: boolean
-  colored: boolean
+export interface MapSettings extends MapCanvasSettings {
   pitch?: PitchOptions
 }
 
@@ -56,6 +49,15 @@ export interface MapAppearance {
 
 export const defaultMapSettings: MapSettings = { layout: 'mindMap', palette: 'ocean', font: 'system-ui', lineWidth: 2, colored: true }
 const mapKey = (path: string) => 'ymd.map:' + path
+
+export function initializeMapSettings(path: string, preferences: Partial<MapCanvasSettings>) {
+  const values = Object.entries(preferences).filter(([, value]) => value !== undefined)
+  if (values.length && !localStorage.getItem(mapKey(path))) {
+    const settings = { ...defaultMapSettings, ...Object.fromEntries(values),
+      layout: branchStructure(preferences.layout) ?? defaultMapSettings.layout }
+    localStorage.setItem(mapKey(path), JSON.stringify({ settings, styles: [] }))
+  }
+}
 
 export function styledMapPaths() {
   return Object.keys(localStorage).filter(key => key.startsWith('ymd.map:')).map(key => key.slice('ymd.map:'.length))

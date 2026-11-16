@@ -1,4 +1,4 @@
-import { useDeferredValue, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
+import { useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { BetweenHorizontalStart, Check, ChevronsLeft, ChevronsRight, Code2, Copy, Eye, FileDown, FileText, FolderInput, Info, Keyboard, ListTree, LocateFixed, MoreHorizontal, Pin, Printer, Search, Star, Trash2 } from 'lucide-react'
 import { MarkdownMenu, type MenuItem } from './MarkdownMenu'
 import { contextItems, insertMermaid, tabInList, typographyKeys } from './markdownCommands'
@@ -18,6 +18,8 @@ import { Compartment, EditorState, Prec, type Range } from '@codemirror/state'
 import { Decoration, drawSelection, EditorView, highlightSpecialChars, keymap, ViewPlugin, WidgetType, type DecorationSet, type ViewUpdate } from '@codemirror/view'
 import { classHighlighter } from '@lezer/highlight'
 import { markdownPageWidths, type CodeBlockPreferences, type ContextMenuItem, type MarkdownOutlinePreferences, type MarkdownPageWidth, type SearchEngine } from '../../shared/contracts'
+import type { DocumentViewPosition } from './viewPosition'
+import { colorOpening } from './outlineTextStyle'
 import type { ShortcutOverrides } from '../../shared/shortcuts'
 import { PaneResize } from '../PaneResize'
 
@@ -25,7 +27,7 @@ const inlineStyles: Record<string, string> = {
   StrongEmphasis: 'md-bold', Emphasis: 'md-italic', Strikethrough: 'md-strike',
   InlineCode: 'md-inline-code', Highlight: 'md-highlight', Underline: 'md-underline', Link: 'md-link', Autolink: 'md-link',
 }
-const markers = new Set(['HeaderMark', 'EmphasisMark', 'StrikethroughMark', 'CodeMark', 'QuoteMark', 'HighlightMark', 'UnderlineMark'])
+const markers = new Set(['HeaderMark', 'EmphasisMark', 'StrikethroughMark', 'CodeMark', 'QuoteMark', 'HighlightMark', 'UnderlineMark', 'TextColorMark'])
 
 class TaskBox extends WidgetType {
   constructor(readonly position: number, readonly checked: boolean, readonly readOnly: boolean) { super() }
@@ -76,6 +78,10 @@ function liveMarkdown(view: EditorView, path: string, loadRemote: boolean) {
       const heading = /^(?:ATX|Setext)Heading([1-6])$/.exec(name)
       const css = inlineStyles[name]
       if (css) mark(from, to, css)
+      if (name === 'TextColor') {
+        const color = colorOpening.exec(state.sliceDoc(from, Math.min(from + 34, to)))?.[1]
+        if (color) mark(from, to, 'ymd-text-' + color)
+      }
       if (heading) {
         line(sourceLine.from, 'md-heading md-h' + heading[1])
         // CodeMirror samples short, plain-text lines to estimate its offscreen height.
@@ -119,7 +125,7 @@ function liveMarkdown(view: EditorView, path: string, loadRemote: boolean) {
         }
       }
       if (markers.has(name) && parent && parent.name !== 'FencedCode') {
-        const inline = ['StrongEmphasis', 'Emphasis', 'Strikethrough', 'InlineCode', 'Highlight', 'Underline'].includes(parent.name)
+        const inline = ['StrongEmphasis', 'Emphasis', 'Strikethrough', 'InlineCode', 'Highlight', 'Underline', 'TextColor'].includes(parent.name)
         if (inline ? visible(parent.from, parent.to) : activeLine(from)) return
         const end = name === 'HeaderMark' || name === 'QuoteMark'
           ? to + (state.sliceDoc(to, Math.min(state.doc.length, to + 1)) === ' ' ? 1 : 0) : to
@@ -159,6 +165,7 @@ const outlineNumberings = [
 ] as const
 
 interface Props {
+  position: DocumentViewPosition
   text: string
   name: string
   path: string
@@ -191,7 +198,7 @@ interface Props {
   report: (error: unknown) => void
 }
 
-export function MarkdownEditor({ text, name, path, modified, platform, remoteImages, searchEngine, keyOverrides, outline, updateOutline, width, codeBlocks, setWidth, registerFlush, onChange, find, jump, reveal, saveCopy, duplicate, move, trash, shortcuts, exportPdf, printDocument, pinned, starred, togglePin, toggleStar, report }: Props) {
+export function MarkdownEditor({ text, name, path, modified, platform, remoteImages, searchEngine, keyOverrides, outline, updateOutline, width, codeBlocks, setWidth, registerFlush, onChange, find, jump, reveal, saveCopy, duplicate, move, trash, shortcuts, exportPdf, printDocument, pinned, starred, togglePin, toggleStar, report, position }: Props) {
   const host = useRef<HTMLDivElement>(null)
   const [media, setMedia] = useState<MediaPreview>()
   useEffect(() => {
@@ -204,7 +211,9 @@ export function MarkdownEditor({ text, name, path, modified, platform, remoteIma
   const change = useRef(onChange)
   const initial = useRef(text)
   const previousFind = useRef(find)
-  const [source, setSource] = useState(false)
+  const [source, setSource] = useState(position.markdown?.source ?? false)
+  const sourceMode = useRef(source)
+  sourceMode.current = source
   const [menu, setMenu] = useState<OpenMenu>()
   const [headings, setHeadings] = useState<Heading[]>([])
   const [status, setStatus] = useState<StatusKind>('words')
@@ -237,14 +246,19 @@ export function MarkdownEditor({ text, name, path, modified, platform, remoteIma
   }
   const writingKeys = () => typographyKeys(keyOverrides, platform, showTable, editor => chooseMarkdownImages(editor, path, report))
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const raw = initial.current
     const bom = raw.startsWith('\uFEFF') ? '\uFEFF' : ''
     const newline = raw.match(/\r\n|\n|\r/)?.[0] ?? '\n'
+    const doc = raw.slice(bom.length).replace(/\r\n|\r/g, '\n')
+    const previous = position.markdown
+    const sameText = previous?.text === raw
     const editor = new EditorView({
       parent: host.current!,
+      scrollTo: previous && (sameText ? previous.scroll : EditorView.scrollIntoView(Math.min(doc.length, previous.top), { y: 'start' })),
       state: EditorState.create({
-        doc: raw.slice(bom.length).replace(/\r\n|\r/g, '\n'),
+        doc,
+        selection: sameText ? { anchor: previous.anchor, head: previous.head } : undefined,
         extensions: [
           highlightSpecialChars(), history(), drawSelection(), keymap.of([...defaultKeymap.filter(binding =>
             !['Mod-i', 'Mod-[', 'Mod-]'].includes(binding.key ?? '') && (platform === 'darwin' || binding.key !== 'Shift-Mod-k')), ...historyKeymap]),
@@ -254,7 +268,7 @@ export function MarkdownEditor({ text, name, path, modified, platform, remoteIma
             ...markdownKeymap, ...searchKeymap.filter(binding => binding.key !== 'Mod-f')])),
           EditorView.contentAttributes.of({ 'aria-label': 'Markdown 编辑器', spellcheck: 'false' }),
           markdownImageIntake(path, report),
-          renderMode.current.of([live(path, remoteImages), codeBlockPreferences.of(codeBlocks), renderedBlocks, markdownTable, markdownNotes]),
+          renderMode.current.of(sourceMode.current ? [] : [live(path, remoteImages), codeBlockPreferences.of(codeBlocks), renderedBlocks, markdownTable, markdownNotes]),
           readMode.current.of([]),
           EditorView.updateListener.of(update => {
             if (update.docChanged) change.current(bom + update.state.doc.toString().replaceAll('\n', newline))
@@ -263,7 +277,14 @@ export function MarkdownEditor({ text, name, path, modified, platform, remoteIma
       }),
     })
     view.current = editor
-    return () => { editor.destroy(); view.current = null }
+    return () => {
+      const { anchor, head } = editor.state.selection.main
+      position.markdown = { anchor, head, source: sourceMode.current, scroll: editor.scrollSnapshot(),
+        top: editor.lineBlockAtHeight(editor.scrollDOM.scrollTop).from,
+        text: bom + editor.state.doc.toString().replaceAll('\n', newline) }
+      editor.destroy()
+      view.current = null
+    }
   }, [])
 
   useEffect(() => {

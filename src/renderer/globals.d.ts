@@ -6,6 +6,7 @@ declare global {
     desktop: Desktop
     pitch: PitchDesktop
     EXCALIDRAW_ASSET_PATH?: string
+    queryLocalFonts?: () => Promise<{ family: string }[]>
   }
 }
 

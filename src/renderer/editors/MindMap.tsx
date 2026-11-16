@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { CalendarRange, Camera, ChevronDown, ClipboardList, CornerUpLeft, Crosshair, Download, Focus, FolderInput, GitBranch, GitFork, ImagePlus, ListTree, Map as MapIcon, Maximize, MessageSquare, Mic, Minus, Paperclip, Plus, Presentation, Redo2, Search, SlidersHorizontal, SquareFunction, Square, SquareCheck, Star, Sticker, StickyNote, Tag, Trash2, Undo2, X } from 'lucide-react'
+import { Camera, ChevronDown, ClipboardList, CornerUpLeft, Crosshair, Download, Focus, FolderInput, GitBranch, GitFork, ImagePlus, ListTree, Map as MapIcon, Maximize, MessageSquare, Mic, Minus, Paperclip, Plus, Presentation, Redo2, Search, SlidersHorizontal, SquareFunction, Square, SquareCheck, Star, Sticker, StickyNote, Tag, Trash2, Undo2, X } from 'lucide-react'
 import DOMPurify from 'dompurify'
 import MindMap from 'simple-mind-map'
 import AssociativeLine from 'simple-mind-map/src/plugins/AssociativeLine.js'
@@ -13,16 +13,15 @@ import OuterFrame from 'simple-mind-map/src/plugins/OuterFrame.js'
 import RainbowLines from 'simple-mind-map/src/plugins/RainbowLines.js'
 import SearchPlugin from 'simple-mind-map/src/plugins/Search.js'
 import Select from 'simple-mind-map/src/plugins/Select.js'
+import type { DocumentViewPosition } from './viewPosition'
+import { PaneResize } from '../PaneResize'
+import type { CSSProperties } from 'react'
 import { DocumentRemainder } from './DocumentRemainder'
 import { outlineReferences } from './OutlineMarkdown'
 import { listMarker, projectList, projectionRemainder, writeList, type Block } from './listProjection'
-import type { DocumentFile, Entry } from '../../shared/contracts'
+import type { DocumentFile, Entry, MapCanvasSettings, Preferences } from '../../shared/contracts'
 import { MindMapFormat } from './MindMapFormat'
 import { MindMapTask, taskBadge, taskTopics, todoBadge } from './MindMapTask'
-import { MindMapGantt } from './MindMapGantt'
-import { MindMapWorkCalendar } from './MindMapWorkCalendar'
-import { calendarSchedule, editWorkDates, orderSchedule, scheduledTopics } from './mapSchedule'
-import { calendarDays, readWorkCalendar, type WorkCalendar } from './workCalendar'
 import { readTask, readTodo, type MapTask, type MapTodo } from './mapTasks'
 import { MindMapRecorder } from './MindMapRecorder'
 import { MindMapEquation } from './MindMapEquation'
@@ -66,7 +65,7 @@ class MapAssociativeLine extends AssociativeLine {
 }
 
 for (const plugin of [MapAssociativeLine, Drag, Export, ExportPDF, KeyboardNavigation, MiniMap, NodeImgAdjust, OuterFrame, RainbowLines, SearchPlugin, Select]) MindMap.usePlugin(plugin)
-MindMap.extendNodeDataNoStylePropList(['ymdMarker', 'ymdFloating', 'ymdTask', 'ymdTodo', 'ymdStructure', 'ymdAudio', 'ymdOriginalImageSize', 'ymdCallouts', 'ymdWorkCalendar', 'ymdNumbering', 'ymdPitch', 'ymdEquation'])
+MindMap.extendNodeDataNoStylePropList(['ymdMarker', 'ymdFloating', 'ymdTask', 'ymdTodo', 'ymdStructure', 'ymdAudio', 'ymdOriginalImageSize', 'ymdCallouts', 'ymdNumbering', 'ymdPitch', 'ymdEquation'])
 
 type MapNode = NonNullable<MindMap['renderer']['root']>
 type TopicField = '备注' | '标签'
@@ -96,6 +95,12 @@ function hasAudio(tree: MapData, id: string): boolean {
 interface MapEditorProps {
   text: string; name: string; path: string; dark: boolean; onChange: (text: string) => void
   find: number
+  position: DocumentViewPosition
+  overviewPreferences: Preferences['mapOverview']
+  panelWidth?: number
+  resizePanel: (width: number) => void
+  rememberSettings: (patch: Partial<MapCanvasSettings>) => void
+  stickerDirectory?: string
   platform: string; keyOverrides: ShortcutOverrides; remoteImages: boolean
   remainderVisible: boolean; setRemainderVisible: (visible: boolean) => void
   registerFlush: (flush?: () => void) => void
@@ -317,7 +322,7 @@ export default function MindMapEditor(props: MapEditorProps) {
 }
 
 function MapCanvas({ text, name, path, dark, platform, keyOverrides, remoteImages, remainderVisible, setRemainderVisible, onChange, registerFlush, sheet, updateSheet, multipleSheets, saveXmind, createSheet,
-  linkWorkbook, jump, followTopicLink, readMapDocument, linkDocuments, find }: MapEditorProps & {
+  linkWorkbook, jump, followTopicLink, readMapDocument, linkDocuments, find, position, overviewPreferences, panelWidth, resizePanel, rememberSettings, stickerDirectory }: MapEditorProps & {
   sheet?: MapSheet
   updateSheet: (id: string, settings: MapSettings, tree: MapData) => void
   multipleSheets: boolean
@@ -338,7 +343,7 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, remoteImage
   const [settings, setSettings] = useState(sheet?.settings ?? appearance.settings)
   const [selected, setSelected] = useState<MapNode[]>([])
   const [formatOpen, setFormatOpen] = useState(true)
-  const [tab, setTab] = useState<'map' | 'topic'>('map')
+  const [tab, setTab] = useState<'theme' | 'style'>('theme')
   const [zoom, setZoom] = useState(100)
   const [version, setVersion] = useState(0)
   const [zen, setZen] = useState(false)
@@ -350,7 +355,7 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, remoteImage
   const [artOpen, setArtOpen] = useState(false)
   const [navigation, setNavigation] = useState<{ key: number; facet?: string }>()
   const previousFind = useRef(find)
-  const [overview, setOverview] = useState(false)
+  const [overview, setOverview] = useState(overviewPreferences.visible)
   const [miniMap, setMiniMap] = useState<{ markup: string; viewport: Record<string, string> }>()
   const [matches, setMatches] = useState({ total: 0, currentIndex: -1 })
   const [titleMatches, setTitleMatches] = useState<string[]>([])
@@ -359,10 +364,6 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, remoteImage
   const [selectedCallout, setSelectedCallout] = useState<CalloutTarget>()
   const [calloutText, setCalloutText] = useState<{ target: CalloutTarget; note: Callout; add: boolean }>()
   const [taskTopic, setTaskTopic] = useState<string>()
-  const [calendarOpen, setCalendarOpen] = useState(false)
-  const [calendar, setCalendar] = useState(() => readWorkCalendar(sheet?.tree.data.ymdWorkCalendar ??
-    (!sheet ? appearance.styles.find(style => style.address === 'root')?.data.ymdWorkCalendar : undefined)))
-  const [gantt, setGantt] = useState(false)
   const [equationNode, setEquationNode] = useState<MapNode>()
   const [audioParent, setAudioParent] = useState<MapNode>()
   const [error, setError] = useState('')
@@ -378,7 +379,6 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, remoteImage
   const viewBeforeZen = useRef<ReturnType<MindMap['view']['getTransformData']> | undefined>(undefined)
   const formatBeforeZen = useRef(false)
   const artTrigger = useRef<HTMLButtonElement>(null)
-  const ganttTrigger = useRef<HTMLButtonElement>(null)
   const resourceInput = useRef<HTMLInputElement>(null)
   const resourceTarget = useRef<{ node: MapNode; image: boolean; callout?: CalloutTarget } | undefined>(undefined)
   const engine = useRef<MindMap | undefined>(undefined)
@@ -535,9 +535,6 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, remoteImage
     return [...listBacklinks(linkWorkbook(map.getData()), { sheet: sheetId, topic: backlinkTopic }), ...externalBacklinks]
   }, [backlinkTopic, externalBacklinks, linkWorkbook, sheetId, version])
 
-  const ganttRows = useMemo(() => gantt ? scheduledTopics(engine.current?.getData()) : [], [gantt, version])
-  const days = useMemo(() => calendarDays(calendar), [calendar])
-
   function readCallout(target: CalloutTarget) {
     const owner = engine.current?.renderer.findNodeByUid(target.owner)
     const note = owner && readCallouts(owner.getData('ymdCallouts')).find(item => item.data.uid === target.id)
@@ -592,67 +589,6 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, remoteImage
     if (!editNumbering(map.renderer.renderTree, selection, edit)) return
     map.command.originAddHistory()
     map.render()
-  }
-
-  function updateTasks(edits: Map<string, MapTask | null>, schedule: boolean) {
-    const map = engine.current
-    if (!map) return false
-    const tree = map.getData()
-    const rows = scheduledTopics(tree)
-    const replacements = schedule ? orderSchedule(rows, new Map([...edits].flatMap(([id, task]) => task ? [[id, task] as const] : [])), days) : edits
-    return commitTaskChanges(tree, replacements, edits)
-  }
-
-  function commitTaskChanges(tree: MapData, replacements: Map<string, MapTask | null> | 'cycle' | 'dates', direct?: Map<string, MapTask | null>) {
-    if (replacements === 'cycle' || replacements === 'dates') {
-      setNotice(replacements === 'cycle' ? '这些任务的依赖形成了循环。请先移除其中一条依赖。' : '当前规则下没有可用日期。请检查工作日和任务依赖。')
-      return false
-    }
-    const map = engine.current
-    if (!map) return false
-    const updates = replacements
-    function write(node: MapData) {
-      const id = node.data.uid
-      if (id && updates.has(id)) {
-        node.data.ymdTask = updates.get(id)
-        if (direct?.has(id)) node.data.ymdTodo = null
-      }
-      node.children?.forEach(write)
-    }
-    write(tree)
-    map.command.originAddHistory()
-    map.updateData(tree)
-    map.command.originAddHistory()
-    setNotice('')
-    return true
-  }
-
-  function saveCalendar(next: WorkCalendar) {
-    const tree = engine.current?.getData()
-    if (!tree) return false
-    if (JSON.stringify(next) === JSON.stringify(calendar)) return true
-    const replacements = next.enabled || calendar?.enabled
-      ? calendarSchedule(scheduledTopics(tree), days, calendarDays(next)) : new Map<string, MapTask>()
-    tree.data.ymdWorkCalendar = next
-    return commitTaskChanges(tree, replacements)
-  }
-
-  function openCalendar() {
-    setNotice('')
-    setCalendarOpen(true)
-  }
-
-  function toggleGantt(visible: boolean) {
-    if (visible) changeBranch(undefined, false)
-    if (visible) setPitchPanel(false)
-    if (visible) {
-      engine.current?.renderer.textEdit.hideEditTextBox()
-      engine.current?.associativeLine.cancelCreateLine()
-      setLinking(false)
-      setMenu(undefined)
-    }
-    setGantt(visible)
-    if (!visible) ganttTrigger.current?.focus()
   }
 
   function openTask(id?: string) {
@@ -743,7 +679,6 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, remoteImage
     const removeImageGestures = installTopicImageGestures(map, host.current, setEquationNode)
     const onData = (node: MapData | undefined) => {
       if (!node) return
-      setCalendar(readWorkCalendar(node.data.ymdWorkCalendar))
       const audioId = audio.activeId
       if (audioId && !hasAudio(node, audioId)) audio.stop()
       if (!initialSheet) {
@@ -760,7 +695,7 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, remoteImage
     const flush = () => { map.renderer.textEdit.hideEditTextBox(); sync() }
     const select = (_node: MapNode | null, nodes: MapNode[]) => {
       setSelected([...nodes])
-      setTab(nodes.length ? 'topic' : 'map')
+      if (nodes.length && !nodes[0].isRoot) setTab('style')
     }
     const context = (event: MouseEvent, node: MapNode) => {
       event.preventDefault()
@@ -806,7 +741,11 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, remoteImage
       }
     })
     resize.observe(host.current)
+    const lastView = position.map?.get(sheetId)
+    if (lastView) map.render(() => { if (engine.current === map) map.view.setTransformData(lastView) })
     return () => {
+      const views = position.map ??= new Map()
+      views.set(sheetId, viewBeforeBranch.current ?? viewBeforeZen.current ?? map.view.getTransformData())
       resize.disconnect()
       removeNumbering()
       audio.stop()
@@ -907,14 +846,13 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, remoteImage
     if (find === previousFind.current) return
     previousFind.current = find
     if (shotOpen) return
-    setGantt(false)
     openNavigation()
   }, [find, shotOpen])
 
   useEffect(() => {
     const escape = (event: KeyboardEvent) => {
       if (event.key !== 'Escape' || event.isComposing || event.keyCode === 229 || event.defaultPrevented ||
-          calendarOpen || field || linkEditor || taskTopic || audioParent || equationNode || calloutText || shotOpen) return
+          field || linkEditor || taskTopic || audioParent || equationNode || calloutText || shotOpen) return
       if (event.target instanceof HTMLElement && event.target.closest('.document-menu')) return
       if (event.target instanceof HTMLElement && event.target.closest('.smm-node-edit-wrap')) {
         event.preventDefault()
@@ -922,8 +860,7 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, remoteImage
         host.current?.focus()
         return
       }
-      if (gantt) { event.preventDefault(); toggleGantt(false) }
-      else if (linking) { engine.current?.associativeLine.cancelCreateLine(); setLinking(false) }
+      if (linking) { engine.current?.associativeLine.cancelCreateLine(); setLinking(false) }
       else if (searchOpen) { event.preventDefault(); closeNavigation() }
       else if (artOpen) {
         event.preventDefault()
@@ -956,13 +893,13 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, remoteImage
     }
     window.addEventListener('keydown', escape)
     return () => window.removeEventListener('keydown', escape)
-  }, [gantt, zen, zenTool, linking, searchOpen, formatOpen, artOpen, calendarOpen, field, linkEditor, taskTopic, audioParent, equationNode, calloutText, shotOpen,
+  }, [zen, zenTool, linking, searchOpen, formatOpen, artOpen, field, linkEditor, taskTopic, audioParent, equationNode, calloutText, shotOpen,
     branch, changeBranch, pitchPanel])
 
   useEffect(() => {
     const current = selectedCallout && readCallout(selectedCallout)
     const source = current?.owner ?? (selected.length === 1 ? selected[0] : undefined)
-    if (gantt || linkEditor || field || taskTopic || audioParent || equationNode || calloutText || calendarOpen || shotOpen) return
+    if (linkEditor || field || taskTopic || audioParent || equationNode || calloutText || shotOpen) return
     const linkable = source && !source.isGeneralization && !readAudioNote(source.getData('ymdAudio'))
     const focusableBranch = selected.length === 1 && source && !source.isRoot && linkable && !current
     const bindings = shortcutsFor('map', keyOverrides, platform)
@@ -988,7 +925,7 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, remoteImage
     }
     window.addEventListener('keydown', mapShortcut, true)
     return () => window.removeEventListener('keydown', mapShortcut, true)
-  }, [gantt, selected, selectedCallout, linkEditor, field, taskTopic, audioParent, equationNode, calloutText, calendarOpen, shotOpen, keyOverrides, platform, openShot,
+  }, [selected, selectedCallout, linkEditor, field, taskTopic, audioParent, equationNode, calloutText, shotOpen, keyOverrides, platform, openShot,
     branch, changeBranch, openPitch])
 
   useEffect(() => {
@@ -1000,11 +937,21 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, remoteImage
       pending = requestAnimationFrame(() => {
         try {
           const { svgHTML, viewBoxStyle } = map.miniMap.calculationMiniMap(160, 100)
-          const markup = DOMPurify.sanitize(svgHTML, {
+          const cleaned = DOMPurify.sanitize(svgHTML, {
             USE_PROFILES: { svg: true },
             FORBID_TAGS: ['a', 'foreignObject', 'image', 'style'],
           })
-          setMiniMap({ markup, viewport: viewBoxStyle })
+          const template = document.createElement('template')
+          template.innerHTML = cleaned
+          const svg = template.content.querySelector('svg')
+          const width = Number.parseFloat(svg?.getAttribute('width') ?? '')
+          const height = Number.parseFloat(svg?.getAttribute('height') ?? '')
+          if (!svg || !(width > 0) || !(height > 0)) return
+          svg.setAttribute('viewBox', svg.getAttribute('viewBox') || `0 0 ${width} ${height}`)
+          svg.setAttribute('width', '160')
+          svg.setAttribute('height', '100')
+          svg.setAttribute('preserveAspectRatio', 'xMidYMid meet')
+          setMiniMap({ markup: svg.outerHTML, viewport: viewBoxStyle })
         } catch {}
       })
     }
@@ -1027,6 +974,8 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, remoteImage
     const map = engine.current
     if (!map) return
     if (patch.layout && patch.layout !== settings.layout) map.setLayout(patch.layout)
+    const { pitch: _pitch, ...canvas } = patch
+    if (Object.keys(canvas).length) rememberSettings(canvas)
     try {
       if (initialSheet) saveSheet.current(initialSheet.id, next, map.getData())
       else saveMapAppearance(path, next, map.getData())
@@ -1257,13 +1206,13 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, remoteImage
     { label: node && readEquation(node.getData('ymdEquation')) ? '编辑公式' : '公式',
       icon: <SquareFunction size={16} />, disabled: !canLink, run: () => setEquationNode(node) },
     { label: '图片', icon: <ImagePlus size={16} />, disabled: !node, run: () => chooseResource(true) },
-    { label: '贴纸与插图', icon: <Sticker size={16} />, run: () => setArtOpen(true) },
+    { label: '贴纸', icon: <Sticker size={16} />, run: () => setArtOpen(true) },
     { label: '附件', icon: <Paperclip size={16} />, disabled: !node, run: () => chooseResource(false) },
     { label: '标记', icon: <Star size={16} />, disabled: !node, children: [
       ...[1, 2, 3, 4, 5].map(level => ({ label: '优先级 ' + level, run: () => command('SET_NODE_ICON', node, ['priority_' + level]) })),
       { label: '已完成', run: () => command('SET_NODE_ICON', node, ['progress_8']) },
       { label: '移除标记', run: () => command('SET_NODE_ICON', node, []) },
-      { label: '贴纸与插图', separator: true, run: () => setArtOpen(true) },
+      { label: '贴纸', separator: true, run: () => setArtOpen(true) },
     ] },
   ]
   async function exportWorkbook(all: boolean) {
@@ -1390,13 +1339,13 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, remoteImage
   const closeMenu = () => setMenu(undefined)
 
   return <div className="map-editor xmind-workspace" data-zen={zen} data-zen-tone={zen ? zenDark ? 'dark' : 'light' : undefined}
-    data-shot-open={shotOpen || undefined}>
+    data-shot-open={shotOpen || undefined} data-glass={settings.background === 'transparent' && !zen || undefined}>
     {!zen && <div className="map-toolbar" aria-label="思维导图工具栏" ref={element => { element?.toggleAttribute('inert', shotOpen) }}>
       <div className="map-toolbar-group">
         <button className="icon-button" title="撤销" aria-label="撤销" onClick={() => command('BACK')}><Undo2 size={17} /></button>
         <button className="icon-button" title="重做" aria-label="重做" onClick={() => command('FORWARD')}><Redo2 size={17} /></button>
       </div>
-      {!gantt && <div className="map-toolbar-group">
+      <div className="map-toolbar-group">
         <button className="tool-button" onClick={() => add(true)}><Plus size={16} />主题</button>
         <button className="tool-button" disabled={!!audioNote} onClick={() => add(false)}><GitBranch size={16} />子主题</button>
         <div className="menu-anchor">
@@ -1405,11 +1354,8 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, remoteImage
         </div>
         <button className="icon-button" aria-label={activeCallout ? '删除标注' : '删除主题'} disabled={!activeCallout && !canRemove}
           onClick={() => activeCallout && selectedCallout ? removeCallout(selectedCallout) : command('REMOVE_NODE')}><Trash2 size={16} /></button>
-      </div>}
+      </div>
       <div className="map-toolbar-group map-toolbar-trailing">
-        <button ref={ganttTrigger} className="tool-button" aria-pressed={gantt} onClick={() => toggleGantt(!gantt)}>
-          <CalendarRange size={16} />甘特图</button>
-        {!gantt && <>
         <div className="menu-anchor map-pitch-trigger">
           <button type="button" className="icon-button" aria-label="开始演示"
             title={pitchKey ? '开始演示 (' + shortcutLabel(pitchKey, platform) + ')' : '开始演示'}
@@ -1423,7 +1369,7 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, remoteImage
             { label: '演示格式', separator: true, run: () => { setNavigation(undefined); setArtOpen(false); setPitchPanel(!pitchPanel) } },
           ]} />}
         </div>
-        <button ref={artTrigger} className="icon-button" title="贴纸与插图" aria-label="贴纸与插图" aria-expanded={artOpen}
+        <button ref={artTrigger} className="icon-button" title="贴纸" aria-label="贴纸" aria-expanded={artOpen}
           onClick={toggleArt}><Sticker size={17} /></button>
         <button ref={navigationTrigger} className="icon-button" title="查找主题" aria-label="查找主题" aria-expanded={searchOpen}
           onClick={() => searchOpen ? closeNavigation() : openNavigation()}><Search size={17} /></button>
@@ -1435,15 +1381,12 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, remoteImage
         </div>
         <button ref={zenTrigger} className="icon-button" title="专注模式" aria-label="专注模式" onClick={() => toggleZen(true)}><Focus size={17} /></button>
         <button className="tool-button" aria-pressed={formatOpen && !artOpen && !searchOpen && !pitchPanel} onClick={toggleFormat}>
-          <SlidersHorizontal size={16} />格式</button></>}
+          <SlidersHorizontal size={16} />格式</button>
       </div>
     </div>}
     <input ref={resourceInput} type="file" hidden onChange={event => attach(event.target.files?.[0])} />
     <div className="map-view">
-    {gantt && <MindMapGantt title={sheet?.title ?? mapTitle(name)} rows={ganttRows} edit={openTask} change={updateTasks} report={setNotice}
-      days={days} skipClosed={calendar?.enabled === true} openCalendar={openCalendar}
-      undo={() => command('BACK')} redo={() => command('FORWARD')} notice={notice} clearNotice={() => setNotice('')} />}
-    <div className="map-body" data-show-gantt={gantt} aria-hidden={gantt || undefined}>
+    <div className="map-body" style={{ '--map-user-width': panelWidth === undefined ? undefined : panelWidth + 'px' } as CSSProperties}>
       <div className="map-stage">
         <div className="map-canvas" ref={host} tabIndex={0} aria-label="思维导图画布"
           onPointerDown={event => {
@@ -1463,7 +1406,7 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, remoteImage
           exit={() => toggleZen(false)} />}
         {linking && <div className="map-action-status" role="status">选择关联线的目标主题 <kbd>Esc 取消</kbd></div>}
         {notice && <div className="map-action-status" role="status">{notice}<button className="icon-button" aria-label="关闭提示" onClick={() => setNotice('')}><X size={14} /></button></div>}
-        {overview && miniMap && <div className="map-minimap" aria-label="导图概览"
+        {overview && miniMap && <div className="map-minimap" data-position={overviewPreferences.position} aria-label="导图概览"
           onPointerDown={event => {
             event.currentTarget.setPointerCapture(event.pointerId)
             engine.current?.miniMap.onViewBoxMousedown(event)
@@ -1492,11 +1435,13 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, remoteImage
         </div>
         {shotOpen && <MindMapShot title={sheet?.title ?? mapTitle(name)} close={closeShot} />}
       </div>
+      {(navigation || artOpen || pitchPanel || formatOpen) && <div className="map-side">
+      <PaneResize pane="map" side="right" apply={resizePanel} />
       {navigation && <MindMapNavigation key={navigation.key} topics={topics} initialFacet={navigation.facet}
         titleMatches={titleMatches} currentTopic={selected.length === 1 ? selected[0].getData().uid : undefined}
         search={engine.current?.search} count={matches} close={closeNavigation} highlight={highlight}
         locate={id => command('GO_TARGET_NODE', id)} focusRequest={find} replaceTopics={replaceTopics} />}
-      {artOpen && <MindMapArt
+      {artOpen && <MindMapArt directory={stickerDirectory}
         target={topicAcceptsArt(node) ? String(node?.getData('text') || '未命名主题') : undefined}
         apply={art => { if (engine.current && node) applyArt(engine.current, node, art) }}
         close={() => { setArtOpen(false); (artTrigger.current ?? host.current)?.focus() }} />}
@@ -1509,8 +1454,7 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, remoteImage
         : <MindMapFormat {...{ tab, settings, node, selected, version }} dark={zen ? zenDark : dark} branchDepth={branch?.depth}
         change={changeSettings} onTab={setTab} editNumbering={updateNumbering}
         structure={value => {
-          if (node?.isRoot && !branch && value) changeSettings({ layout: value })
-          else if (node && branchStructure(node.getData('ymdStructure')) !== value) {
+          if (node && branchStructure(node.getData('ymdStructure')) !== value) {
             const map = engine.current
             const { left, top } = node
             command('SET_NODE_DATA', node, { ymdStructure: value ?? null })
@@ -1527,9 +1471,10 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, remoteImage
             else command('SET_NODE_STYLE', node, key, value)
           }
         }} />)}
+      </div>}
     </div>
     </div>
-    {remainder && !zen && !branch && !gantt && <DocumentRemainder text={remainder} className="map-remainder"
+    {remainder && !zen && !branch && <DocumentRemainder text={remainder} className="map-remainder"
       links={remainderLinks} visible={remainderVisible} onToggle={setRemainderVisible} {...{ path, remoteImages }} />}
     {typeof menu === 'object' && <MarkdownMenu items={contextItems} close={closeMenu} point={menu} nativeStyle />}
     {equationNode && <MindMapEquation initial={readEquation(equationNode.getData('ymdEquation'))}
@@ -1537,17 +1482,12 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, remoteImage
     {audioParent && <MindMapRecorder title={String(audioParent.getData('text') ?? '')}
       close={() => setAudioParent(undefined)} save={(audio, duration) => addRecordedAudio(audioParent, audio, duration)} />}
     {taskTopic && taskSource && <MindMapTask initial={initialTask} notice={notice}
-      skipClosed={calendar?.enabled === true} openCalendar={openCalendar}
       title={taskSource.data.text ?? ''} topics={taskTopics(taskTree, taskTopic)}
       close={() => openTask()} save={task => {
-        const dateChanged = !!task && (task.start !== initialTask?.start || task.due !== initialTask?.due || task.duration !== initialTask?.duration)
-        const next = task && dateChanged && calendar?.enabled ? editWorkDates(task, initialTask, days) : task
-        if (next === undefined) { setNotice('所选日期范围内没有可用的工作日。'); return }
-        const schedule = !!next && (dateChanged || JSON.stringify(next.dependencies) !== JSON.stringify(initialTask?.dependencies))
-        if (updateTasks(new Map([[taskTopic, next]]), schedule)) setTaskTopic(undefined)
+        const target = engine.current?.renderer.findNodeByUid(taskTopic)
+        if (target) writeTask(target, task, null)
+        setTaskTopic(undefined)
       }} />}
-    {calendarOpen && <MindMapWorkCalendar initial={calendar} notice={notice} save={saveCalendar}
-      close={() => { setNotice(''); setCalendarOpen(false) }} />}
     {calloutText && <MindMapCalloutText initial={calloutText.note.data.text} add={calloutText.add}
       close={() => setCalloutText(undefined)} save={saveCalloutText} />}
     {linkEditor && <MindMapLink

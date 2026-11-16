@@ -1,13 +1,18 @@
 import { useLayoutEffect, useRef, useState } from 'react'
 import { paneWidths } from '../shared/contracts'
 
+const panes = {
+  sidebar: { variable: '--sidebar-user-width', selector: '.window', label: '调整文件栏宽度' },
+  outline: { variable: '--outline-user-width', selector: '.document-editing', label: '调整文档目录宽度' },
+  map: { variable: '--map-user-width', selector: '.map-body', label: '调整思维导图右栏宽度' },
+}
+
 export function PaneResize({ pane, side, apply }: { pane: keyof typeof paneWidths; side: 'left' | 'right'; apply: (width: number) => void }) {
   const handle = useRef<HTMLDivElement>(null)
   const gesture = useRef<{ x: number; width: number; value: number; owner: HTMLElement; previous: string } | undefined>(undefined)
   const [measured, setMeasured] = useState<number>()
   const { min, max } = paneWidths[pane]
-  const variable = pane === 'sidebar' ? '--sidebar-user-width' : '--outline-user-width'
-  const selector = pane === 'sidebar' ? '.window' : '.document-editing'
+  const { variable, selector, label } = panes[pane]
   const direction = side === 'left' ? 1 : -1
   const clamp = (value: number, owner: HTMLElement) => Math.min(max, Math.max(min, Math.min(
     Math.round(owner.clientWidth * (pane === 'sidebar' ? .52 : .5)), Math.round(value),
@@ -33,7 +38,7 @@ export function PaneResize({ pane, side, apply }: { pane: keyof typeof paneWidth
   }
 
   return <div ref={handle} className="pane-resize" data-side={side} role="separator" aria-orientation="vertical" tabIndex={0}
-    aria-label={pane === 'sidebar' ? '调整文件栏宽度' : '调整文档目录宽度'}
+    aria-label={label}
     aria-valuemin={min} aria-valuemax={max} aria-valuenow={measured}
     onPointerDown={event => {
       const owner = event.currentTarget.closest<HTMLElement>(selector)

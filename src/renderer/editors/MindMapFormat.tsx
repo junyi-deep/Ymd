@@ -1,4 +1,5 @@
 import { GitBranch, LayoutGrid, ListOrdered, Palette as PaletteIcon, SlidersHorizontal, X } from 'lucide-react'
+import { MindMapFontPicker } from './MindMapFontPicker'
 import type MindMap from 'simple-mind-map'
 import { branchStructure, mapLayouts, mapTheme, palettes, type MapSettings, type Palette, type Structure } from './mapAppearance'
 import { attachedTopic, numberingPatterns, readNumbering, type NumberingEdit, type NumberingPattern } from './mapNumbering'
@@ -12,7 +13,7 @@ const topics = [
 const colorValue = (value: unknown, fallback: string) => typeof value === 'string' && /^#[0-9a-f]{6}$/i.test(value) ? value : fallback
 
 export function MindMapFormat({ tab, settings, node, selected, version, dark, branchDepth, change, onTab, close, style, structure, editNumbering }: {
-  tab: 'map' | 'topic'
+  tab: 'theme' | 'style'
   settings: MapSettings
   node?: MapNode
   selected: MapNode[]
@@ -20,7 +21,7 @@ export function MindMapFormat({ tab, settings, node, selected, version, dark, br
   dark: boolean
   branchDepth?: number
   change: (patch: Partial<MapSettings>) => void
-  onTab: (tab: 'map' | 'topic') => void
+  onTab: (tab: 'theme' | 'style') => void
   close: () => void
   style: (key: string, value: unknown) => void
   structure: (value: Structure | undefined) => void
@@ -36,13 +37,13 @@ export function MindMapFormat({ tab, settings, node, selected, version, dark, br
   const numbered = configs.filter(config => config?.pattern)
   const tiered = numbered.filter(config => config?.tiered).length
   const restarted = numbered.filter(config => config?.fixedIndex === 0).length
-  return <aside className="map-format" aria-label={tab === 'topic' && node ? '主题格式 ' + (data.text || '未命名') : '思维导图格式'} data-version={version}>
+  return <aside className="map-format" aria-label={tab === 'style' && node ? '主题格式 ' + (data.text || '未命名') : '思维导图格式'} data-version={version}>
     <header><strong>格式</strong><button className="icon-button" aria-label="收起格式面板" onClick={close}><X size={16} /></button></header>
     <div className="segments map-format-tabs">
-      <button type="button" aria-pressed={tab === 'map'} onClick={() => onTab('map')}><LayoutGrid size={14} />导图</button>
-      <button type="button" aria-pressed={tab === 'topic'} onClick={() => onTab('topic')}><SlidersHorizontal size={14} />主题</button>
+      <button type="button" aria-pressed={tab === 'theme'} onClick={() => onTab('theme')}><LayoutGrid size={14} />主题</button>
+      <button type="button" aria-pressed={tab === 'style'} onClick={() => onTab('style')}><SlidersHorizontal size={14} />样式</button>
     </div>
-    {tab === 'map' ? <>
+    {tab === 'theme' ? <>
       <section><h3><LayoutGrid size={15} />结构</h3>
         <div className="map-layouts">{mapLayouts.map(([value, label]) => <button key={value} type="button"
           aria-pressed={settings.layout === value} title={label} onClick={() => change({ layout: value })}>
@@ -54,36 +55,44 @@ export function MindMapFormat({ tab, settings, node, selected, version, dark, br
           {palette.colors.map(color => <i key={color} style={{ backgroundColor: color }} />)}
         </button>)}</div>
         <label>彩色分支<input type="checkbox" checked={settings.colored} onChange={event => change({ colored: event.target.checked })} /></label>
-        <label>画布背景<input type="color" value={colorValue(settings.background, '#fafbfc')} onChange={event => change({ background: event.target.value })} /></label>
-        {settings.background && <button className="tool-button" onClick={() => change({ background: undefined })}>恢复跟随外观</button>}
+        <label>画布背景<input type="color" value={colorValue(settings.background, dark ? '#252629' : '#fafbfc')}
+          onChange={event => change({ background: event.target.value })} /></label>
+        <div className="map-background-presets" role="group" aria-label="预设背景色">
+          {([['默认', undefined], ['白色', '#fafbfc'], ['暖纸', '#faf3e5'], ['浅蓝', '#e8f0fc'],
+            ['深灰', '#252629'], ['深蓝', '#17243a'], ['毛玻璃', 'transparent']] as const).map(([label, value]) =>
+            <button className="tool-button" type="button" key={label} aria-label={label} title={label}
+              aria-pressed={settings.background === value} onClick={() => change({ background: value })}>
+              {value && value !== 'transparent' ? <i style={{ backgroundColor: value }} /> : label}
+            </button>)}
+        </div>
+        {settings.background === 'transparent' && <p className="map-format-note">玻璃效果跟随全局窗口透明度。</p>}
       </section>
       <section><h3><SlidersHorizontal size={15} />样式</h3>
-        <label>全局字体<select value={settings.font} onChange={event => change({ font: event.target.value })}><option value="system-ui">系统字体</option><option value="serif">衬线</option><option value="monospace">等宽</option></select></label>
+        <MindMapFontPicker label="全局字体" value={settings.font} change={font => change({ font })} />
         <label>分支线宽<input type="range" min="1" max="8" value={settings.lineWidth} onChange={event => change({ lineWidth: Number(event.target.value) })} /></label>
         <label>分支线型<select value={settings.lineStyle ?? 'curve'} onChange={event => change({ lineStyle: event.target.value as MapSettings['lineStyle'] })}>
           <option value="curve">曲线</option><option value="straight">折线</option><option value="direct">直线</option></select></label>
         <label>紧凑排列<input type="checkbox" checked={!!settings.compact} onChange={event => change({ compact: event.target.checked })} /></label>
       </section>
     </> : node ? <>
-      <section><h3><LayoutGrid size={15} />结构</h3>
-        <label>{canvasRoot ? '画布结构' : '分支结构'}<select
-          value={canvasRoot ? settings.layout : branchStructure(data.ymdStructure) ?? ''}
-          onChange={event => structure(branchStructure(event.target.value))}>
-          {!canvasRoot && <option value="">继承父级</option>}
+      {!canvasRoot && <section><h3><LayoutGrid size={15} />结构</h3>
+        <label>分支结构<select value={branchStructure(data.ymdStructure) ?? ''} onChange={event => structure(branchStructure(event.target.value))}>
+          <option value="">继承父级</option>
           {mapLayouts.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
         </select></label>
-      </section>
+      </section>}
       <section><h3><LayoutGrid size={15} />形状</h3>
         <label>主题形状<select value={typeof data.shape === 'string' ? data.shape : 'rectangle'} onChange={event => style('shape', event.target.value)}>
           {topics.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
         </select></label>
-        <label>填充<input type="color" value={colorValue(data.fillColor, colorValue(topicTheme.fillColor, theme.backgroundColor))} onChange={event => style('fillColor', event.target.value)} /></label>
+        <label>填充<input type="color" value={colorValue(data.fillColor, colorValue(topicTheme.fillColor, colorValue(theme.backgroundColor, '#fafbfc')))} onChange={event => style('fillColor', event.target.value)} /></label>
         <label>边框颜色<input type="color" value={colorValue(data.borderColor, '#758190')} onChange={event => style('borderColor', event.target.value)} /></label>
         <label>边框宽度<input type="range" min="0" max="8" value={Number(data.borderWidth ?? 0)} onChange={event => style('borderWidth', Number(event.target.value))} /></label>
         <label>边框线型<select value={String(data.borderDasharray ?? 'none')} onChange={event => style('borderDasharray', event.target.value)}>
           <option value="none">实线</option><option value="6,4">虚线</option><option value="2,3">点线</option></select></label>
       </section>
       <section><h3><SlidersHorizontal size={15} />文字</h3>
+        <MindMapFontPicker label="主题字体" value={String(data.fontFamily ?? topicTheme.fontFamily)} change={value => style('fontFamily', value)} />
         <label>字号<input type="number" min="10" max="72" value={Number(data.fontSize ?? topicTheme.fontSize)}
           onChange={event => { const size = event.target.valueAsNumber; if (size >= 10 && size <= 72) style('fontSize', size) }} /></label>
         <label>文字颜色<input type="color" value={colorValue(data.color, topicTheme.color)} onChange={event => style('color', event.target.value)} /></label>

@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from 'react'
 import { ArrowLeft, HardDrive, Info, Keyboard, Palette, SlidersHorizontal } from 'lucide-react'
-import { searchEngines, type Entry, type Preferences, type SearchEngine, type UpdateProxy, type UpdateProxyInput, type VersionStatus } from '../shared/contracts'
+import { markdownPageWidths, recentFilesLimit, searchEngines, type StorageDirectory, type Entry, type Preferences, type SearchEngine, type UpdateProxy, type UpdateProxyInput, type VersionStatus } from '../shared/contracts'
 import { UpdateProxySettings } from './UpdateProxySettings'
 import { ShortcutSettings } from './ShortcutSettings'
 import { appShortcuts, shortcutLabel, shortcutValue } from '../shared/shortcuts'
@@ -9,12 +9,12 @@ const pages = [
   { label: '通用', icon: SlidersHorizontal },
   { label: '外观', icon: Palette },
   { label: '快捷键', icon: Keyboard },
-  { label: '文档库', icon: HardDrive },
+  { label: '存储', icon: HardDrive },
   { label: '关于', icon: Info },
 ] as const
 
 function Row({ label, detail, children }: { label: string; detail?: string; children?: ReactNode }) {
-  return <div className="settings-row"><div>{label}{detail && <p>{detail}</p>}</div>{children}</div>
+  return <div className="settings-row"><div><span>{label}</span>{detail && <p>{detail}</p>}</div>{children}</div>
 }
 
 function Choices<T extends string>({ value, choices, onChange }: {
@@ -26,7 +26,7 @@ function Choices<T extends string>({ value, choices, onChange }: {
     <button key={key} aria-pressed={value === key} onClick={() => onChange(key)}>{label}</button>)}</div>
 }
 
-export function Settings({ preferences, platform, library, windowsAcrylic, macReducesTransparency, initialPage, version, release, checking, updateProxy, onSaveUpdateProxy, onCheckUpdates, onDownloadUpdate, onInstallUpdate, onOpenRelease, onOpenDirectory, onChange, onReturn, onLibraryChange }: {
+export function Settings({ preferences, platform, library, windowsAcrylic, macReducesTransparency, initialPage, version, release, checking, updateProxy, onSaveUpdateProxy, onCheckUpdates, onDownloadUpdate, onInstallUpdate, onOpenRelease, onOpenDirectory, onChange, onReturn, onLibraryChange, defaultStickerDirectory, onStorageChange, onOpenStorage }: {
   preferences: Preferences
   platform: string
   library: Entry
@@ -44,6 +44,9 @@ export function Settings({ preferences, platform, library, windowsAcrylic, macRe
   onOpenRelease: (url: string) => void
   onOpenDirectory: () => void
   onLibraryChange: (reset?: boolean) => void
+  defaultStickerDirectory: string
+  onStorageChange: (kind: StorageDirectory, reset?: boolean) => void
+  onOpenStorage: (kind: StorageDirectory) => void
   onChange: (preferences: Partial<Preferences>) => void
   onReturn: () => void
 }) {
@@ -68,8 +71,9 @@ export function Settings({ preferences, platform, library, windowsAcrylic, macRe
         {page === '快捷键' ? <ShortcutSettings platform={platform} overrides={preferences.shortcuts}
           onChange={shortcuts => onChange({ shortcuts })} /> : <>
         <h1>{page}</h1>
-        <div className="settings-group">
-          {page === '外观' && <>
+        {page === '外观' ? <>
+          <h2 className="settings-group-title">公共</h2>
+          <div className="settings-group">
             <Row label="外观"><Choices value={preferences.theme} choices={ [['system','跟随系统'], ['light','浅色'], ['dark','深色']] }
               onChange={theme => onChange({ theme })} /></Row>
             <Row label="透明窗口背景" detail={macReducesTransparency
@@ -96,12 +100,42 @@ export function Settings({ preferences, platform, library, windowsAcrylic, macRe
             </Row>
             <Row label="界面字号"><Choices value={preferences.size} choices={ [['small','小'], ['normal','标准'], ['large','大']] }
               onChange={size => onChange({ size })} /></Row>
+          </div>
+          <h2 className="settings-group-title">Markdown</h2>
+          <div className="settings-group">
             <Row label="文档主题"><Choices value={preferences.documentTheme} choices={ [['classic','标准'], ['paper','纸张'], ['mono','等宽']] }
               onChange={documentTheme => onChange({ documentTheme })} /></Row>
             <Row label="文档目录位置"><Choices value={preferences.markdownOutline.position} choices={ [['left','左侧'], ['right','右侧']] }
               onChange={position => onChange({ markdownOutline: { ...preferences.markdownOutline, position } })} /></Row>
+            <Row label="代码块显示行号">
+              <button className="switch" role="switch" aria-label="代码块显示行号" aria-checked={preferences.codeBlocks.lineNumbers}
+                onClick={() => onChange({ codeBlocks: { ...preferences.codeBlocks, lineNumbers: !preferences.codeBlocks.lineNumbers } })} />
+            </Row>
+            <Row label="代码块自动换行">
+              <button className="switch" role="switch" aria-label="代码块自动换行" aria-checked={preferences.codeBlocks.wrap}
+                onClick={() => onChange({ codeBlocks: { ...preferences.codeBlocks, wrap: !preferences.codeBlocks.wrap } })} />
+            </Row>
             <div className="theme-preview"><article className="theme-preview-paper"><h2>写作预览</h2><p>一段包含<strong>重点</strong>和 <code>Markdown</code> 的正文。</p><blockquote>文档保存在本机。</blockquote></article></div>
-          </>}
+          </div>
+          <h2 className="settings-group-title">大纲</h2>
+          <div className="settings-group">
+            <Row label="大纲页宽"><Choices value={preferences.outlinePageWidth} choices={markdownPageWidths}
+              onChange={outlinePageWidth => onChange({ outlinePageWidth })} /></Row>
+            <Row label="展开文档正文">
+              <button className="switch" type="button" role="switch" aria-label="默认展开大纲正文" aria-checked={preferences.outlineRemainderVisible}
+                onClick={() => onChange({ outlineRemainderVisible: !preferences.outlineRemainderVisible })} />
+            </Row>
+          </div>
+          <h2 className="settings-group-title">思维导图</h2>
+          <div className="settings-group">
+            <Row label="小地图位置"><Choices value={preferences.mapOverview.position} choices={ [['left','左下角'], ['right','右下角']] }
+              onChange={position => onChange({ mapOverview: { ...preferences.mapOverview, position } })} /></Row>
+            <Row label="默认打开小地图">
+              <button className="switch" type="button" role="switch" aria-label="默认打开小地图" aria-checked={preferences.mapOverview.visible}
+                onClick={() => onChange({ mapOverview: { ...preferences.mapOverview, visible: !preferences.mapOverview.visible } })} />
+            </Row>
+          </div>
+        </> : <div className="settings-group">
           {page === '通用' && <>
             <Row label="自动保存" detail="停止编辑后自动保存在本机。磁盘版本冲突时保留草稿。">
               <button className="switch" role="switch" aria-label="自动保存" aria-checked={preferences.autoSave}
@@ -121,14 +155,6 @@ export function Settings({ preferences, platform, library, windowsAcrylic, macRe
                   ...(!preferences.autoDownloadUpdates ? { autoCheckUpdates: true } : {}) })} />
             </Row>
             <UpdateProxySettings proxy={updateProxy} save={onSaveUpdateProxy} disabled={checking || downloading || installing} />
-            <Row label="代码块显示行号">
-              <button className="switch" role="switch" aria-label="代码块显示行号" aria-checked={preferences.codeBlocks.lineNumbers}
-                onClick={() => onChange({ codeBlocks: { ...preferences.codeBlocks, lineNumbers: !preferences.codeBlocks.lineNumbers } })} />
-            </Row>
-            <Row label="代码块自动换行">
-              <button className="switch" role="switch" aria-label="代码块自动换行" aria-checked={preferences.codeBlocks.wrap}
-                onClick={() => onChange({ codeBlocks: { ...preferences.codeBlocks, wrap: !preferences.codeBlocks.wrap } })} />
-            </Row>
             <Row label="网页搜索" detail="在 Markdown 中选中文字，右键可在浏览器中搜索。">
               <select aria-label="网页搜索" value={preferences.searchEngine}
                 onChange={event => onChange({ searchEngine: event.target.value as SearchEngine })}>
@@ -137,7 +163,7 @@ export function Settings({ preferences, platform, library, windowsAcrylic, macRe
             </Row>
             <Row label="快捷新建" detail={quickNew || undefined}><button className="tool-button" onClick={() => setPage('快捷键')}>设置快捷键</button></Row>
           </>}
-          {page === '文档库' && <>
+          {page === '存储' && <>
             <Row label="我的文档" detail={library.path}>
               <div className="setting-actions">
                 <button className="tool-button" onClick={onOpenDirectory}>显示文件夹</button>
@@ -145,14 +171,24 @@ export function Settings({ preferences, platform, library, windowsAcrylic, macRe
                 <button className="tool-button" onClick={() => onLibraryChange()}>更改位置…</button>
               </div>
             </Row>
-            <Row label="本机文件显示条数" detail="文件和文件夹合计，最多显示 100 条。">
-              <input className="setting-count" type="number" min={1} max={100} aria-label="本机文件显示条数"
+            {([
+              ['attachments', '附件目录', preferences.attachmentDirectory, '默认保存在各文档旁的 assets 文件夹。'],
+              ['stickers', '思维导图贴纸目录', preferences.stickerDirectory, defaultStickerDirectory],
+            ] as const).map(([kind, label, custom, fallback]) => <Row key={kind} label={label} detail={custom ?? fallback}>
+              <div className="setting-actions">
+                {(custom || kind === 'stickers') && <button className="tool-button" onClick={() => onOpenStorage(kind)}>显示文件夹</button>}
+                {custom && <button className="tool-button" onClick={() => onStorageChange(kind, true)}>恢复默认</button>}
+                <button className="tool-button" onClick={() => onStorageChange(kind)}>更改位置…</button>
+              </div>
+            </Row>)}
+            <Row label="本机文件显示条数" detail="文件和文件夹合计，最多显示 500 条。">
+              <input className="setting-count" type="number" min={1} max={recentFilesLimit} aria-label="本机文件显示条数"
                 key={preferences.recentLimit} defaultValue={preferences.recentLimit}
                 onBlur={event => {
                   const input = event.currentTarget
                   const value = input.valueAsNumber
                   if (!Number.isFinite(value)) { input.value = String(preferences.recentLimit); return }
-                  const recentLimit = Math.min(100, Math.max(1, Math.round(value)))
+                  const recentLimit = Math.min(recentFilesLimit, Math.max(1, Math.round(value)))
                   input.value = String(recentLimit)
                   if (recentLimit !== preferences.recentLimit) onChange({ recentLimit })
                 }} onKeyDown={event => { if (event.key === 'Enter') event.currentTarget.blur() }} />
@@ -181,7 +217,7 @@ export function Settings({ preferences, platform, library, windowsAcrylic, macRe
               <button className="tool-button" onClick={() => onOpenRelease('https://github.com/junyi-deep/Ymd')}>在 GitHub 查看</button>
             </div></Row>
           </>}
-        </div></>}
+        </div>}</>}
       </div>
     </div>
   </>

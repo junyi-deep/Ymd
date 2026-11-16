@@ -9,7 +9,19 @@ export type Theme = 'system' | 'light' | 'dark'
 export type MarkdownPageWidth = 'narrow' | 'normal' | 'wide'
 export const markdownPageWidths = [['narrow', '窄'], ['normal', '标准'], ['wide', '宽']] as const
 export type CodeBlockPreferences = { lineNumbers: boolean; wrap: boolean }
-export const paneWidths = { sidebar: { min: 160, max: 440 }, outline: { min: 152, max: 420 } } as const
+export const paneWidths = { sidebar: { min: 160, max: 440 }, outline: { min: 152, max: 420 }, map: { min: 188, max: 480 } } as const
+export const recentFilesLimit = 500
+export type StorageDirectory = 'attachments' | 'stickers'
+export interface MapCanvasSettings {
+  layout: string
+  palette: 'ocean' | 'coral' | 'night' | 'graphite'
+  background?: string
+  font: string
+  lineWidth: number
+  lineStyle?: 'curve' | 'straight' | 'direct'
+  compact?: boolean
+  colored: boolean
+}
 export type SearchEngine = 'google' | 'baidu' | 'bing' | 'duckduckgo'
 
 export const searchEngines: Record<SearchEngine, { label: string; url: string; parameter: string }> = {
@@ -40,6 +52,7 @@ export interface Entry {
   path: string
   name: string
   kind: FileKind | 'directory'
+  lastOpened?: number
 }
 
 export const documentHistoryLimit = 10
@@ -92,6 +105,11 @@ export interface Preferences {
   solidBackground: boolean
   windowTransparency: number
   libraryDirectory?: string
+  attachmentDirectory?: string
+  attachmentDirectories?: string[]
+  stickerDirectory?: string
+  expandedFolders: string[]
+  hiddenLocalEntries: string[]
   recentLimit: number
   markdownOutline: MarkdownOutlinePreferences
   sidebarWidth?: number
@@ -99,6 +117,9 @@ export interface Preferences {
   outlinePageWidth: MarkdownPageWidth
   outlineRemainderVisible: boolean
   mapRemainderVisible: boolean
+  mapPanelWidth?: number
+  mapOverview: { visible: boolean; position: 'left' | 'right' }
+  mapDefaults: Partial<MapCanvasSettings>
   codeBlocks: CodeBlockPreferences
   animations: boolean
   documentTheme: 'classic' | 'paper' | 'mono'
@@ -118,11 +139,12 @@ export interface MarkdownOutlinePreferences {
 }
 
 export const defaultPreferences: Preferences = {
-  theme: 'system', size: 'normal', solidBackground: false, windowTransparency: 80, recentLimit: 10, animations: true, documentTheme: 'classic',
+  theme: 'system', size: 'normal', solidBackground: false, windowTransparency: 80, recentLimit: 50, expandedFolders: [], hiddenLocalEntries: [], animations: true, documentTheme: 'classic',
   markdownOutline: { position: 'right', numbering: 'none', visible: false },
   markdownPageWidth: 'normal', outlinePageWidth: 'normal', outlineRemainderVisible: true, mapRemainderVisible: true,
+  mapOverview: { visible: false, position: 'left' }, mapDefaults: {},
   codeBlocks: { lineNumbers: false, wrap: false },
-  autoSave: true, remoteImages: false, autoCheckUpdates: false, autoDownloadUpdates: false, searchEngine: 'google', shortcuts: {},
+  autoSave: true, remoteImages: false, autoCheckUpdates: true, autoDownloadUpdates: false, searchEngine: 'google', shortcuts: {},
 }
 
 export function windowMaterialFor(preferences: Preferences, platform: string, windowsAcrylic: boolean, macReducesTransparency: boolean) {
@@ -157,7 +179,7 @@ export function markdownImageExtension(name: string, type = '') {
 
 export interface Desktop {
   initialize(): Promise<{ library: Entry; recent: Entry[]; preferences: Preferences; platform: string; windowsAcrylic: boolean; macReducesTransparency: boolean; version: string; updateProxy: UpdateProxy; release: VersionStatus;
-    initialFile?: DocumentFile; recoveries: RecoveryEntry[]; documentHistory: Entry[] }>
+    initialFile?: DocumentFile; recoveries: RecoveryEntry[]; documentHistory: Entry[]; defaultStickerDirectory: string }>
   list(path: string): Promise<Entry[]>
   chooseLibraryDirectory(): Promise<Entry | null>
   resetLibraryDirectory(): Promise<Entry>
@@ -165,6 +187,10 @@ export interface Desktop {
   listRecent(): Promise<Entry[]>
   touchRecent(path: string): Promise<Entry[]>
   removeRecent(path: string): Promise<Entry[]>
+  clearRecent(): Promise<Entry[]>
+  reorderRecent(path: string, target: string, after: boolean): Promise<Entry[]>
+  setFolderExpanded(path: string, expanded: boolean): Promise<void>
+  hideLocalEntry(path: string): Promise<void>
   recordDocumentOpen(path: string): Promise<void>
   openHistoryDocument(path: string): Promise<DocumentFile | null>
   onDocumentHistory(callback: (entries: Entry[]) => void): () => void
@@ -214,6 +240,11 @@ export interface Desktop {
   saveCopy(path: string, text: string): Promise<DocumentFile | null>
   reveal(path: string, directory?: boolean): Promise<void>
   openLibraryDirectory(): Promise<void>
+  changeStorageDirectory(kind: StorageDirectory, reset?: boolean): Promise<void>
+  openStorageDirectory(kind: StorageDirectory): Promise<void>
+  listMapStickers(): Promise<string[]>
+  readMapSticker(name: string): Promise<string | null>
+  importMapStickers(): Promise<string[]>
   checkForUpdates(): Promise<VersionStatus>
   downloadUpdate(): Promise<void>
   installUpdate(): Promise<void>

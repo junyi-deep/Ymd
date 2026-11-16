@@ -1,5 +1,8 @@
 import { useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type KeyboardEvent, type MouseEvent } from 'react'
-import { ArrowLeft, ArrowRight, BetweenHorizontalStart, ChevronRight, Plus, Redo2, Undo2 } from 'lucide-react'
+import { BetweenHorizontalStart, Bold, ChevronRight, Code2, Italic, Plus, Strikethrough, Underline } from 'lucide-react'
+import { createPortal } from 'react-dom'
+import type { DocumentViewPosition } from './viewPosition'
+import { colorSelection, formatSelection, outlineTextColors, renderedSelection } from './outlineTextStyle'
 import type { Links } from 'marked'
 import { markdownPageWidths, type MarkdownPageWidth } from '../../shared/contracts'
 import { DocumentRemainder } from './DocumentRemainder'
@@ -14,7 +17,8 @@ const typingTypes = new Set(['insertText', 'deleteContentBackward', 'deleteConte
 const blockTitle = (node: Block) => node.text.split('\n')[0].trim() || '空块'
 const cursor = (id: string, start: number, end = start): OutlineCaret => ({ id, start, end })
 
-export function OutlineEditor({ text, name, path, platform, remoteImages, sessions, width, setWidth, remainderVisible, setRemainderVisible, onChange }: {
+export function OutlineEditor({ text, name, path, platform, remoteImages, sessions, width, setWidth, remainderVisible, setRemainderVisible, onChange, position }: {
+  position: DocumentViewPosition
   text: string; name: string; path: string; platform: string; remoteImages: boolean; sessions: Map<string, OutlineSession>
   width: MarkdownPageWidth; setWidth: (value: MarkdownPageWidth) => void
   remainderVisible: boolean; setRemainderVisible: (visible: boolean) => void; onChange: (text: string) => void
@@ -28,6 +32,7 @@ export function OutlineEditor({ text, name, path, platform, remoteImages, sessio
   const [drop, setDrop] = useState<OutlineDrop>()
   const [widthMenu, setWidthMenu] = useState(false)
   const [menu, setMenu] = useState<{ id: string; x: number; y: number }>()
+  const [textMenu, setTextMenu] = useState<{ node: Block; start: number; end: number; editing: boolean; x: number; y: number }>()
   const references = useMemo(() => outlineReferences(text), [text])
   const links = useMemo<Links | undefined>(() => references ? JSON.parse(references) : undefined, [references])
   const focus = useRef<OutlineCaret | undefined>(undefined)
@@ -61,8 +66,12 @@ export function OutlineEditor({ text, name, path, platform, remoteImages, sessio
       }
       inputBefore.current = cursor(input.dataset.block, input.selectionStart, input.selectionEnd)
     }
+    if (position.outline !== undefined) view.scrollTop = position.outline
     view.addEventListener('beforeinput', before)
-    return () => view.removeEventListener('beforeinput', before)
+    return () => {
+      position.outline = view.scrollTop
+      view.removeEventListener('beforeinput', before)
+    }
   }, [])
 
   useLayoutEffect(() => {
@@ -75,9 +84,9 @@ export function OutlineEditor({ text, name, path, platform, remoteImages, sessio
     focus.current = undefined
   }, [blocks, collapsed, editing, scope])
 
-  const breadcrumb = scope ? blockPath(blocks, scope) : []
+  const breadcrumb = useMemo(() => scope ? blockPath(blocks, scope) : [], [blocks, scope])
   const focused = breadcrumb.at(-1)
-  const visible = flattenBlocks(focused ? [focused] : blocks, collapsed)
+  const visible = useMemo(() => flattenBlocks(focused ? [focused] : blocks, collapsed), [focused, blocks, collapsed])
   const selectedSet = new Set(selected)
 
   function caret() {
@@ -165,12 +174,7 @@ export function OutlineEditor({ text, name, path, platform, remoteImages, sessio
     syncCollapsed(next)
   }
 
-  function setBranch(id?: string, clear = true, remember = clear) {
-    if (remember && session.scope !== id) {
-      session.branchBack.push(session.scope)
-      if (session.branchBack.length > historyLimit) session.branchBack.shift()
-      session.branchForward.length = 0
-    }
+  function setBranch(id?: string, clear = true) {
     session.scope = id
     setScope(id)
     if (clear) {
@@ -182,22 +186,6 @@ export function OutlineEditor({ text, name, path, platform, remoteImages, sessio
       if (id && collapsed.has(id)) collapse(id, false)
       root.current?.scrollTo({ top: 0 })
       root.current?.focus({ preventScroll: true })
-    }
-  }
-
-  function validBranch(id?: string) {
-    return id !== scope && (id === undefined || !!locateBlock(blocks, id))
-  }
-
-  function navigateBranch(forward: boolean) {
-    const source = forward ? session.branchForward : session.branchBack
-    const destination = forward ? session.branchBack : session.branchForward
-    while (source.length) {
-      const next = source.pop()
-      if (!validBranch(next)) continue
-      destination.push(scope)
-      setBranch(next, true, false)
-      return
     }
   }
 
@@ -474,6 +462,24 @@ export function OutlineEditor({ text, name, path, platform, remoteImages, sessio
     }, { after: cursor(node.id, 0) })
   }
 
+  function selectedTextMenu(event: MouseEvent<HTMLElement>, node: Block) {
+    const target = event.currentTarget
+    const editing = target instanceof HTMLTextAreaElement
+    const range = editing ? [target.selectionStart, target.selectionEnd] : renderedSelection(node.text, target)
+    if (!range || range[0] === range[1]) return
+    event.preventDefault()
+    setTextMenu({ node, start: range[0], end: range[1], editing, x: event.clientX, y: event.clientY })
+  }
+
+  function applyTextStyle(updated: ReturnType<typeof formatSelection>) {
+    if (!textMenu || !updated) return
+    const { node, start, end, editing } = textMenu
+    const next = editBlockText(session.blocks, node.id, updated.text)
+    if (!next) return
+    document.getSelection()?.removeAllRanges()
+    change(next, { before: cursor(node.id, start, end), after: editing ? cursor(node.id, updated.start, updated.end) : undefined })
+  }
+
   function render(nodes: Block[]) {
     return <ul>{nodes.map(node => {
       const closed = collapsed.has(node.id)
@@ -528,6 +534,7 @@ export function OutlineEditor({ text, name, path, platform, remoteImages, sessio
                   structure(event, node)
                 }}
                 onPointerDown={() => { typing.current = undefined }}
+                onContextMenu={event => selectedTextMenu(event, node)}
                 onCompositionStart={event => {
                   typing.current = undefined
                   composition.current = { id: node.id, before: cursor(node.id, event.currentTarget.selectionStart, event.currentTarget.selectionEnd), recorded: false }
@@ -536,7 +543,7 @@ export function OutlineEditor({ text, name, path, platform, remoteImages, sessio
                 onChange={event => type(event, node)} />
             : <div className="outline-markdown outline-preview" role="button" tabIndex={0} aria-label={'编辑块 ' + blockTitle(node)}
                 onMouseDown={event => { if (event.shiftKey || event.metaKey || event.ctrlKey) event.preventDefault() }}
-                onClick={event => preview(event, node)} onKeyDown={event => {
+                onClick={event => preview(event, node)} onContextMenu={event => selectedTextMenu(event, node)} onKeyDown={event => {
                   if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) {
                     event.preventDefault()
                     cursorTo(cursor(node.id, 0))
@@ -557,10 +564,6 @@ export function OutlineEditor({ text, name, path, platform, remoteImages, sessio
     onClick={event => { if (event.target instanceof Element && event.target.closest('a')) event.preventDefault() }}>
     <div className="outline-content">
       <div className="outline-toolbar" role="toolbar" aria-label="大纲工具栏">
-        <button className="icon-button" aria-label="后退" title="返回上一个分支" disabled={!session.branchBack.some(validBranch)}
-          onClick={() => navigateBranch(false)}><ArrowLeft size={16} /></button>
-        <button className="icon-button" aria-label="前进" title="前往下一个分支" disabled={!session.branchForward.some(validBranch)}
-          onClick={() => navigateBranch(true)}><ArrowRight size={16} /></button>
         <nav aria-label="大纲路径">
           {focused && <>
             <button className="tool-button" onClick={() => setBranch()}>{name.replace(/\.(?:md|markdown)$/i, '')}</button>
@@ -569,10 +572,6 @@ export function OutlineEditor({ text, name, path, platform, remoteImages, sessio
                 : <button className="tool-button" onClick={() => setBranch(node.id)}>{blockTitle(node)}</button>}</span>)}
           </>}
         </nav>
-        <button className="icon-button" aria-label="撤销块编辑" title="撤销" disabled={!session.undo.length}
-          onMouseDown={event => event.preventDefault()} onClick={() => restore(false)}><Undo2 size={16} /></button>
-        <button className="icon-button" aria-label="重做块编辑" title="重做" disabled={!session.redo.length}
-          onMouseDown={event => event.preventDefault()} onClick={() => restore(true)}><Redo2 size={16} /></button>
         <div className="menu-anchor">
           <button type="button" className="icon-button" title="页宽设置" aria-label="页宽设置" aria-haspopup="menu" aria-expanded={widthMenu}
             onClick={() => setWidthMenu(!widthMenu)}><BetweenHorizontalStart size={16} /></button>
@@ -586,10 +585,22 @@ export function OutlineEditor({ text, name, path, platform, remoteImages, sessio
       {remainder && <DocumentRemainder text={remainder} className="outline-surrounding" {...{ path, remoteImages, links }}
         visible={remainderVisible} onToggle={setRemainderVisible} />}
     </div>
-    {menu && <MarkdownMenu point={menu} nativeStyle close={() => setMenu(undefined)} items={[
+    {menu && createPortal(<MarkdownMenu point={menu} nativeStyle close={() => setMenu(undefined)} items={[
       { label: '聚焦此分支', run: () => setBranch(menu.id) },
       { label: '新增子块', run: () => addBlock(menu.id) },
       { label: '删除所选块', separator: true, run: () => remove(selected) },
-    ]} />}
+    ]} />, document.body)}
+    {textMenu && createPortal(<MarkdownMenu point={textMenu} nativeStyle close={() => setTextMenu(undefined)} items={[
+      ...([
+        ['加粗', Bold, '**', '**'], ['斜体', Italic, '*', '*'], ['下划线', Underline, '<u>', '</u>'],
+        ['删除线', Strikethrough, '~~', '~~'], ['行内代码', Code2, '`', '`'],
+      ] as const).map(([label, Icon, open, close]) => ({
+        label, icon: <Icon size={15} />, run: () => applyTextStyle(formatSelection(textMenu.node.text, textMenu.start, textMenu.end, open, close)),
+      })),
+      { label: '文字颜色', separator: true, children: outlineTextColors.map(([value, label]) => ({
+        label, icon: <span className={'outline-color-swatch ymd-text-' + value} />,
+        run: () => applyTextStyle(colorSelection(textMenu.node.text, textMenu.start, textMenu.end, value)),
+      })) },
+    ]} />, document.body)}
   </div>
 }

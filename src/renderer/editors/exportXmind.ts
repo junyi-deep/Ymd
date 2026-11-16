@@ -7,7 +7,6 @@ import { readTopicLink, topicLinkUrl, xmindAddressLink, type TopicLink } from '.
 import { calloutDefaults, calloutTopicId, readCallouts } from './mapCallouts'
 import { readTask, readTodo, type MapTask } from './mapTasks'
 import { exportTaskContent, taskExtension } from './xmindTasks'
-import { encodeXmindCalendar, readWorkCalendar } from './workCalendar'
 import { equationExtension, readEquation } from './mapEquation'
 import { numberingExtension, readNumbering } from './mapNumbering'
 
@@ -197,7 +196,6 @@ export async function exportXmind(sheets: Sheet[], active: string, dark: boolean
     }
 
     const rootTopic = topic(sheet.tree, 0, 0)
-    const calendar = readWorkCalendar(sheet.tree.data.ymdWorkCalendar)
     for (const { output, task } of tasks) {
       output.extensions = [...(output.extensions ?? []), { provider: taskExtension, content: exportTaskContent(task, ids) }]
     }
@@ -206,11 +204,9 @@ export async function exportXmind(sheets: Sheet[], active: string, dark: boolean
       return to ? [{ id: id(), class: 'relationship', end1Id: connection.source, end2Id: to, title: connection.title }] : []
     })
     const extensions = [
-      ...(calendar ? [encodeXmindCalendar(calendar, id)] : []),
       ...(sheet.settings.pitch ? [{ provider: pitchExtension, content: readPitchOptions(sheet.settings.pitch) }] : []),
     ]
     return { id: sheetId, class: 'sheet', title: sheet.title, rootTopic, relationships, topicPositioning: 'fixed',
-      ...(calendar ? { nonWorkingDaysSkipping: calendar.enabled ? 'skip' : 'include' } : {}),
       ...(extensions.length ? { extensions } : {}),
       style: { id: id(), properties: { 'svg:fill': theme.backgroundColor } } }
   })

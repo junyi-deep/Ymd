@@ -1,7 +1,9 @@
 import type { DelimiterType, MarkdownConfig } from '@lezer/markdown'
+import { colorOpening } from './outlineTextStyle'
 
 const highlight: DelimiterType = { resolve: 'Highlight', mark: 'HighlightMark' }
 const underline: DelimiterType = { resolve: 'Underline', mark: 'UnderlineMark' }
+const textColor: DelimiterType = { resolve: 'TextColor', mark: 'TextColorMark' }
 
 export const footnoteDefinition = /^\[\^([^\]\s]+)\]:[ \t]*/
 const footnoteReference = /^\[\^([^\]\s]+)\](?![:[(])/
@@ -15,7 +17,7 @@ export function markdownBody(source: string) {
 }
 
 export const typoraMarkdown: MarkdownConfig = {
-  defineNodes: ['Highlight', 'HighlightMark', 'Underline', 'UnderlineMark', 'FootnoteReference',
+  defineNodes: ['Highlight', 'HighlightMark', 'Underline', 'UnderlineMark', 'TextColor', 'TextColorMark', 'FootnoteReference',
     { name: 'FootnoteDefinition', block: true }],
   parseBlock: [{
     name: 'FootnoteDefinition',
@@ -58,6 +60,17 @@ export const typoraMarkdown: MarkdownConfig = {
       if (next !== 60) return -1
       if (context.slice(pos, pos + 3).toLowerCase() === '<u>') return context.addDelimiter(underline, pos, pos + 3, true, false)
       if (context.slice(pos, pos + 4).toLowerCase() === '</u>') return context.addDelimiter(underline, pos, pos + 4, false, true)
+      return -1
+    },
+  }, {
+    name: 'TextColor',
+    before: 'HTMLTag',
+    parse(context, next, pos) {
+      if (next !== 60) return -1
+      const tag = context.slice(pos, Math.min(context.end, pos + 34))
+      const open = colorOpening.exec(tag)
+      if (open) return context.addDelimiter(textColor, pos, pos + open[0].length, true, false)
+      if (tag.startsWith('</span>')) return context.addDelimiter(textColor, pos, pos + 7, false, true)
       return -1
     },
   }],

@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { cp, lstat, mkdir, link, open, unlink, readFile, readdir, realpath, rename, rm, stat, writeFile } from 'node:fs/promises'
 import path from 'node:path'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { markdownImageExtension, markdownImageExtensions, markdownImageLimits } from '../shared/contracts'
 import type { DocumentFile, Entry, FileKind, MarkdownImageAttachment, MarkdownImageUpload } from '../shared/contracts'
 
@@ -55,6 +56,8 @@ export class Files {
   private roots = new Set<string>()
   private singles = new Set<string>()
   private writes = new Map<string, Promise<unknown>>()
+  attachmentDirectory?: string
+  attachmentDirectories: string[] = []
 
   async library(directory: string) {
     await mkdir(directory, { recursive: true })
@@ -203,10 +206,10 @@ export class Files {
       }
       return { ...image, extension }
     })
-    const directory = path.join(path.dirname(original), 'assets')
-    await mkdir(directory, { recursive: true })
+    const directory = this.attachmentDirectory ?? path.join(path.dirname(original), 'assets')
+    if (!this.attachmentDirectory) await mkdir(directory, { recursive: true })
     const info = await lstat(directory)
-    if (!info.isDirectory() || info.isSymbolicLink()) throw new Error('附件目录无效。')
+    if (!info.isDirectory() || this.attachmentDirectory && await realpath(directory) !== directory) throw new Error('附件目录无效。')
     const paths: string[] = []
     const attachments: MarkdownImageAttachment[] = []
     try {
@@ -222,7 +225,10 @@ export class Files {
           await handle.close()
         }
         const label = path.parse(name).name.slice(0, 140).trim()
-        attachments.push({ label: label || '图像', source: 'assets/' + basename })
+        const relative = path.relative(path.dirname(original), target)
+        const source = path.isAbsolute(relative) ? pathToFileURL(target).href
+          : relative.split(path.sep).map(encodeURIComponent).join('/')
+        attachments.push({ label: label || '图像', source })
       }
       return attachments
     } catch (error) {
@@ -233,24 +239,64 @@ export class Files {
 
   async readImage(file: string, source: string) {
     const parent = path.dirname(await this.authorizedFile(file))
-    if (!source || source.length > 2048 || /[:\\\x00]/.test(source) || path.isAbsolute(source)) return null
-    const decoded = decodeURIComponent(source)
-    if (/[:\\\x00]/.test(decoded) || path.isAbsolute(decoded)) return null
-    const target = path.resolve(parent, decoded)
+    if (!source || source.length > 2048) return null
+    let target: string
+    if (source.startsWith('file:///')) target = fileURLToPath(source)
+    else {
+      const decoded = decodeURIComponent(source)
+      if (/[:\\\x00]/.test(decoded) || path.isAbsolute(decoded)) return null
+      target = path.resolve(parent, decoded)
+    }
     const canonical = await realpath(target).catch(() => null)
     if (!canonical) return null
     const relative = path.relative(parent, canonical)
     const underParent = relative && !path.isAbsolute(relative) && relative.split(path.sep).every(part => !part.startsWith('.'))
-    if (!underParent) {
+    if (!underParent && !this.attachmentDirectories.some(directory => containsPath(directory, canonical))) {
       const authorized = await this.resolve(canonical).catch(() => null)
       if (!authorized) return null
     }
+    return this.imageData(canonical)
+  }
+
+  async imageData(canonical: string) {
     const extension = markdownImageExtension(canonical)
     const mime = extension && markdownImageExtensions[extension]
     const info = mime && await stat(canonical).catch(() => null)
     if (!info || !info.isFile() || info.size > markdownImageLimits.fileBytes) return null
     const data = await readFile(canonical)
     return data.length <= markdownImageLimits.fileBytes ? `data:${mime};base64,${data.toString('base64')}` : null
+  }
+
+  async importStickers(directory: string, sources: string[]) {
+    checkImageCount(sources)
+    const contents = await Promise.all(sources.map(async source => {
+      const extension = markdownImageExtension(source)
+      const info = await stat(source)
+      if (!extension || !info.isFile()) throw new Error('请选择受支持的图片。')
+      checkImageSizes([info.size])
+      const bytes = await readFile(source)
+      if (!matchesImageFormat(bytes, markdownImageExtensions[extension])) throw new Error('贴纸图片格式无效。')
+      return { extension, name: path.parse(source).name.replace(/^\.+/, '') || '贴纸', bytes }
+    }))
+    checkImageSizes(contents.map(item => item.bytes.length))
+    const created: string[] = []
+    try {
+      for (const { extension, name, bytes } of contents) {
+        for (let index = 1; ; index++) {
+          const file = path.join(directory, name + (index === 1 ? '' : ' ' + index) + '.' + extension)
+          try {
+            await writeFile(file, bytes, { flag: 'wx', flush: true })
+            created.push(file)
+            break
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+          }
+        }
+      }
+    } catch (error) {
+      await Promise.allSettled(created.map(file => unlink(file)))
+      throw error
+    }
   }
 
   async duplicate(file: string, directory: string, text: string, keepName = false) {

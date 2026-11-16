@@ -105,7 +105,7 @@ export function MindMapZenTools({ platform, overrides, tool, onTool, appearance,
       </div>
     </div>
     <div className="map-zen-group">
-      <button type="button" className="icon-button" aria-label="贴纸与插图" title="贴纸与插图" aria-pressed={artOpen}
+      <button type="button" className="icon-button" aria-label="贴纸" title="贴纸" aria-pressed={artOpen}
         onClick={onArt}><Sticker size={16} /></button>
       <button type="button" className="icon-button" aria-label="格式" title="格式" aria-pressed={formatOpen}
         onClick={onFormat}><PanelRight size={16} /></button>
