@@ -75,7 +75,7 @@ declare module 'simple-mind-map' {
   export default class MindMap {
     static extendNodeDataNoStylePropList(fields: string[]): void
     static usePlugin(plugin: unknown): typeof MindMap
-    command: { originAddHistory(): void }
+    command: { originAddHistory(): void; pause(): void; recovery(): void }
     nodeInnerPrefixList: {
       name: string
       createNodeData: (context: { data: NodeData }) => [string, string | undefined]

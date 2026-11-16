@@ -1,5 +1,6 @@
 import { Uint8ArrayReader, ZipReader, type FileEntry } from '@zip.js/zip.js'
 import { markdownImageExtension, markdownImageExtensions } from '../../shared/contracts'
+import { equationExtension, readEquation } from './mapEquation'
 import { pitchExtension, readPitchOptions, readPitchTopic } from '../../shared/pitch'
 import { writeList, projectList, type Block } from './listProjection'
 import { audioTitle, readAudioNote } from './mapAudio'
@@ -166,6 +167,25 @@ export async function importXmind(data: ArrayBuffer) {
       if (/^(top|bottom|left|right)$/.test(align)) node.data.imgPlacement = align
     }
 
+    async function addEquation(node: MapData, latex: string, image: Record<string, unknown>) {
+      node.data.ymdEquation = latex
+      try {
+        const { previewEquation, equationImage } = await import('./renderMapEquation')
+        const preview = await previewEquation(latex)
+        const width = size(image.width) ?? preview.width
+        const height = size(image.height) ?? width * preview.height / preview.width
+        node.data.image = await equationImage(preview)
+        node.data.imageTitle = 'LaTeX 公式'
+        node.data.imageSize = { width, height, custom: true }
+        node.data.ymdOriginalImageSize = { width: preview.width, height: preview.height }
+        const align = string(image.align)
+        if (/^(top|bottom|left|right)$/.test(align)) node.data.imgPlacement = align
+      } catch {
+        await addImage(node, image)
+        unconverted.add('部分公式')
+      }
+    }
+
     function addAddress(node: MapData, href: unknown) {
       const address = xmindAddressLink(href)
       if (!address) return false
@@ -299,7 +319,15 @@ export async function importXmind(data: ArrayBuffer) {
         }
         if (extensions.some(extension => /task/i.test(string(extension.provider)) &&
           extension.provider !== taskExtension && extension.provider !== legacyTaskExtension)) unconverted.add('任务扩展属性')
-        await addImage(node, asRecord(raw.image))
+        const image = asRecord(raw.image)
+        const equation = extensions.find(extension => extension.provider === equationExtension)
+        const equationData = asRecord(equation?.content)
+        const latex = readEquation(equationData.content ?? records(equation?.content).find(field => field.name === 'content')?.content)
+        if (latex) await addEquation(node, latex, { ...image, src: image.src ?? equationData.imageSource })
+        else {
+          if (equation) unconverted.add('部分公式')
+          await addImage(node, image)
+        }
         const href = string(raw.href)
         const extension = extensions.find(extension => extension.provider === topicLinkExtension)
         const supplemental = records(extension?.content)[0]

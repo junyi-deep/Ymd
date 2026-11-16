@@ -1,5 +1,7 @@
 import type MindMap from 'simple-mind-map'
 import type { MapNode } from 'simple-mind-map'
+import { readAudioNote } from './mapAudio'
+import { readEquation } from './mapEquation'
 import { artTransferType, findArt, type MapArt } from './mapStickers'
 
 export const imagePlacements = [
@@ -16,10 +18,10 @@ export function isTopicImage(target: EventTarget | null) {
   return target instanceof SVGImageElement && !!target.closest('.smm-node')
 }
 
-export function addTopicImage(map: MindMap, node: MapNode, url: string, title: string, size: Size, custom = true) {
+export function addTopicImage(map: MindMap, node: MapNode, url: string, title: string, size: Size, custom = true, formula?: { latex: string; original: Size }) {
   map.renderer.setNodeDataRender(node, {
     image: url, imageTitle: title, imageSize: { ...size, custom },
-    ymdOriginalImageSize: custom ? size : null,
+    ymdOriginalImageSize: formula?.original ?? (custom ? size : null), ymdEquation: formula?.latex ?? null,
   })
 }
 
@@ -30,7 +32,10 @@ export function applyArt(map: MindMap, node: MapNode, art: MapArt) {
 }
 
 export function removeTopicImage(map: MindMap, node: MapNode) {
-  map.renderer.setNodeDataRender(node, { image: null, imageTitle: '', imageSize: null, ymdOriginalImageSize: null })
+  const formula = readEquation(node.getData('ymdEquation'))
+  if (formula) map.command.originAddHistory()
+  map.renderer.setNodeDataRender(node, { image: null, imageTitle: '', imageSize: null, ymdOriginalImageSize: null, ymdEquation: null })
+  if (formula) map.command.originAddHistory()
 }
 
 export async function resetTopicImage(map: MindMap, node: MapNode) {
@@ -47,7 +52,8 @@ export async function resetTopicImage(map: MindMap, node: MapNode) {
     size = { width: decoded.naturalWidth * gain, height: decoded.naturalHeight * gain }
   }
   if (map.renderer.findNodeByUid(node.uid) !== node || node.getData('image') !== url) return
-  if (size) addTopicImage(map, node, url, String(node.getData('imageTitle') ?? ''), size, custom)
+  const latex = readEquation(node.getData('ymdEquation'))
+  if (size) addTopicImage(map, node, url, String(node.getData('imageTitle') ?? ''), size, custom, latex ? { latex, original: size } : undefined)
 }
 
 export function placeTopicImage(map: MindMap, node: MapNode, position: Placement) {
@@ -61,21 +67,25 @@ function sideOf(group: Element, clientX: number, clientY: number): Placement {
   return Math.abs(x) > Math.abs(y) ? x < 0 ? 'left' : 'right' : y < 0 ? 'top' : 'bottom'
 }
 
-export function installTopicImageGestures(map: MindMap, canvas: HTMLElement) {
+export function installTopicImageGestures(map: MindMap, canvas: HTMLElement, editEquation: (node: MapNode) => void) {
   const groups = new WeakMap<Element, MapNode>()
   let highlighted: Element | undefined
   let selectedImage: MapNode | undefined
   let movement: { group: Element; node: MapNode; x: number; y: number; pointer: number; shifted: boolean } | undefined
   function indexNodes() {
     const visit = (node: MapNode) => {
-      if (node.group?.node) groups.set(node.group.node, node)
+      if (node.group?.node) {
+        groups.set(node.group.node, node)
+        const image = node.group.node.querySelector('image')
+        image?.toggleAttribute('data-ymd-equation', !!readEquation(node.getData('ymdEquation')))
+      }
       node.children.forEach(visit)
     }
     if (map.renderer.root) visit(map.renderer.root)
   }
 
-  function target(event: Event) {
-    const group = event.target instanceof Element ? event.target.closest('.smm-node') ?? undefined : undefined
+  function target(element: EventTarget | null) {
+    const group = element instanceof Element ? element.closest('.smm-node') ?? undefined : undefined
     const node = group && groups.get(group)
     return group && node ? { group, node } : undefined
   }
@@ -89,7 +99,7 @@ export function installTopicImageGestures(map: MindMap, canvas: HTMLElement) {
 
   function dragover(event: DragEvent) {
     if (!event.dataTransfer?.types.includes(artTransferType)) return
-    const hit = target(event)
+    const hit = target(event.target)
     const accepted = hit && topicAcceptsArt(hit.node)
     highlight(accepted ? hit.group : undefined)
     if (!accepted) return
@@ -101,7 +111,7 @@ export function installTopicImageGestures(map: MindMap, canvas: HTMLElement) {
     const id = event.dataTransfer?.getData(artTransferType)
     if (!id) return
     event.preventDefault()
-    const hit = target(event)
+    const hit = target(event.target)
     const art = findArt(id)
     if (!hit || !art || !topicAcceptsArt(hit.node)) return
     hit.node.active()
@@ -113,7 +123,7 @@ export function installTopicImageGestures(map: MindMap, canvas: HTMLElement) {
 
   function pointerdown(event: PointerEvent) {
     if (event.button !== 0) return
-    const hit = target(event)
+    const hit = target(event.target)
     if (!hit || !isTopicImage(event.target)) { selectedImage = undefined; return }
     selectedImage = hit.node
     movement = { ...hit, x: event.clientX, y: event.clientY, pointer: event.pointerId, shifted: false }
@@ -126,33 +136,78 @@ export function installTopicImageGestures(map: MindMap, canvas: HTMLElement) {
     if (!movement || movement.pointer !== event.pointerId) return
     if (Math.hypot(event.clientX - movement.x, event.clientY - movement.y) < 6 && !movement.shifted) return
     movement.shifted = true
-    movement.group.setAttribute('data-ymd-image-placement', sideOf(movement.group, event.clientX, event.clientY))
+    const hit = target(document.elementFromPoint(event.clientX, event.clientY))
+    if (readEquation(movement.node.getData('ymdEquation')) && hit?.node !== movement.node) {
+      movement.group.removeAttribute('data-ymd-image-placement')
+      highlight(canReceiveEquation(hit?.node) ? hit?.group : undefined)
+    } else {
+      highlight()
+      movement.group.setAttribute('data-ymd-image-placement', sideOf(movement.group, event.clientX, event.clientY))
+    }
     event.preventDefault()
   }
+  function canReceiveEquation(node?: MapNode): node is MapNode {
+    return !!node && !node.isGeneralization && !node.getData('image') &&
+      !readEquation(node.getData('ymdEquation')) && !readAudioNote(node.getData('ymdAudio'))
+  }
+
+  function moveEquation(source: MapNode, destination: MapNode) {
+    map.command.originAddHistory()
+    map.command.pause()
+    try {
+      map.renderer.setNodeDataRender(destination, {
+        image: source.getData('image'), imageSize: source.getData('imageSize'), imageTitle: source.getData('imageTitle'),
+        ymdOriginalImageSize: source.getData('ymdOriginalImageSize'), ymdEquation: source.getData('ymdEquation'),
+        imgPlacement: source.getData('imgPlacement') ?? 'top',
+      })
+      removeTopicImage(map, source)
+    } finally { map.command.recovery() }
+    map.command.originAddHistory()
+    destination.active()
+  }
+
   function finishMovement() {
     movement?.group.removeAttribute('data-ymd-image-placement')
+    if (movement) highlight()
     movement = undefined
   }
   function pointerup(event: PointerEvent) {
     const drag = movement
     if (!drag || drag.pointer !== event.pointerId) return
     finishMovement()
-    if (drag.shifted && drag.group.isConnected) {
+    if (!drag.shifted || !drag.group.isConnected) return
+    const hit = target(document.elementFromPoint(event.clientX, event.clientY))
+    if (readEquation(drag.node.getData('ymdEquation')) && hit?.node !== drag.node) {
+      if (canReceiveEquation(hit?.node)) moveEquation(drag.node, hit.node)
+    } else {
       placeTopicImage(map, drag.node, sideOf(drag.group, event.clientX, event.clientY))
-      event.preventDefault()
     }
+    event.preventDefault()
   }
   function clearOnTopicClick(_node: MapNode, event: MouseEvent) {
     if (!isTopicImage(event.target) && !movement) selectedImage = undefined
   }
-  function keydown(event: KeyboardEvent) {
-    if (!selectedImage || event.isComposing || event.defaultPrevented ||
-        !['Backspace', 'Delete'].includes(event.key) || event.target !== canvas ||
-        !map.renderer.activeNodeList.includes(selectedImage) || !selectedImage.getData('image')) return
+  function doubleClick(event: MouseEvent) {
+    const hit = target(event.target)
+    if (!hit || !isTopicImage(event.target) || !readEquation(hit.node.getData('ymdEquation'))) return
     event.preventDefault()
     event.stopImmediatePropagation()
-    removeTopicImage(map, selectedImage)
-    selectedImage = undefined
+    editEquation(hit.node)
+  }
+  function keydown(event: KeyboardEvent) {
+    if (!selectedImage || event.isComposing || event.defaultPrevented ||
+        event.target !== canvas ||
+        !map.renderer.activeNodeList.includes(selectedImage) || !selectedImage.getData('image')) return
+    if (event.key === 'Enter' && readEquation(selectedImage.getData('ymdEquation'))) {
+      event.preventDefault()
+      event.stopImmediatePropagation()
+      editEquation(selectedImage)
+    } else if (event.key === 'Backspace' || event.key === 'Delete') {
+      event.preventDefault()
+      event.stopImmediatePropagation()
+      removeTopicImage(map, selectedImage)
+      selectedImage = undefined
+    }
   }
 
   map.on('node_tree_render_end', indexNodes)
@@ -162,6 +217,7 @@ export function installTopicImageGestures(map: MindMap, canvas: HTMLElement) {
   canvas.addEventListener('dragleave', dragleave)
   window.addEventListener('dragend', clearHighlight)
   canvas.addEventListener('pointerdown', pointerdown, true)
+  canvas.addEventListener('dblclick', doubleClick, true)
   window.addEventListener('pointermove', pointermove)
   window.addEventListener('pointerup', pointerup)
   window.addEventListener('pointercancel', finishMovement)
@@ -178,6 +234,7 @@ export function installTopicImageGestures(map: MindMap, canvas: HTMLElement) {
     canvas.removeEventListener('dragleave', dragleave)
     window.removeEventListener('dragend', clearHighlight)
     canvas.removeEventListener('pointerdown', pointerdown, true)
+    canvas.removeEventListener('dblclick', doubleClick, true)
     window.removeEventListener('pointermove', pointermove)
     window.removeEventListener('pointerup', pointerup)
     window.removeEventListener('pointercancel', finishMovement)

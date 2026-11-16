@@ -8,6 +8,7 @@ import { calloutDefaults, calloutTopicId, readCallouts } from './mapCallouts'
 import { readTask, readTodo, type MapTask } from './mapTasks'
 import { exportTaskContent, taskExtension } from './xmindTasks'
 import { encodeXmindCalendar, readWorkCalendar } from './workCalendar'
+import { equationExtension, readEquation } from './mapEquation'
 import { numberingExtension, readNumbering } from './mapNumbering'
 
 type Sheet = Pick<MapSheet, 'id' | 'title' | 'settings' | 'tree'>
@@ -17,7 +18,7 @@ type Topic = {
   position?: { x: number; y: number }; branch?: 'folded'; width?: number
   style?: { id: string; properties: Properties }; href?: string
   notes?: { plain: { content: string } }; labels?: string[]
-  image?: { src: string; width: number; height: number; align?: string }; markers?: { markerId: string }[]
+  image?: { src: string; width: number; height: number; align?: string; isMathJaxImage?: boolean }; markers?: { markerId: string }[]
   summaries?: { id: string; class: 'summary'; range: string; topicId: string }[]
   boundaries?: { id: string; class: 'boundary'; title: string; range: string }[]
   extensions?: { provider: string; content: unknown; resourceRefs?: string[] }[]
@@ -127,10 +128,16 @@ export async function exportXmind(sheets: Sheet[], active: string, dark: boolean
       if (markers.length) output.markers = markers
       const image = typeof data.image === 'string' && /^data:image\/(png|jpeg|gif|webp|avif|bmp);base64,([A-Za-z0-9+/=]+)$/i.exec(data.image)
       const size = record(data.imageSize)
+      const equation = readEquation(data.ymdEquation)
       if (image && number(size.width) && number(size.height)) {
         const align = typeof data.imgPlacement === 'string' && /^(top|bottom|left|right)$/.test(data.imgPlacement) ? data.imgPlacement : undefined
         output.image = { src: resource(image[1] === 'jpeg' ? 'jpg' : image[1], image[2]),
-          width: Number(size.width), height: Number(size.height), align }
+          width: Number(size.width), height: Number(size.height), align, ...(equation ? { isMathJaxImage: true } : {}) }
+      }
+      if (equation) {
+        const imageSource = output.image?.src
+        output.extensions = [...(output.extensions ?? []), { provider: equationExtension,
+          content: { content: equation, imageSource }, ...(imageSource ? { resourceRefs: [imageSource] } : {}) }]
       }
       const labelsByTarget = record(data.associativeLineText)
       for (const related of list(data.associativeLineTargets)) {

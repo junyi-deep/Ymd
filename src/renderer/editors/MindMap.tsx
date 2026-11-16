@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { CalendarRange, Camera, ChevronDown, ClipboardList, CornerUpLeft, Crosshair, Download, Focus, FolderInput, GitBranch, GitFork, ImagePlus, ListTree, Map as MapIcon, Maximize, MessageSquare, Mic, Minus, Paperclip, Plus, Presentation, Redo2, Search, SlidersHorizontal, Square, SquareCheck, Star, Sticker, StickyNote, Tag, Trash2, Undo2, X } from 'lucide-react'
+import { CalendarRange, Camera, ChevronDown, ClipboardList, CornerUpLeft, Crosshair, Download, Focus, FolderInput, GitBranch, GitFork, ImagePlus, ListTree, Map as MapIcon, Maximize, MessageSquare, Mic, Minus, Paperclip, Plus, Presentation, Redo2, Search, SlidersHorizontal, SquareFunction, Square, SquareCheck, Star, Sticker, StickyNote, Tag, Trash2, Undo2, X } from 'lucide-react'
 import DOMPurify from 'dompurify'
 import MindMap from 'simple-mind-map'
 import AssociativeLine from 'simple-mind-map/src/plugins/AssociativeLine.js'
@@ -24,6 +24,8 @@ import { calendarSchedule, editWorkDates, orderSchedule, scheduledTopics } from 
 import { calendarDays, readWorkCalendar, type WorkCalendar } from './workCalendar'
 import { readTask, readTodo, type MapTask, type MapTodo } from './mapTasks'
 import { MindMapRecorder } from './MindMapRecorder'
+import { MindMapEquation } from './MindMapEquation'
+import { readEquation } from './mapEquation'
 import { MindMapArt } from './MindMapArt'
 import { MindMapLink, type LinkSheet } from './MindMapLink'
 import { readLocalMapUrl } from '../../shared/localMapLinks'
@@ -63,7 +65,7 @@ class MapAssociativeLine extends AssociativeLine {
 }
 
 for (const plugin of [MapAssociativeLine, Drag, Export, ExportPDF, KeyboardNavigation, MiniMap, NodeImgAdjust, OuterFrame, RainbowLines, SearchPlugin, Select]) MindMap.usePlugin(plugin)
-MindMap.extendNodeDataNoStylePropList(['ymdMarker', 'ymdFloating', 'ymdTask', 'ymdTodo', 'ymdStructure', 'ymdAudio', 'ymdOriginalImageSize', 'ymdCallouts', 'ymdWorkCalendar', 'ymdNumbering', 'ymdPitch'])
+MindMap.extendNodeDataNoStylePropList(['ymdMarker', 'ymdFloating', 'ymdTask', 'ymdTodo', 'ymdStructure', 'ymdAudio', 'ymdOriginalImageSize', 'ymdCallouts', 'ymdWorkCalendar', 'ymdNumbering', 'ymdPitch', 'ymdEquation'])
 
 type MapNode = NonNullable<MindMap['renderer']['root']>
 type TopicField = '备注' | '标签'
@@ -359,6 +361,7 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, remoteImage
   const [calendar, setCalendar] = useState(() => readWorkCalendar(sheet?.tree.data.ymdWorkCalendar ??
     (!sheet ? appearance.styles.find(style => style.address === 'root')?.data.ymdWorkCalendar : undefined)))
   const [gantt, setGantt] = useState(false)
+  const [equationNode, setEquationNode] = useState<MapNode>()
   const [audioParent, setAudioParent] = useState<MapNode>()
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
@@ -735,7 +738,7 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, remoteImage
     })
     calloutLayer.current = callouts
     const removeBranchLayouts = installBranchLayouts(map, () => !!focusBranch.uid)
-    const removeImageGestures = installTopicImageGestures(map, host.current)
+    const removeImageGestures = installTopicImageGestures(map, host.current, setEquationNode)
     const onData = (node: MapData | undefined) => {
       if (!node) return
       setCalendar(readWorkCalendar(node.data.ymdWorkCalendar))
@@ -909,7 +912,7 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, remoteImage
   useEffect(() => {
     const escape = (event: KeyboardEvent) => {
       if (event.key !== 'Escape' || event.isComposing || event.keyCode === 229 || event.defaultPrevented ||
-          calendarOpen || field || linkEditor || taskTopic || audioParent || calloutText || shotOpen) return
+          calendarOpen || field || linkEditor || taskTopic || audioParent || equationNode || calloutText || shotOpen) return
       if (event.target instanceof HTMLElement && event.target.closest('.document-menu')) return
       if (event.target instanceof HTMLElement && event.target.closest('.smm-node-edit-wrap')) {
         event.preventDefault()
@@ -951,13 +954,13 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, remoteImage
     }
     window.addEventListener('keydown', escape)
     return () => window.removeEventListener('keydown', escape)
-  }, [gantt, zen, zenTool, linking, searchOpen, formatOpen, artOpen, calendarOpen, field, linkEditor, taskTopic, audioParent, calloutText, shotOpen,
+  }, [gantt, zen, zenTool, linking, searchOpen, formatOpen, artOpen, calendarOpen, field, linkEditor, taskTopic, audioParent, equationNode, calloutText, shotOpen,
     branch, changeBranch, pitchPanel])
 
   useEffect(() => {
     const current = selectedCallout && readCallout(selectedCallout)
     const source = current?.owner ?? (selected.length === 1 ? selected[0] : undefined)
-    if (gantt || linkEditor || field || taskTopic || audioParent || calloutText || calendarOpen || shotOpen) return
+    if (gantt || linkEditor || field || taskTopic || audioParent || equationNode || calloutText || calendarOpen || shotOpen) return
     const linkable = source && !source.isGeneralization && !readAudioNote(source.getData('ymdAudio'))
     const focusableBranch = selected.length === 1 && source && !source.isRoot && linkable && !current
     const bindings = shortcutsFor('map', keyOverrides, platform)
@@ -983,7 +986,7 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, remoteImage
     }
     window.addEventListener('keydown', mapShortcut, true)
     return () => window.removeEventListener('keydown', mapShortcut, true)
-  }, [gantt, selected, selectedCallout, linkEditor, field, taskTopic, audioParent, calloutText, calendarOpen, shotOpen, keyOverrides, platform, openShot,
+  }, [gantt, selected, selectedCallout, linkEditor, field, taskTopic, audioParent, equationNode, calloutText, calendarOpen, shotOpen, keyOverrides, platform, openShot,
     branch, changeBranch, openPitch])
 
   useEffect(() => {
@@ -1173,6 +1176,27 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, remoteImage
       .catch(error => setNotice(error instanceof Error ? error.message : '无法另存录音。'))
   }
 
+  function closeEquation() {
+    setEquationNode(undefined)
+    requestAnimationFrame(() => host.current?.focus())
+  }
+
+  function saveEquation(latex: string, source: string, size: { width: number; height: number }) {
+    const map = engine.current
+    const current = equationNode && map?.renderer.findNodeByUid(equationNode.uid)
+    if (!map || !current) { closeEquation(); return }
+    const previousWidth = Number((current.getData('imageSize') as { width?: number } | undefined)?.width)
+    const original = readEquation(current.getData('ymdEquation'))
+    if (original === latex && current.getData('image')) { closeEquation(); return }
+    const width = original && Number.isFinite(previousWidth) && previousWidth > 0 ? previousWidth : size.width
+    const height = width * size.height / size.width
+    const scale = Math.min(1, 480 / Math.max(width, height))
+    map.command.originAddHistory()
+    addTopicImage(map, current, source, 'LaTeX 公式', { width: width * scale, height: height * scale }, true, { latex, original: size })
+    map.command.originAddHistory()
+    closeEquation()
+  }
+
   function chooseResource(image: boolean, callout?: CalloutTarget) {
     const owner = callout ? readCallout(callout)?.owner : node
     if (!owner || !resourceInput.current) return
@@ -1228,6 +1252,8 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, remoteImage
       run: () => setAudioParent(node) },
     { label: '标签', icon: <Tag size={16} />, disabled: !node, run: () => fieldFor('标签') },
     { label: '链接', disabled: !canLink, children: linkTypes.map(kind => ({ label: linkLabels[kind], run: () => editLink(kind) })) },
+    { label: node && readEquation(node.getData('ymdEquation')) ? '编辑公式' : '公式',
+      icon: <SquareFunction size={16} />, disabled: !canLink, run: () => setEquationNode(node) },
     { label: '图片', icon: <ImagePlus size={16} />, disabled: !node, run: () => chooseResource(true) },
     { label: '贴纸与插图', icon: <Sticker size={16} />, run: () => setArtOpen(true) },
     { label: '附件', icon: <Paperclip size={16} />, disabled: !node, run: () => chooseResource(false) },
@@ -1288,15 +1314,17 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, remoteImage
       label, run: () => { void exportDocument(format) },
     })),
   ]
+  const hasEquation = !!node && !!readEquation(node.getData('ymdEquation'))
   const imageItems: MenuItem[] = node?.getData('image') && engine.current ? [
-    { label: '图片位置', children: imagePlacements.map(([value, label]) => ({
+    ...(hasEquation ? [{ label: '编辑公式', icon: <SquareFunction size={16} />, run: () => setEquationNode(node) }] : []),
+    { label: hasEquation ? '公式位置' : '图片位置', children: imagePlacements.map(([value, label]) => ({
       label, selected: (node.getData('imgPlacement') ?? 'top') === value,
       run: () => { if (engine.current) placeTopicImage(engine.current, node, value) },
     })) },
     { label: '重置大小', run: () => {
       if (engine.current) void resetTopicImage(engine.current, node).catch(() => setNotice('无法读取图片的原始尺寸。'))
     } },
-    { label: '删除图片', icon: <Trash2 size={16} />, run: () => { if (engine.current) removeTopicImage(engine.current, node) } },
+    { label: hasEquation ? '删除公式' : '删除图片', icon: <Trash2 size={16} />, run: () => { if (engine.current) removeTopicImage(engine.current, node) } },
   ] : []
   const linkItems: MenuItem[] = node && typeof currentLink === 'string' && currentLink ? [
     { label: '打开链接', run: () => openHyperlink(currentLink) },
@@ -1349,7 +1377,7 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, remoteImage
     ] : []),
     { label: '插入', separator: true, children: insertItems },
     taskItem, todoItem,
-    ...(imageItems.length ? [{ label: '图片', children: imageItems }] : []),
+    ...(imageItems.length ? [{ label: hasEquation ? '公式' : '图片', children: imageItems }] : []),
     ...(linkItems.length ? [{ label: '链接', children: linkItems }] : []),
     ...(backlinks.length ? [{ label: '反向链接', children: backlinkItems }] : []),
     { label: '删除主题', icon: <Trash2 size={16} />, disabled: !canRemove, run: () => command('REMOVE_NODE') },
@@ -1504,6 +1532,8 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, remoteImage
       <OutlineMarkdown text={remainder} className="outline-markdown" links={remainderLinks} {...{ path, remoteImages }} />
     </section>}
     {typeof menu === 'object' && <MarkdownMenu items={contextItems} close={closeMenu} point={menu} nativeStyle />}
+    {equationNode && <MindMapEquation initial={readEquation(equationNode.getData('ymdEquation'))}
+      hasImage={!!equationNode.getData('image')} close={closeEquation} save={saveEquation} />}
     {audioParent && <MindMapRecorder title={String(audioParent.getData('text') ?? '')}
       close={() => setAudioParent(undefined)} save={(audio, duration) => addRecordedAudio(audioParent, audio, duration)} />}
     {taskTopic && taskSource && <MindMapTask initial={initialTask} notice={notice}

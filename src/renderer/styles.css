@@ -650,6 +650,19 @@ dialog button.primary { background: var(--accent); color: var(--accent-ink); }
 .map-navigation-row .navigation-note { overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; text-align: start; }
 .map-canvas [data-map-filtered] { opacity: .23; }
 .xmind-workspace dialog textarea { min-height: 90px; background: var(--soft); padding: 7px; border-radius: 5px; }
+.map-equation-dialog { width: min(500px, calc(100vw - 32px)); max-height: calc(100vh - 28px); }
+.map-equation-dialog textarea { min-height: 90px; font: 13px/1.55 ui-monospace, SFMono-Regular, Consolas, monospace; }
+.map-equation-examples { display: flex; flex-wrap: wrap; gap: 5px; margin: 8px 0 12px; }
+.map-equation-examples button { background: var(--soft); }
+.map-equation-examples button:hover { background: var(--hover); }
+.map-equation-preview {
+  display: grid; place-items: center; min-height: 100px; max-height: min(30vh, 220px); padding: 10px;
+  overflow: auto; background: var(--soft); border-radius: 6px; color: var(--muted); text-align: center;
+}
+.map-equation-preview img { display: block; max-width: 100%; max-height: min(27vh, 200px); }
+.map-equation-error { overflow-wrap: anywhere; color: var(--text); }
+.map-equation-replaces { margin-block-start: 10px; color: var(--muted); }
+.smm-node [data-ymd-equation] { cursor: pointer; }
 @media (max-width: 860px) {
   .map-toolbar { gap: 4px; padding-inline: 5px; }
   .map-toolbar-group { gap: 1px; }
