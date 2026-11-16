@@ -536,6 +536,11 @@ dialog button.primary { background: var(--accent); color: var(--accent-ink); }
   .map-gantt-columns span:last-child { display: none; }
 }
 .map-stage { position: relative; flex: 1; min-width: 0; overflow: hidden; }
+.map-branch-export { position: fixed; inset: 0 auto auto -1200px; width: 1000px; height: 720px; pointer-events: none; }
+.map-restore-branch { position: absolute; z-index: 2; top: 11px; left: 11px; background: var(--page); border: 1px solid var(--line); border-radius: 7px; }
+.map-editor[data-zen="true"] .map-restore-branch { top: 52px; }
+.map-stage:has(.map-restore-branch) .map-action-status { top: 49px; }
+.map-editor[data-zen="true"] .map-stage:has(.map-restore-branch) .map-action-status { top: 90px; }
 .map-zen-tools {
   position: absolute; top: 10px; right: 12px; z-index: 3;
   display: flex; align-items: center; gap: 6px; -webkit-app-region: no-drag;
@@ -572,7 +577,7 @@ dialog button.primary { background: var(--accent); color: var(--accent-ink); }
 .map-shot-error { position: absolute; inset: auto 8px 57px; margin: auto; width: max-content; max-width: calc(100% - 16px);
   padding: 5px 8px; border-radius: 6px; color: var(--text); background: var(--page); }
 .map-editor[data-shot-open] .map-body > :not(.map-stage) { pointer-events: none; }
-.map-stage[data-shot-capturing] :is(.map-shot-overlay, .map-status, .map-minimap, .map-action-status, .smm-hover-node,
+.map-stage[data-shot-capturing] :is(.map-shot-overlay, .map-status, .map-minimap, .map-action-status, .map-restore-branch, .smm-hover-node,
   .smm-quick-create-child-btn, .smm-expand-btn, [data-callout-resize]) { visibility: hidden !important; }
 .map-shot-preview { width: min(670px, 94vw); max-height: 92vh; }
 .map-shot-image { display: grid; place-items: center; min-height: 80px; padding: 9px; border-radius: 8px; background: var(--soft); }

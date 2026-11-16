@@ -3,8 +3,8 @@ import type { IpcMainInvokeEvent, MediaAccessPermissionRequest, MenuItemConstruc
 import { mkdir, readdir, readFile, writeFile, rename, open } from 'node:fs/promises'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { defaultPreferences, markdownImageExtensions, searchEngines, windowMaterialFor } from '../shared/contracts'
-import type { Command, ContextMenuItem, Desktop, DocumentFile, Entry, FileKind, MapShotRect, MarkdownImageUpload, Preferences, TreeChange, TreeMutation } from '../shared/contracts'
+import { defaultPreferences, mapExportExtensions, markdownImageExtensions, searchEngines, windowMaterialFor } from '../shared/contracts'
+import type { Command, ContextMenuItem, Desktop, DocumentFile, Entry, FileKind, MapExportKind, MapShotRect, MarkdownImageUpload, Preferences, TreeChange, TreeMutation } from '../shared/contracts'
 import { Files, containsPath, fileKind } from './files'
 import { LocalMapLocations } from './localMapLocations'
 import { searchRoots } from './search'
@@ -540,6 +540,19 @@ void app.whenReady().then(async () => {
     const result = await dialog.showSaveDialog(window!, { defaultPath: '录音备注.webm', filters: [{ name: 'WebM 音频', extensions: ['webm'] }] })
     if (result.canceled || !result.filePath) return false
     const destination = /\.webm$/i.test(result.filePath) ? result.filePath : result.filePath + '.webm'
+    await writeFile(destination, Buffer.from(data), { flush: true })
+    return true
+  })
+  handle('saveMapExport', async (name: string, format: MapExportKind, data: ArrayBuffer) => {
+    if (typeof name !== 'string' || typeof format !== 'string' || !Object.hasOwn(mapExportExtensions, format) || !(data instanceof ArrayBuffer) ||
+        !data.byteLength || data.byteLength > 64 * 1024 * 1024) throw new Error('导图文件内容无效或过大。')
+    const title = name.replace(/[<>:"/\\|?*\u0000-\u001f]/g, '_').trim().replace(/[. ]+$/, '').slice(0, 120) || '思维导图'
+    const extension = '.' + format
+    const result = await dialog.showSaveDialog(window!, {
+      defaultPath: title + extension, filters: [{ name: mapExportExtensions[format], extensions: [format] }],
+    })
+    if (result.canceled || !result.filePath) return false
+    const destination = result.filePath.toLowerCase().endsWith(extension) ? result.filePath : result.filePath + extension
     await writeFile(destination, Buffer.from(data), { flush: true })
     return true
   })

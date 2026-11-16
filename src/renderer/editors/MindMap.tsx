@@ -44,6 +44,8 @@ import { installNumbering } from './mapNumberingLayer'
 import { MindMapNavigation } from './MindMapNavigation'
 import { MindMapShot } from './MindMapShot'
 import { MindMapZenTools, zenAppearances, type ZenAppearance, type ZenTool } from './MindMapZenTools'
+import { findBranch, installBranchView, setBranchDepth } from './mapBranchView'
+import { exportMapTree, mapExportTitle, type MapExportFormat } from './mapBranchExport'
 import { facetAt, highlightTopics, navigationTopics, taskStatusFacets, type Facet } from './mapNavigation'
 
 class MapAssociativeLine extends AssociativeLine {
@@ -351,6 +353,9 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, onChange, r
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const [shotOpen, setShotOpen] = useState(false)
+  const [branch, setBranch] = useState<{ uid: string; depth: number }>()
+  const branchView = useRef<ReturnType<typeof installBranchView> | undefined>(undefined)
+  const viewBeforeBranch = useRef<ReturnType<MindMap['view']['getTransformData']> | undefined>(undefined)
   const host = useRef<HTMLDivElement>(null)
   const navigationTrigger = useRef<HTMLButtonElement>(null)
   const shotTrigger = useRef<HTMLButtonElement>(null)
@@ -377,12 +382,14 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, onChange, r
   currentSettings.current = settings
   const searchOpen = navigation !== undefined
   const zenDark = zenAppearance ? zenAppearance.endsWith('dark') : dark
-  const topics = useMemo(() => searchOpen && engine.current ? navigationTopics(engine.current.renderer.renderTree) : [], [searchOpen, version])
+  const topics = useMemo(() => searchOpen && engine.current
+    ? navigationTopics(branchView.current?.branch()?.tree ?? engine.current.renderer.renderTree) : [], [searchOpen, version, branch])
   const highlight = useCallback((ids: ReadonlySet<string> | null) => {
     highlighted.current = ids
     if (engine.current) highlightTopics(engine.current, ids)
   }, [])
   const closeNavigation = () => {
+    highlight(null)
     setNavigation(undefined)
     ;(navigationTrigger.current ?? host.current)?.focus()
   }
@@ -432,6 +439,55 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, onChange, r
     setShotOpen(false)
     if (message) setNotice(message)
     requestAnimationFrame(() => (shotTrigger.current ?? host.current)?.focus())
+  }
+  const changeBranch = useCallback((uid?: string, restoreFocus = true) => {
+    const map = engine.current
+    const scope = branchView.current
+    if (!map || !scope || scope.uid === uid) return
+    map.renderer.textEdit.hideEditTextBox()
+    const next = uid ? findBranch(map.renderer.renderTree, uid) : undefined
+    if (uid && !next?.depth) return
+    if (uid && !scope.uid) viewBeforeBranch.current = map.view.getTransformData()
+    const previousView = viewBeforeBranch.current
+    if (!uid) viewBeforeBranch.current = undefined
+    map.search.endSearch()
+    highlight(null)
+    map.associativeLine.cancelCreateLine()
+    setLinking(false)
+    setSelectedCallout(undefined)
+    setNavigation(undefined)
+    setMenu(undefined)
+    scope.set(uid)
+    setBranch(uid && next ? { uid, depth: next.depth } : undefined)
+    map.reRender(() => queueMicrotask(() => {
+      if (engine.current !== map || scope.uid !== uid) return
+      if (restoreFocus) {
+        if (uid) {
+          map.view.fit()
+          map.renderer.root?.active()
+        } else if (previousView) map.view.setTransformData(previousView)
+        host.current?.focus()
+      }
+    }))
+  }, [highlight])
+
+  function foldBranches(levels: number, normalCommand: string, ...args: unknown[]) {
+    const map = engine.current
+    const tree = branchView.current?.branch()?.tree
+    if (!map) return
+    if (!tree) { map.execCommand(normalCommand, ...args); return }
+    map.command.originAddHistory()
+    setBranchDepth(tree, levels)
+    map.command.originAddHistory()
+    map.render()
+  }
+  function replaceTopics(text: string, all: boolean) {
+    const map = engine.current
+    if (!map) return
+    map.command.originAddHistory()
+    if (all) map.search.replaceAll(text)
+    else map.search.replace(text, true)
+    map.command.originAddHistory()
   }
 
   const backlinkTopic = selectedCallout ? calloutTopicId(selectedCallout.owner, selectedCallout.id)
@@ -552,6 +608,7 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, onChange, r
   }
 
   function toggleGantt(visible: boolean) {
+    if (visible) changeBranch(undefined, false)
     if (visible) {
       engine.current?.renderer.textEdit.hideEditTextBox()
       engine.current?.associativeLine.cancelCreateLine()
@@ -617,7 +674,8 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, onChange, r
             (event.key === 'Tab' || (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'v')) &&
           (event.target === document.body || event.target.classList.contains('smm-node-edit-wrap') || !!host.current?.contains(event.target)),
         beforeAssociativeLineConnection: () => { setLinking(false); return false },
-        beforeTextEdit: node => !readAudioNote(node.getData('ymdAudio')) && (!!initialSheet || !!appearance.imported || !node.isRoot),
+        beforeTextEdit: node => !readAudioNote(node.getData('ymdAudio')) && (!!initialSheet || !!appearance.imported ||
+          !node.isRoot || branchView.current?.uid === node.uid),
         beforeDragEnd: ({ overlapNodeUid }) => !!readAudioNote(map?.renderer.findNodeByUid(overlapNodeUid)?.getData('ymdAudio')),
         beforeDeleteNodeImg: node => { removeTopicImage(map, node); return true },
         maxImgResizeWidthInheritTheme: false,
@@ -631,6 +689,8 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, onChange, r
       return
     }
     engine.current = map
+    const focusBranch = installBranchView(map)
+    branchView.current = focusBranch
     const removeNumbering = installNumbering(map)
     const callouts = installCallouts(map, {
       select: target => {
@@ -643,9 +703,10 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, onChange, r
       download: note => downloadAttachment(note.data.attachmentUrl, note.data.attachmentName),
     })
     calloutLayer.current = callouts
-    const removeBranchLayouts = installBranchLayouts(map)
+    const removeBranchLayouts = installBranchLayouts(map, () => !!focusBranch.uid)
     const removeImageGestures = installTopicImageGestures(map, host.current)
-    const onData = (node: MapData) => {
+    const onData = (node: MapData | undefined) => {
+      if (!node) return
       setCalendar(readWorkCalendar(node.data.ymdWorkCalendar))
       const audioId = audio.activeId
       if (audioId && !hasAudio(node, audioId)) audio.stop()
@@ -678,7 +739,15 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, onChange, r
     const searchInfo = (info: typeof matches) => setMatches(info)
     const searchNodes = (nodes: (MapNode | MapData)[]) => setTitleMatches(nodes.map(item =>
       ('getData' in item ? item.getData() : item.data).uid ?? ''))
-    const reapplyFilter = () => { if (highlighted.current) highlightTopics(map, highlighted.current) }
+    const reapplyFilter = () => {
+      if (focusBranch.uid) {
+        const focused = focusBranch.branch()
+        if (!focused) queueMicrotask(() => changeBranch())
+        else setBranch(current => current && current.uid === focusBranch.uid && current.depth !== focused.depth
+          ? { ...current, depth: focused.depth } : current)
+      }
+      highlightTopics(map, highlighted.current)
+    }
     const download = (node: MapNode) => downloadAttachment(node.getData('attachmentUrl'), node.getData('attachmentName'))
     map.on('data_change', onData)
     map.on('afterExecCommand', sync)
@@ -693,10 +762,11 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, onChange, r
     map.on('node_tree_render_end', reapplyFilter)
     map.on('node_attachmentClick', download)
     registerFlush(flush)
+    const shouldFit = () => !!focusBranch.uid || !!host.current?.closest('[data-zen="true"]')
     const resize = new ResizeObserver(() => {
       map.resize()
-      if (host.current?.closest('[data-zen="true"]')) {
-        map.render(() => { if (host.current?.closest('[data-zen="true"]')) map.view.fit() })
+      if (shouldFit()) {
+        map.render(() => { if (shouldFit()) map.view.fit() })
       }
     })
     resize.observe(host.current)
@@ -708,6 +778,8 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, onChange, r
       calloutLayer.current = undefined
       removeImageGestures()
       removeBranchLayouts()
+      focusBranch.dispose()
+      branchView.current = undefined
       registerFlush()
       map.off('afterExecCommand', sync)
       map.off('data_change', onData)
@@ -725,7 +797,7 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, onChange, r
       map.destroy()
       engine.current = undefined
     }
-  }, [name, path, projection, registerFlush, appearance, initialSheet])
+  }, [name, path, projection, registerFlush, appearance, initialSheet, changeBranch])
 
   useEffect(() => { calloutLayer.current?.select(selectedCallout) }, [selectedCallout])
 
@@ -733,6 +805,8 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, onChange, r
     const map = engine.current
     if (!jump || !map) return
     let canceled = false
+    const branchTree = branchView.current?.branch()?.tree
+    if (branchTree && (!jump.topic || !findTopic(branchTree, jump.topic))) changeBranch(undefined, false)
     // Expanding a folded branch enqueues another render. Wait for the first render to clear its callbacks.
     map.render(() => queueMicrotask(() => {
       if (canceled || engine.current !== map) return
@@ -757,7 +831,7 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, onChange, r
       })
     }))
     return () => { canceled = true }
-  }, [jump])
+  }, [jump, changeBranch])
 
   useEffect(() => {
     const map = engine.current
@@ -765,9 +839,10 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, onChange, r
     const palette = palettes[settings.palette]
     map.updateConfig({ rainbowLinesConfig: { open: settings.colored, colorsList: palette.colors } })
     const appearance = zen && zenAppearance ? zenAppearances[zenAppearance] : undefined
-    map.setThemeConfig(mapTheme(appearance ? { ...settings, background: appearance.background } : settings, zen ? zenDark : dark))
+    map.setThemeConfig(mapTheme(appearance ? { ...settings, background: appearance.background } : settings,
+      zen ? zenDark : dark, branch?.depth))
     setZoom(Math.round(map.view.scale * 100))
-  }, [dark, settings, zen, zenAppearance, zenDark])
+  }, [dark, settings, zen, zenAppearance, zenDark, branch])
   useEffect(() => {
     const map = engine.current
     if (!map || !zen && !viewBeforeZen.current) return
@@ -828,6 +903,10 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, onChange, r
         setFormatOpen(false)
         host.current?.focus()
       }
+      else if (branch) {
+        event.preventDefault()
+        changeBranch()
+      }
       else if (zen) {
         event.preventDefault()
         toggleZen(false)
@@ -836,13 +915,15 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, onChange, r
     }
     window.addEventListener('keydown', escape)
     return () => window.removeEventListener('keydown', escape)
-  }, [gantt, zen, zenTool, linking, searchOpen, formatOpen, artOpen, calendarOpen, field, linkEditor, taskTopic, audioParent, calloutText, shotOpen])
+  }, [gantt, zen, zenTool, linking, searchOpen, formatOpen, artOpen, calendarOpen, field, linkEditor, taskTopic, audioParent, calloutText, shotOpen,
+    branch, changeBranch])
 
   useEffect(() => {
     const current = selectedCallout && readCallout(selectedCallout)
     const source = current?.owner ?? (selected.length === 1 ? selected[0] : undefined)
     if (gantt || linkEditor || field || taskTopic || audioParent || calloutText || calendarOpen || shotOpen) return
     const linkable = source && !source.isGeneralization && !readAudioNote(source.getData('ymdAudio'))
+    const focusableBranch = selected.length === 1 && source && !source.isRoot && linkable && !current
     const bindings = shortcutsFor('map', keyOverrides, platform)
     const sequence = new ShortcutSequence()
     const mapShortcut = (event: KeyboardEvent) => {
@@ -851,19 +932,22 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, onChange, r
       if (event.key === 'Escape') { sequence.reset(); return }
       const onCanvas = event.target === document.body || host.current?.contains(event.target)
       const chord = inputChord({ key: event.key, code: event.code, control: event.ctrlKey, alt: event.altKey, meta: event.metaKey, shift: event.shiftKey }, platform)
-      const match = chord && sequence.take(chord, bindings.filter(item => item.id === 'map-shot' || linkable && onCanvas), event.repeat)
+      const match = chord && sequence.take(chord, bindings.filter(item => item.id === 'map-shot' ||
+        (item.id === 'map-branch' ? !!branch || focusableBranch && onCanvas : linkable && onCanvas)), event.repeat)
       if (!match) return
       event.preventDefault()
       event.stopPropagation()
       if (match === 'pending') return
       if (match === 'map-shot') { openShot(); return }
+      if (match === 'map-branch') { changeBranch(branch ? undefined : source?.uid); return }
       if (!source) return
       const href = current ? current.note.data.hyperlink : source.getData('hyperlink')
       setLinkEditor({ node: source, callout: current ? selectedCallout : undefined, kind: mapLinkType(href) })
     }
     window.addEventListener('keydown', mapShortcut, true)
     return () => window.removeEventListener('keydown', mapShortcut, true)
-  }, [gantt, selected, selectedCallout, linkEditor, field, taskTopic, audioParent, calloutText, calendarOpen, shotOpen, keyOverrides, platform, openShot])
+  }, [gantt, selected, selectedCallout, linkEditor, field, taskTopic, audioParent, calloutText, calendarOpen, shotOpen, keyOverrides, platform, openShot,
+    branch, changeBranch])
 
   useEffect(() => {
     const map = engine.current
@@ -1121,27 +1205,40 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, onChange, r
     } finally { exporting.current = false }
   }
 
-  async function exportDocument(format: string) {
+  async function exportDocument(format: MapExportFormat, uid?: string) {
     const map = engine.current
     if (!map || exporting.current) return
     exporting.current = true
     const callouts = calloutLayer.current
     try {
-      callouts?.controls(false)
-      await map.export(format, true, sheet?.title ?? mapTitle(name))
-    } catch { setNotice('导出失败。') }
+      map.renderer.textEdit.hideEditTextBox()
+      const title = mapExportTitle(sheet?.title ?? mapTitle(name))
+      if (uid || branchView.current?.uid) {
+        const full = map.getData()
+        const target = uid ? findBranch(full, uid) : { tree: full, depth: 0 }
+        if (!target) throw new Error('分支已删除，无法导出。')
+        await exportMapTree(target.tree, currentSettings.current, dark, target.depth, format,
+          uid ? mapExportTitle(target.tree.data.text ?? '') : title, uid ? full : undefined)
+      } else {
+        callouts?.controls(false)
+        await map.export(format, true, title)
+      }
+    } catch (error) { setNotice(error instanceof Error ? error.message : '导出失败。') }
     finally { callouts?.controls(true); exporting.current = false }
   }
 
   const shotKey = shortcutValue(keyOverrides, 'map-shot', platform)
   const shotShortcut = shotKey ? shortcutLabel(shotKey, platform) : undefined
+  const branchKey = shortcutValue(keyOverrides, 'map-branch', platform)
+  const branchShortcut = branchKey ? shortcutLabel(branchKey, platform) : undefined
+  const branchFormats = [['png', 'PNG 图片'], ['svg', 'SVG 矢量图'], ['pdf', 'PDF'], ['md', 'Markdown']] as const
   const exportItems: MenuItem[] = [
     { label: '导图截图…', icon: <Camera size={16} />, shortcut: shotShortcut, run: openShot },
     multipleSheets ? { label: 'Xmind 文件', children: [
       { label: '全部画布', run: () => void exportWorkbook(true) },
       { label: '当前画布', run: () => void exportWorkbook(false) },
     ] } : { label: 'Xmind 文件', run: () => void exportWorkbook(false) },
-    ...[['png', 'PNG 图片'], ['svg', 'SVG 矢量图'], ['pdf', 'PDF'], ['md', 'Markdown'], ['txt', '纯文本']].map(([format, label]) => ({
+    ...[...branchFormats, ['txt', '纯文本'] as const].map(([format, label]) => ({
       label, run: () => { void exportDocument(format) },
     })),
   ]
@@ -1163,6 +1260,7 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, onChange, r
   const backlinkItems: MenuItem[] = backlinks.map(({ label, target }) => ({
     label, run: () => { void followLinkWithNotice(target, '反向链接的来源已删除，或无法定位。') },
   }))
+  const branchTarget = node && selected.length === 1 && !node.isGeneralization && (!node.isRoot || branch)
   const contextItems: MenuItem[] = contextCallout && menuCallout ? [
     { label: '编辑标注', run: () => editCallout(contextCallout) },
     { label: '标注格式', run: () => { setArtOpen(false); setFormatOpen(true) } },
@@ -1191,10 +1289,18 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, onChange, r
     { label: '收起子主题', run: () => { if (node) command('SET_NODE_EXPAND', node, false) } },
     { label: '展开子主题', run: () => { if (node) command('SET_NODE_EXPAND', node, true) } },
     { label: '折叠级别', children: [
-      { label: '全部展开', run: () => command('EXPAND_ALL') },
-      { label: '全部收起', run: () => command('UNEXPAND_ALL') },
-      ...[1, 2, 3, 4].map(level => ({ label: '展开至第 ' + level + ' 层', run: () => command('UNEXPAND_TO_LEVEL', level) })),
+      { label: '全部展开', run: () => foldBranches(Infinity, 'EXPAND_ALL') },
+      { label: '全部收起', run: () => foldBranches(1, 'UNEXPAND_ALL') },
+      ...[1, 2, 3, 4].map(level => ({ label: '展开至第 ' + level + ' 层', run: () => foldBranches(level, 'UNEXPAND_TO_LEVEL', level) })),
     ] },
+    ...(branchTarget && node ? [
+      ...(!node.isRoot ? [{ label: '仅显示分支', icon: <Focus size={16} />, shortcut: branch ? undefined : branchShortcut, run: () => changeBranch(node.uid) }] : []),
+      ...(branch ? [{ label: '显示全部内容', shortcut: branchShortcut, run: () => changeBranch() }] : []),
+      { label: '导出分支为', icon: <Download size={16} />, children: branchFormats.map(([format, label]) => ({
+        label, run: () => void exportDocument(format, node.uid),
+      })) },
+      { label: '打印分支…', run: () => void exportDocument('print', node.uid) },
+    ] : []),
     { label: '插入', separator: true, children: insertItems },
     taskItem, todoItem,
     ...(imageItems.length ? [{ label: '图片', children: imageItems }] : []),
@@ -1257,6 +1363,9 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, onChange, r
                 !event.target.closest('button, input, textarea, [contenteditable]')) event.currentTarget.focus()
           }}
           onContextMenu={event => event.preventDefault()} />
+        {branch && <button className="tool-button map-restore-branch" onClick={() => changeBranch()} title={branchShortcut}>
+          <CornerUpLeft size={15} />显示全部内容
+        </button>}
         {zen && <MindMapZenTools platform={platform} overrides={keyOverrides} tool={zenTool}
           onTool={setZenTool} appearance={zenAppearance ?? (dark ? 'dark' : 'light')}
           onAppearance={value => { setZenAppearance(value); setZenTool(undefined) }}
@@ -1297,7 +1406,7 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, onChange, r
       {navigation && <MindMapNavigation key={navigation.key} topics={topics} initialFacet={navigation.facet}
         titleMatches={titleMatches} currentTopic={selected.length === 1 ? selected[0].getData().uid : undefined}
         search={engine.current?.search} count={matches} close={closeNavigation} highlight={highlight}
-        locate={id => command('GO_TARGET_NODE', id)} focusRequest={find} />}
+        locate={id => command('GO_TARGET_NODE', id)} focusRequest={find} replaceTopics={replaceTopics} />}
       {artOpen && <MindMapArt
         target={topicAcceptsArt(node) ? String(node?.getData('text') || '未命名主题') : undefined}
         apply={art => { if (engine.current && node) applyArt(engine.current, node, art) }}
@@ -1305,9 +1414,10 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, onChange, r
       {!artOpen && !searchOpen && formatOpen && (activeCallout && selectedCallout ? <MindMapCalloutFormat
         key={selectedCallout.id} note={activeCallout.note} close={() => setFormatOpen(false)}
         edit={() => editCallout(selectedCallout)} change={patch => changeCallout(selectedCallout, patch)} />
-        : <MindMapFormat {...{ tab, settings, node, selected, version }} change={changeSettings} onTab={setTab} editNumbering={updateNumbering}
+        : <MindMapFormat {...{ tab, settings, node, selected, version }} dark={zen ? zenDark : dark} branchDepth={branch?.depth}
+        change={changeSettings} onTab={setTab} editNumbering={updateNumbering}
         structure={value => {
-          if (node?.isRoot && value) changeSettings({ layout: value })
+          if (node?.isRoot && !branch && value) changeSettings({ layout: value })
           else if (node && branchStructure(node.getData('ymdStructure')) !== value) {
             const map = engine.current
             const { left, top } = node

@@ -151,7 +151,7 @@ function positionRegion(region: Region, left: number, top: number, drawingMaps: 
   placeTopic(region.root, left, top, null)
 }
 
-export function installBranchLayouts(map: MindMap) {
+export function installBranchLayouts(map: MindMap, hasProjectedRoot = () => false) {
   const initialized = new WeakSet<MapLayout>()
   const setup = () => {
     const native = map.renderer.layout
@@ -171,8 +171,9 @@ export function installBranchLayouts(map: MindMap) {
       outgoing = new WeakMap()
       incoming = new WeakMap()
       originals = new WeakMap()
-      const structure = branchStructure(map.getLayout())
-      if (structure && hasBranchStructure(root)) {
+      const rootStructure = hasProjectedRoot() ? branchStructure(root.getData('ymdStructure')) : undefined
+      const structure = rootStructure ?? branchStructure(map.getLayout())
+      if (structure && (rootStructure || hasBranchStructure(root))) {
         const region = prepareRegion(map, root, structure)
         positionRegion(region, root.left, root.top, { outgoing, incoming, originals })
       }

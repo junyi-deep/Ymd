@@ -6,7 +6,7 @@ import type MindMap from 'simple-mind-map'
 type View = '主题' | '备注' | '标记与标签'
 const views: View[] = ['主题', '备注', '标记与标签']
 
-export function MindMapNavigation({ topics, titleMatches, currentTopic, initialFacet, search, count, close, highlight, locate, focusRequest }: {
+export function MindMapNavigation({ topics, titleMatches, currentTopic, initialFacet, search, count, close, highlight, locate, focusRequest, replaceTopics }: {
   topics: NavigationTopic[]
   titleMatches: string[]
   currentTopic?: string
@@ -17,6 +17,7 @@ export function MindMapNavigation({ topics, titleMatches, currentTopic, initialF
   highlight: (ids: ReadonlySet<string> | null) => void
   locate: (id: string) => void
   focusRequest: number
+  replaceTopics: (text: string, all: boolean) => void
 }) {
   const [view, setView] = useState<View>(initialFacet ? '标记与标签' : '主题')
   const [queries, setQueries] = useState<Record<View, string>>({ 主题: '', 备注: '', 标记与标签: '' })
@@ -69,8 +70,8 @@ export function MindMapNavigation({ topics, titleMatches, currentTopic, initialF
     </div>
     {view === '主题' && <div className="map-navigation-replace">
       <input aria-label="替换主题内容" placeholder="替换为" value={replace} onChange={event => setReplace(event.target.value)} />
-      <button className="tool-button" disabled={!count.total} onClick={() => search?.replace(replace, true)}>替换</button>
-      <button className="tool-button" disabled={!count.total} onClick={() => search?.replaceAll(replace)}>全部</button>
+      <button className="tool-button" disabled={!count.total} onClick={() => replaceTopics(replace, false)}>替换</button>
+      <button className="tool-button" disabled={!count.total} onClick={() => replaceTopics(replace, true)}>全部</button>
     </div>}
     <div className="map-navigation-results">
     {view === '标记与标签' && <>

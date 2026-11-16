@@ -189,11 +189,11 @@ export function relocateMapAppearance(oldPath: string, newPath: string, title: s
   } catch {}
 }
 
-export function mapTheme(settings: MapSettings, dark: boolean) {
+export function mapTheme(settings: MapSettings, dark: boolean, rootDepth = 0) {
   const palette = palettes[settings.palette]
   const background = settings.background ?? (dark ? '#252629' : '#fafbfc')
   const foreground = dark ? '#f0f2f4' : '#242830'
-  return {
+  const theme = {
     backgroundColor: background,
     lineColor: dark ? '#8994a4' : '#8c9ab1',
     lineWidth: settings.lineWidth,
@@ -201,7 +201,8 @@ export function mapTheme(settings: MapSettings, dark: boolean) {
     root: { fillColor: palette.root, color: '#ffffff', fontFamily: settings.font, fontSize: 26, fontWeight: 'bold', borderWidth: 0, borderRadius: 11, paddingX: 24, paddingY: 14 },
     second: { fillColor: dark ? '#373b45' : '#eef2f8', color: foreground, fontFamily: settings.font, fontSize: 17, fontWeight: 'bold',
       borderRadius: 8, borderWidth: 0, paddingX: 13, paddingY: 8, marginX: settings.compact ? 48 : 100, marginY: settings.compact ? 19 : 40 },
-    node: { fillColor: 'transparent', color: foreground, fontFamily: settings.font, fontSize: 15, borderWidth: 0, paddingX: 7, paddingY: 5,
+    node: { fillColor: 'transparent', color: foreground, fontFamily: settings.font, fontSize: 15, fontWeight: 'normal', borderWidth: 0, paddingX: 7, paddingY: 5,
       marginX: settings.compact ? 26 : 50, marginY: settings.compact ? 0 : 4 },
   }
+  return rootDepth ? { ...theme, root: rootDepth === 1 ? theme.second : theme.node, second: theme.node } : theme
 }

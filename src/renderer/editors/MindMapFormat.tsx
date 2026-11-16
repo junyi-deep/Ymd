@@ -1,6 +1,6 @@
 import { GitBranch, LayoutGrid, ListOrdered, Palette as PaletteIcon, SlidersHorizontal, X } from 'lucide-react'
 import type MindMap from 'simple-mind-map'
-import { branchStructure, mapLayouts, palettes, type MapSettings, type Palette, type Structure } from './mapAppearance'
+import { branchStructure, mapLayouts, mapTheme, palettes, type MapSettings, type Palette, type Structure } from './mapAppearance'
 import { attachedTopic, numberingPatterns, readNumbering, type NumberingEdit, type NumberingPattern } from './mapNumbering'
 
 type MapNode = NonNullable<MindMap['renderer']['root']>
@@ -11,12 +11,14 @@ const topics = [
 ]
 const colorValue = (value: unknown, fallback: string) => typeof value === 'string' && /^#[0-9a-f]{6}$/i.test(value) ? value : fallback
 
-export function MindMapFormat({ tab, settings, node, selected, version, change, onTab, close, style, structure, editNumbering }: {
+export function MindMapFormat({ tab, settings, node, selected, version, dark, branchDepth, change, onTab, close, style, structure, editNumbering }: {
   tab: 'map' | 'topic'
   settings: MapSettings
   node?: MapNode
   selected: MapNode[]
   version: number
+  dark: boolean
+  branchDepth?: number
   change: (patch: Partial<MapSettings>) => void
   onTab: (tab: 'map' | 'topic') => void
   close: () => void
@@ -25,6 +27,9 @@ export function MindMapFormat({ tab, settings, node, selected, version, change, 
   editNumbering: (edit: NumberingEdit) => void
 }) {
   const data = node?.getData() ?? {}
+  const theme = mapTheme(settings, dark, branchDepth)
+  const topicTheme = node?.isRoot ? theme.root : node?.layerIndex === 1 ? theme.second : theme.node
+  const canvasRoot = node?.isRoot && !branchDepth
   const numberable = selected.filter(topic => topic.parent && !topic.isGeneralization && attachedTopic(topic.nodeData))
   const configs = numberable.map(topic => readNumbering(topic.getData('ymdNumbering')))
   const pattern = configs.every(config => config?.pattern === configs[0]?.pattern) ? configs[0]?.pattern ?? '' : 'mixed'
@@ -61,10 +66,10 @@ export function MindMapFormat({ tab, settings, node, selected, version, change, 
       </section>
     </> : node ? <>
       <section><h3><LayoutGrid size={15} />结构</h3>
-        <label>{node.isRoot ? '画布结构' : '分支结构'}<select
-          value={node.isRoot ? settings.layout : branchStructure(data.ymdStructure) ?? ''}
+        <label>{canvasRoot ? '画布结构' : '分支结构'}<select
+          value={canvasRoot ? settings.layout : branchStructure(data.ymdStructure) ?? ''}
           onChange={event => structure(branchStructure(event.target.value))}>
-          {!node.isRoot && <option value="">继承父级</option>}
+          {!canvasRoot && <option value="">继承父级</option>}
           {mapLayouts.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
         </select></label>
       </section>
@@ -72,17 +77,17 @@ export function MindMapFormat({ tab, settings, node, selected, version, change, 
         <label>主题形状<select value={typeof data.shape === 'string' ? data.shape : 'rectangle'} onChange={event => style('shape', event.target.value)}>
           {topics.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
         </select></label>
-        <label>填充<input type="color" value={colorValue(data.fillColor, '#eef2f8')} onChange={event => style('fillColor', event.target.value)} /></label>
+        <label>填充<input type="color" value={colorValue(data.fillColor, colorValue(topicTheme.fillColor, theme.backgroundColor))} onChange={event => style('fillColor', event.target.value)} /></label>
         <label>边框颜色<input type="color" value={colorValue(data.borderColor, '#758190')} onChange={event => style('borderColor', event.target.value)} /></label>
         <label>边框宽度<input type="range" min="0" max="8" value={Number(data.borderWidth ?? 0)} onChange={event => style('borderWidth', Number(event.target.value))} /></label>
         <label>边框线型<select value={String(data.borderDasharray ?? 'none')} onChange={event => style('borderDasharray', event.target.value)}>
           <option value="none">实线</option><option value="6,4">虚线</option><option value="2,3">点线</option></select></label>
       </section>
       <section><h3><SlidersHorizontal size={15} />文字</h3>
-        <label>字号<input type="number" min="10" max="72" value={Number(data.fontSize ?? (node.isRoot ? 26 : 16))}
+        <label>字号<input type="number" min="10" max="72" value={Number(data.fontSize ?? topicTheme.fontSize)}
           onChange={event => { const size = event.target.valueAsNumber; if (size >= 10 && size <= 72) style('fontSize', size) }} /></label>
-        <label>文字颜色<input type="color" value={colorValue(data.color, node.isRoot ? '#ffffff' : '#242830')} onChange={event => style('color', event.target.value)} /></label>
-        <label>加粗<input type="checkbox" checked={data.fontWeight === 'bold'} onChange={event => style('fontWeight', event.target.checked ? 'bold' : 'normal')} /></label>
+        <label>文字颜色<input type="color" value={colorValue(data.color, topicTheme.color)} onChange={event => style('color', event.target.value)} /></label>
+        <label>加粗<input type="checkbox" checked={(data.fontWeight ?? topicTheme.fontWeight) === 'bold'} onChange={event => style('fontWeight', event.target.checked ? 'bold' : 'normal')} /></label>
         <label>斜体<input type="checkbox" checked={data.fontStyle === 'italic'} onChange={event => style('fontStyle', event.target.checked ? 'italic' : 'normal')} /></label>
         <label>下划线<input type="checkbox" checked={data.textDecoration === 'underline'} onChange={event => style('textDecoration', event.target.checked ? 'underline' : 'none')} /></label>
         <label>对齐<select value={String(data.textAlign ?? 'left')} onChange={event => style('textAlign', event.target.value)}><option value="left">左对齐</option><option value="center">居中</option><option value="right">右对齐</option></select></label>

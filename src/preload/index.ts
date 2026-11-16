@@ -37,6 +37,7 @@ const desktop: Desktop = {
   saveAudioNote: data => ipcRenderer.invoke('ymd:saveAudioNote', data),
   captureMapShot: rect => ipcRenderer.invoke('ymd:captureMapShot', rect),
   outputMapShot: (data, name) => ipcRenderer.invoke('ymd:outputMapShot', data, name),
+  saveMapExport: (name, format, data) => ipcRenderer.invoke('ymd:saveMapExport', name, format, data),
   printDocument: (name, html) => ipcRenderer.invoke('ymd:printDocument', name, html),
   saveCopy: (path, text) => ipcRenderer.invoke('ymd:saveCopy', path, text),
   reveal: (path, directory) => ipcRenderer.invoke('ymd:reveal', path, directory),

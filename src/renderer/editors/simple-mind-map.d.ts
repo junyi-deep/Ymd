@@ -36,6 +36,7 @@ declare module 'simple-mind-map' {
   }
 
   export interface MapLayout {
+    renderer: MindMap['renderer']
     doLayout(callback: (root: MapNode) => void): void
     renderLine(node: MapNode, ...args: unknown[]): void
     renderExpandBtn(node: MapNode, ...args: unknown[]): void
@@ -55,7 +56,7 @@ declare module 'simple-mind-map' {
   }
 
   type MapEvents = {
-    data_change: [data: NodeData]
+    data_change: [data: NodeData | undefined]
     afterExecCommand: [command: string]
     node_active: [node: MapNode | null, active: MapNode[]]
     node_click: [node: MapNode, event: MouseEvent]
@@ -106,7 +107,7 @@ declare module 'simple-mind-map' {
       onMouseup(): void
     }
     associativeLine: { isCreatingLine: boolean; createLineFromActiveNode(): void; cancelCreateLine(): void }
-    search: { search(text: string): void; endSearch(): void; searchNext(): void; jump(index: number): void; replace(text: string, jumpNext?: boolean): void; replaceAll(text: string): void }
+    search: { mindMap: MindMap; doSearch(): void; search(text: string): void; endSearch(): void; searchNext(): void; jump(index: number): void; replace(text: string, jumpNext?: boolean): void; replaceAll(text: string): void }
     constructor(options: {
       el: HTMLElement
       data: NodeData
@@ -114,6 +115,7 @@ declare module 'simple-mind-map' {
       themeConfig?: Record<string, unknown>
       layout?: string
       fit?: boolean
+      readonly?: boolean
       defaultInsertSecondLevelNodeText?: string
       defaultInsertBelowSecondLevelNodeText?: string
       beforeAssociativeLineConnection?: () => boolean
@@ -137,13 +139,14 @@ declare module 'simple-mind-map' {
     updateData(data: NodeData): void
     resize(): void
     render(callback?: () => void): void
+    reRender(callback?: () => void): void
     setTheme(theme: string): void
     getLayout(): string
     setLayout(layout: string): void
     setThemeConfig(config: Record<string, unknown>): void
     updateConfig(options: Record<string, unknown>): void
     execCommand(command: string, ...args: unknown[]): void
-    export(format: string, download: boolean, name: string): Promise<unknown>
+    export(format: string, download: boolean, name: string): Promise<string | null>
     destroy(): void
   }
 }

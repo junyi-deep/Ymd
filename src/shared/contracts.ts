@@ -113,6 +113,8 @@ export const markdownImageLimits = { count: 20, fileBytes: 15 * 1024 * 1024, bat
 export interface MarkdownImageUpload { name: string; type: string; data: ArrayBuffer }
 export interface MarkdownImageAttachment { label: string; source: string }
 export interface MapShotRect { x: number; y: number; width: number; height: number }
+export const mapExportExtensions = { png: 'PNG', svg: 'SVG', pdf: 'PDF', md: 'Markdown', txt: '纯文本' } as const
+export type MapExportKind = keyof typeof mapExportExtensions
 
 export function markdownImageExtension(name: string, type = '') {
   const extension = /\.([a-z0-9]+)$/i.exec(name)?.[1].toLowerCase()
@@ -157,6 +159,7 @@ export interface Desktop {
   saveAudioNote(data: ArrayBuffer): Promise<boolean>
   captureMapShot(rect: MapShotRect): Promise<ArrayBuffer>
   outputMapShot(data: ArrayBuffer, name?: string): Promise<boolean>
+  saveMapExport(name: string, format: MapExportKind, data: ArrayBuffer): Promise<boolean>
   printDocument(name: string, html: string): Promise<void>
   saveCopy(path: string, text: string): Promise<DocumentFile | null>
   reveal(path: string, directory?: boolean): Promise<void>

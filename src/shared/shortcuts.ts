@@ -48,6 +48,7 @@ export const markdownShortcuts = {
 const mapShortcuts = {
   'map-link': { label: '编辑主题链接', key: 'Mod-k' },
   'map-shot': { label: '导图截图', mac: 'Mod-Shift-p', key: 'F7' },
+  'map-branch': { label: '仅显示分支／显示全部内容', key: 'Mod-;' },
 } satisfies Record<string, Shortcut>
 export const shortcutGroups = { app: appShortcuts, markdown: markdownShortcuts, map: mapShortcuts }
 type Shortcut = { label: string; key?: string; mac?: string }
