@@ -108,11 +108,16 @@ export interface Preferences {
   interfaceFont: string
   windowTransparent: boolean
   windowBlur: boolean
+  windowShadow: WindowShadowPreferences
   libraryCollapsed: boolean
   localCollapsed: boolean
   windowTransparency: number
   showFilenameTitle: boolean
   libraryDirectory?: string
+  attachmentMode: 'relative' | 'fixed'
+  attachmentFolder: string
+  attachmentFolders?: string[]
+  showAttachmentDirectories: boolean
   attachmentDirectory?: string
   attachmentDirectories?: string[]
   stickerDirectory?: string
@@ -147,14 +152,33 @@ export interface MarkdownOutlinePreferences {
   width?: number
 }
 
+export const windowShadowPresets = {
+  subtle: { label: '轻柔', spread: 0, blur: 8 },
+  normal: { label: '标准', spread: 2, blur: 14 },
+  strong: { label: '深邃', spread: 5, blur: 22 },
+} as const
+export const windowShadowColors = [
+  ['#000000', '墨黑'], ['#334155', '石板灰'], ['#2563eb', '电光蓝'],
+  ['#7c3aed', '紫罗兰'], ['#0f766e', '深青'], ['#be185d', '玫红'],
+] as const
+export type WindowShadowPreferences = { enabled: boolean; preset: keyof typeof windowShadowPresets; color: string }
+
 export const defaultPreferences: Preferences = {
   theme: 'system', size: 'normal', interfaceFontSize: 13, interfaceFont: 'system-ui',
   windowTransparent: true, windowBlur: true, libraryCollapsed: false, localCollapsed: false, windowTransparency: 80, showFilenameTitle: false, recentLimit: 50, expandedFolders: [], hiddenLocalEntries: [], animations: true, documentTheme: 'classic',
+  windowShadow: { enabled: true, preset: 'normal', color: windowShadowColors[0][0] },
+  attachmentMode: 'relative', attachmentFolder: 'assets', showAttachmentDirectories: false,
   markdownOutline: { position: 'right', numbering: 'none', visible: false },
   markdownPageWidth: 'normal', outlinePageWidth: 'normal', outlineRemainderVisible: true, mapRemainderVisible: true,
   mapOverview: { visible: false, position: 'left' }, mapDefaults: {},
   codeBlocks: { lineNumbers: false, wrap: false }, outlineCodeLineNumbers: false,
   autoSave: true, remoteImages: false, autoCheckUpdates: true, autoDownloadUpdates: false, searchEngine: 'google', shortcuts: {},
+}
+
+export function attachmentFolderName(input: unknown) {
+  const name = typeof input === 'string' ? input.trim() : ''
+  if (name && name.length <= 120 && !/^[.]|[. ]$|[<>:"/\\|?*\u0000-\u001f]/.test(name) &&
+    !/^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(name)) return name
 }
 
 export const interfaceFontSizes = { min: 10, max: 24 }

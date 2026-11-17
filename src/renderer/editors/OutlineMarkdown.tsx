@@ -107,7 +107,7 @@ export const OutlineMarkdown = memo(function OutlineMarkdown({ text, path, remot
         if (!image) continue
         const parent = placeholder.parentElement
         const standalone = !parent || parent.localName === 'p' && parent.childElementCount === 1 && !parent.textContent?.trim()
-        placeholder.replaceWith(createMarkdownImage(path, image, remoteImages, standalone))
+        placeholder.replaceWith(createMarkdownImage(path, image, remoteImages, standalone, undefined, !!view.closest('.outline-editor')))
       }
       for (const figure of output.querySelectorAll<HTMLElement>('figure[data-preview-block]')) {
         const preview = diagrams.get(figure.dataset.previewBlock ?? '')

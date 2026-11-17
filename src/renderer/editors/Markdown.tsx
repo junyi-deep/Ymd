@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom'
 import { BetweenHorizontalStart, Check, ChevronRight, Code2, Copy, Eye, FileDown, FileText, FolderInput, Info, Keyboard, ListTree, LocateFixed, MoreHorizontal, Pin, Printer, Search, Star, Layers, Trash2 } from 'lucide-react'
 import { MarkdownMenu, type MenuItem } from './MarkdownMenu'
 import { contextItems, insertMermaid, tabInList, typographyKeys } from './markdownCommands'
+import { markdownDestination, safeMarkdownHref } from './markdownLinks'
 import { markdownPlainText } from './markdownHtml'
 import { chooseMarkdownImages, editImageReference, imageContextItems, isImageNode, MarkdownImage, markdownImageIntake, readImageReference, type ImageResizeRequest } from './markdownImages'
 import { MediaViewer } from './MediaViewer'
@@ -34,7 +35,7 @@ class DocumentTitle extends WidgetType {
 
 const inlineStyles: Record<string, string> = {
   StrongEmphasis: 'md-bold', Emphasis: 'md-italic', Strikethrough: 'md-strike',
-  InlineCode: 'md-inline-code', Highlight: 'md-highlight', Underline: 'md-underline', Link: 'md-link', Autolink: 'md-link',
+  InlineCode: 'md-inline-code', Highlight: 'md-highlight', Underline: 'md-underline',
 }
 const markers = new Set(['HeaderMark', 'EmphasisMark', 'StrikethroughMark', 'CodeMark', 'QuoteMark', 'HighlightMark', 'UnderlineMark', 'TextColorMark', 'HighlightColorMark'])
 
@@ -121,7 +122,7 @@ function liveMarkdown(view: EditorView, path: string, loadRemote: boolean) {
         ranges.push(Decoration.replace({ widget: new TaskBox(from, /x/i.test(state.sliceDoc(from, to)), state.readOnly) }).range(from, to))
       }
       if (isImageNode(name)) {
-        const editing = !state.readOnly && state.selection.ranges.some(range => range.from < to && range.to > from)
+        const editing = view.hasFocus && visible(from, to)
         const reference = !editing && sourceLine.to >= to ? readImageReference(state, node.node) : undefined
         if (reference) {
           const standalone = sourceLine.text.trim() === reference.markdown
@@ -129,11 +130,21 @@ function liveMarkdown(view: EditorView, path: string, loadRemote: boolean) {
         }
         return false
       }
-      if (name === 'Link' && !visible(from, to)) {
-        const labelEnd = node.node.getChildren('LinkMark')[1]
-        if (labelEnd) {
-          hide(from, from + 1)
-          hide(labelEnd.from, to)
+      if ((name === 'Link' || name === 'Autolink') && !(view.hasFocus && visible(from, to))) {
+        const marks = node.node.getChildren('LinkMark')
+        const labelFrom = marks[0]?.to ?? from
+        const labelTo = marks[1]?.from ?? to
+        const destination = markdownDestination(state, node.node, state.sliceDoc(labelFrom, labelTo))
+        const href = destination && safeMarkdownHref(destination.href)
+        if (href && labelTo > labelFrom) {
+          hide(from, labelFrom)
+          for (let start = labelTo; start < to;) {
+            const end = Math.min(state.doc.lineAt(start).to, to)
+            hide(start, end)
+            start = end + 1
+          }
+          ranges.push(Decoration.mark({ tagName: 'a', class: 'md-link',
+            attributes: { href, title: destination.title || href } }).range(labelFrom, labelTo))
         }
       }
       if (markers.has(name) && parent && parent.name !== 'FencedCode') {
@@ -163,7 +174,7 @@ const live = (path: string, loadRemote: boolean) => ViewPlugin.fromClass(class {
   constructor(view: EditorView) { this.decorations = liveMarkdown(view, path, loadRemote) }
 
   update(update: ViewUpdate) {
-    if (update.startState.readOnly !== update.state.readOnly || update.docChanged || update.selectionSet || update.viewportChanged || syntaxTree(update.startState) !== syntaxTree(update.state)) {
+    if (update.startState.readOnly !== update.state.readOnly || update.docChanged || update.selectionSet || update.focusChanged || update.viewportChanged || syntaxTree(update.startState) !== syntaxTree(update.state)) {
       this.decorations = liveMarkdown(update.view, path, loadRemote)
     }
   }
@@ -209,10 +220,11 @@ interface Props {
   starred: boolean
   togglePin: () => void
   toggleStar: () => void
+  followLink: (href: string) => void
   report: (error: unknown) => void
 }
 
-export function MarkdownEditor({ text, name, path, modified, platform, remoteImages, searchEngine, keyOverrides, outline, filenameTitle, saveStatus, updateOutline, width, codeBlocks, setWidth, registerFlush, onChange, find, jump, reveal, saveCopy, duplicate, move, trash, shortcuts, exportPdf, printDocument, pinned, starred, togglePin, toggleStar, report, position }: Props) {
+export function MarkdownEditor({ text, name, path, modified, platform, remoteImages, searchEngine, keyOverrides, outline, filenameTitle, saveStatus, updateOutline, width, codeBlocks, setWidth, registerFlush, onChange, find, jump, reveal, saveCopy, duplicate, move, trash, shortcuts, exportPdf, printDocument, pinned, starred, togglePin, toggleStar, followLink, report, position }: Props) {
   const host = useRef<HTMLDivElement>(null)
   const [titleHost] = useState(() => document.createElement('div'))
   const titleMode = useRef(new Compartment())
@@ -511,6 +523,13 @@ export function MarkdownEditor({ text, name, path, modified, platform, remoteIma
     ['words', '字数'], ['lines', '行数'], ['modified', '更新时间'],
   ] as const).map(([value, label]) => ({ label, selected: status === value, run: () => setStatus(value) }))
 
+  function goToHeading(pos: number) {
+    const editor = view.current
+    if (!editor || pos > editor.state.doc.length) return
+    editor.dispatch({ selection: { anchor: pos }, effects: EditorView.scrollIntoView(pos, { y: 'start', yMargin: 16 }) })
+    if (!reading) editor.focus()
+  }
+
   function openContextMenu(editor: EditorView, x: number, y: number, items: MenuItem[]) {
     const mapping: (() => void)[] = []
     const serialize = (items: MenuItem[]): ContextMenuItem[] => items.map(item => {
@@ -569,12 +588,7 @@ export function MarkdownEditor({ text, name, path, modified, platform, remoteIma
               setExpandedHeadings(current => new Map(current).set(heading.id, !heading.expanded))}><ChevronRight size={13} /></button>
             : <span className="outline-heading-toggle" />}
           <button type="button" className="outline-heading-link" aria-current={heading.pos === visibleActiveHeading ? 'location' : undefined}
-            title={heading.title} onClick={() => {
-              const editor = view.current
-              if (!editor || heading.pos > editor.state.doc.length) return
-              editor.dispatch({ selection: { anchor: heading.pos }, effects: EditorView.scrollIntoView(heading.pos, { y: 'start', yMargin: 16 }) })
-              if (!reading) editor.focus()
-            }}>{heading.number && <span className="outline-heading-number">{heading.number}</span>}
+            title={heading.title} onClick={() => goToHeading(heading.pos)}>{heading.number && <span className="outline-heading-number">{heading.number}</span>}
             <span className="outline-heading-title">{heading.title}</span></button>
         </div>)}</nav>
         {!headings.length && <p>还没有标题</p>}
@@ -591,19 +605,20 @@ export function MarkdownEditor({ text, name, path, modified, platform, remoteIma
           </div>
         </div>
         {hasTitle && createPortal(filenameTitle, titleHost)}
-        <div className="markdown-surface" ref={host} onClick={event => {
-          if (event.defaultPrevented || event.target instanceof Element && event.target.closest('.filename-title')) return
-          if ((!event.metaKey && !event.ctrlKey) || !view.current) return
-          const editor = view.current
-          const pos = editor.posAtCoords({ x: event.clientX, y: event.clientY })
-          if (pos === null) return
-          let node = syntaxTree(editor.state).resolveInner(pos, -1)
-          while (node.parent && !['Link', 'Autolink'].includes(node.name)) node = node.parent
-          const url = node.getChild('URL')
-          if (url) {
-            event.preventDefault()
-            void window.desktop.openExternal(editor.state.sliceDoc(url.from, url.to).replace(/^<|>$/g, '')).catch(report)
-          }
+        <div className="markdown-surface" ref={host} onMouseDownCapture={event => {
+          if (event.button === 0 && event.target instanceof Element && event.target.closest('a.md-link') && !event.target.closest('button')) event.preventDefault()
+        }} onClick={event => {
+          const anchor = event.target instanceof Element && event.target.closest<HTMLAnchorElement>('a.md-link')
+          if (!anchor) return
+          event.preventDefault()
+          const href = anchor.getAttribute('href')
+          if (!href) return
+          if (href.startsWith('#')) {
+            let slug: string
+            try { slug = decodeURIComponent(href.slice(1)) } catch { return }
+            const heading = headings.find(item => item.title.toLowerCase().replace(/[^\p{L}\p{N} _-]/gu, '').replace(/\s/g, '-') === slug)
+            if (heading) goToHeading(heading.pos)
+          } else followLink(href)
         }} onDoubleClick={event => {
           const editor = view.current
           if (editor && event.target instanceof Element && editImageReference(editor, event.target)) event.preventDefault()

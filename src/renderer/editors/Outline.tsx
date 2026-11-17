@@ -6,6 +6,9 @@ import { renderedSelection } from './outlineTextStyle'
 import { OutlineSelectionMenu, type OutlineStyle } from './OutlineSelectionMenu'
 import type { Links } from 'marked'
 import { markdownPageWidths, type MarkdownPageWidth } from '../../shared/contracts'
+import { atVisualBoundary } from './outlineCaret'
+import { MediaViewer } from './MediaViewer'
+import { mediaPreviewEvent, type MediaPreview } from './mediaPreview'
 import { DocumentRemainder } from './DocumentRemainder'
 import { MarkdownMenu } from './MarkdownMenu'
 import { OutlineCodeCard } from './OutlineCodeCard'
@@ -20,16 +23,17 @@ const typingTypes = new Set(['insertText', 'deleteContentBackward', 'deleteConte
 const blockTitle = (node: Block) => node.text.split('\n')[0].trim() || '空块'
 const cursor = (id: string, start: number, end = start): OutlineCaret => ({ id, start, end })
 
-export function OutlineEditor({ text, name, path, platform, remoteImages, sessions, width, setWidth, remainderVisible, setRemainderVisible, onChange, position, filenameTitle, codeLineNumbers }: {
+export function OutlineEditor({ text, name, path, platform, remoteImages, sessions, width, setWidth, remainderVisible, setRemainderVisible, followLink, onChange, position, filenameTitle, codeLineNumbers }: {
   position: DocumentViewPosition
   codeLineNumbers: boolean
   filenameTitle?: React.ReactNode
   text: string; name: string; path: string; platform: string; remoteImages: boolean; sessions: Map<string, OutlineSession>
   width: MarkdownPageWidth; setWidth: (value: MarkdownPageWidth) => void
-  remainderVisible: boolean; setRemainderVisible: (visible: boolean) => void; onChange: (text: string) => void
+  remainderVisible: boolean; setRemainderVisible: (visible: boolean) => void; followLink: (href: string) => void; onChange: (text: string) => void
 }) {
   const [session] = useState(() => openOutline(sessions.get(path), text))
   const [blocks, setBlocks] = useState(() => session.blocks)
+  const [media, setMedia] = useState<MediaPreview>()
   const [editing, setEditing] = useState<string>()
   const [selected, setSelected] = useState<string[]>([])
   const [scope, setScope] = useState(session.scope)
@@ -75,9 +79,12 @@ export function OutlineEditor({ text, name, path, platform, remoteImages, sessio
       inputBefore.current = cursor(input.dataset.block, input.selectionStart, input.selectionEnd)
     }
     if (position.outline !== undefined) view.scrollTop = position.outline
+    const showMedia = (event: Event) => setMedia((event as CustomEvent<MediaPreview>).detail)
+    view.addEventListener(mediaPreviewEvent, showMedia)
     view.addEventListener('beforeinput', before)
     return () => {
       position.outline = view.scrollTop
+      view.removeEventListener(mediaPreviewEvent, showMedia)
       view.removeEventListener('beforeinput', before)
     }
   }, [])
@@ -250,13 +257,7 @@ export function OutlineEditor({ text, name, path, platform, remoteImages, sessio
       return
     }
     if (!mod && !shiftKey && !altKey && at.start === at.end && (key === 'ArrowUp' || key === 'ArrowDown')) {
-      const style = getComputedStyle(currentTarget)
-      const lineHeight = parseFloat(style.lineHeight)
-      const naturalHeight = lineHeight * block.text.split('\n').length + parseFloat(style.paddingTop) + parseFloat(style.paddingBottom)
-      if (currentTarget.scrollHeight > naturalHeight + 1) return
-      const firstLine = !block.text.slice(0, at.start).includes('\n')
-      const lastLine = !block.text.slice(at.start).includes('\n')
-      if (key === 'ArrowUp' ? firstLine : lastLine) {
+      if (atVisualBoundary(currentTarget, key === 'ArrowUp')) {
         const index = visible.findIndex(node => node.id === block.id)
         const adjacent = visible[index + (key === 'ArrowUp' ? -1 : 1)]
         if (adjacent) {
@@ -420,7 +421,7 @@ export function OutlineEditor({ text, name, path, platform, remoteImages, sessio
       })
       return
     }
-    if (event.target instanceof Element && event.target.closest('a')) event.preventDefault()
+    if (event.target instanceof Element && event.target.closest('a[href]')) return
     const selection = document.getSelection()
     if (selection && !selection.isCollapsed) return
     cursorTo(cursor(node.id, node.text.length))
@@ -635,7 +636,23 @@ export function OutlineEditor({ text, name, path, platform, remoteImages, sessio
   const remainder = !focused && projectionRemainder(session.projection)
   return <div ref={root} className="outline-editor" data-width={width} tabIndex={-1} onKeyDown={handleKeys}
     onCopy={event => copy(event, false)} onCut={event => copy(event, true)} onPaste={paste}
-    onClick={event => { if (event.target instanceof Element && event.target.closest('a')) event.preventDefault() }}>
+    onClick={event => {
+      const anchor = event.target instanceof Element && event.target.closest<HTMLAnchorElement>('a[href]')
+      if (!anchor) return
+      const alreadyHandled = event.defaultPrevented
+      event.preventDefault()
+      const href = anchor.getAttribute('href')
+      if (href && !alreadyHandled && !event.shiftKey && !event.metaKey && !event.ctrlKey) {
+        if (href.startsWith('#')) {
+          let slug: string
+          try { slug = decodeURIComponent(href.slice(1)) } catch { return }
+          Array.from(event.currentTarget.querySelectorAll('.outline-markdown :is(h1,h2,h3,h4,h5,h6)')).find(item =>
+            item.textContent?.toLowerCase().replace(/[^\p{L}\p{N} _-]/gu, '').replace(/\s/g, '-') === slug)
+            ?.scrollIntoView({ block: 'start' })
+        } else followLink(href)
+      }
+    }}>
+    {media && <MediaViewer request={media} close={() => setMedia(undefined)} />}
     <div className="outline-content">
       <div className="outline-toolbar" role="toolbar" aria-label="大纲工具栏">
         <nav aria-label="大纲路径">

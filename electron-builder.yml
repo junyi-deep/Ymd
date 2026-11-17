@@ -7,6 +7,9 @@ files:
   - dist/**/*
   - package.json
 mac:
+  asarUnpack:
+    - dist/main/window-shadow.dylib
+    - "**/node_modules/@koromix/koffi-darwin-arm64/**"
   identity: "-"
   hardenedRuntime: false
   icon: build/icon.icns

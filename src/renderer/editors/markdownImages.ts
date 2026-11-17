@@ -6,6 +6,7 @@ import type { SyntaxNode } from '@lezer/common'
 import { markdownImageExtension, markdownImageLimits, type MarkdownImageAttachment } from '../../shared/contracts'
 import type { MenuItem } from './MarkdownMenu'
 import { decodeImageAttribute, imageHasSizing, readHtmlImage, writeSizedImage, type ImageSizing } from './markdownImageSyntax'
+import { linkText, markdownDestination } from './markdownLinks'
 import { createMarkdownImage, type PreviewImage } from './markdownPreviewMedia'
 
 type Target = { from: number; to: number }
@@ -23,15 +24,16 @@ export function readImageReference(state: EditorState, node: SyntaxNode): ImageR
   const { from, to } = node
   const markdown = state.sliceDoc(from, to)
   if (node.name === 'Image') {
-    const url = node.getChild('URL')
     const labelEnd = node.getChildren('LinkMark')[1]
-    if (!url || !labelEnd) return
-    const title = node.getChild('LinkTitle')
-    const markup = (value: string) => decodeImageAttribute(value.replace(/\\([!-\/:-@\[-\x60{-~])/g, '$1'))
-    return { from, to, markdown, urlFrom: url.from, urlTo: url.to, sizing: {},
-      source: markup(state.sliceDoc(url.from, url.to).replace(/^<|>$/g, '')),
-      label: markup(state.sliceDoc(from + 2, labelEnd.from)),
-      title: title ? markup(state.sliceDoc(title.from + 1, title.to - 1)) : undefined }
+    if (!labelEnd) return
+    const rawLabel = state.sliceDoc(from + 2, labelEnd.from)
+    const destination = markdownDestination(state, node, rawLabel)
+    if (!destination) return
+    const reference = node.getChild('LinkLabel')
+    return { from, to, markdown, urlFrom: destination.url?.from ?? reference?.from ?? from,
+      urlTo: destination.url?.to ?? reference?.to ?? to, sizing: {}, source: destination.href,
+      label: linkText(rawLabel), title: destination.title }
+
   }
   const image = readHtmlImage(markdown)
   if (!image) return

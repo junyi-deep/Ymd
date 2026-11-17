@@ -4,8 +4,10 @@ import { mkdir, readdir, readFile, writeFile, rename, open, lstat, realpath, sta
 import { renameSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { defaultPreferences, interfaceFontSizes, documentHistoryLimit, mapExportExtensions, markdownImageExtension, markdownImageExtensions, paneWidths, recentFilesLimit, searchEngines, windowMaterialFor } from '../shared/contracts'
+import { attachmentFolderName, defaultPreferences, interfaceFontSizes, documentHistoryLimit, mapExportExtensions, markdownImageExtension, markdownImageExtensions, paneWidths, recentFilesLimit, searchEngines, windowMaterialFor, windowShadowPresets } from '../shared/contracts'
 import type { Command, ContextMenuItem, Desktop, DocumentFile, Entry, FileKind, MapExportKind, MapShotRect, MarkdownImageUpload, Preferences, StorageDirectory, TreeChange, TreeMutation } from '../shared/contracts'
+import { initializeStorage, migrateStickers } from './storage'
+import { installMacShadow } from './macShadow'
 import { installWindowFrame } from './windowCorners'
 import { Files, containsPath, fileKind } from './files'
 import { LocalMapLocations } from './localMapLocations'
@@ -18,6 +20,7 @@ import { Releases } from './releases'
 import { appShortcuts, inputChord, isShortcutAccelerator, readShortcutOverrides, shortcutAccelerator, shortcutMenuLabel, ShortcutSequence, shortcutsFor, shortcutValue,
   type AppShortcut } from '../shared/shortcuts'
 
+const storage = initializeStorage()
 const files = new Files()
 const dev = !app.isPackaged && process.argv.includes('--dev')
 const rendererRoot = path.join(__dirname, '../renderer')
@@ -28,6 +31,7 @@ type EditorWindow = {
   recording: boolean; keys: ShortcutSequence; documents: Set<string>; watchRevision: number
   draftRevisions: Map<string, symbol>
   frame?: ReturnType<typeof installWindowFrame>
+  macShadow?: ReturnType<typeof installMacShadow>
   resolveClose?: (closed: boolean) => void
 }
 const editors = new Map<number, EditorWindow>()
@@ -60,12 +64,24 @@ function normalizePreferences(value: (Partial<Preferences> & { solidBackground?:
     windowTransparent: typeof value?.windowTransparent === 'boolean' ? value.windowTransparent : value?.solidBackground !== true,
     windowBlur: typeof value?.windowBlur === 'boolean' ? value.windowBlur
       : value?.solidBackground !== true && (process.platform === 'win32' || transparency !== 100),
+    windowShadow: {
+      enabled: value?.windowShadow?.enabled !== false,
+      preset: value?.windowShadow?.preset && Object.hasOwn(windowShadowPresets, value.windowShadow.preset)
+        ? value.windowShadow.preset : defaultPreferences.windowShadow.preset,
+      color: /^#[0-9a-f]{6}$/i.test(value?.windowShadow?.color ?? '') ? value!.windowShadow!.color.toLowerCase() : defaultPreferences.windowShadow.color,
+    },
     libraryCollapsed: value?.libraryCollapsed === true,
     localCollapsed: value?.localCollapsed === true,
     windowTransparency: typeof transparency === 'number' && Number.isFinite(transparency)
       ? Math.min(100, Math.max(0, Math.round(transparency))) : defaultPreferences.windowTransparency,
     showFilenameTitle: value?.showFilenameTitle === true,
     libraryDirectory: directory(value?.libraryDirectory),
+    attachmentMode: value?.attachmentMode === 'fixed' || value?.attachmentMode !== 'relative' && !!directory(value?.attachmentDirectory)
+      ? 'fixed' : 'relative',
+    attachmentFolder: attachmentFolderName(value?.attachmentFolder) ?? defaultPreferences.attachmentFolder,
+    attachmentFolders: Array.isArray(value?.attachmentFolders)
+      ? [...new Set(value.attachmentFolders.map(attachmentFolderName).filter((name): name is string => !!name))] : [],
+    showAttachmentDirectories: value?.showAttachmentDirectories === true,
     attachmentDirectory: directory(value?.attachmentDirectory),
     attachmentDirectories: Array.isArray(value?.attachmentDirectories) ? [...new Set(value.attachmentDirectories.flatMap(item => directory(item) ?? []))] : [],
     stickerDirectory: directory(value?.stickerDirectory),
@@ -131,9 +147,15 @@ function applyBackground(target?: BrowserWindow) {
   nativeTheme.themeSource = preferences.theme
   const material = windowMaterial()
   for (const window of target ? [target] : [...editors.values()].map(editor => editor.window)) {
-    if (process.platform === 'darwin') window.setVibrancy(material === 'vibrancy' ? macVibrancy : null)
+    const editor = editors.get(window.id)
+    if (process.platform === 'darwin') {
+      window.setVibrancy(material === 'vibrancy' ? macVibrancy : null)
+      if (editor?.macShadow) editor.macShadow(preferences.windowShadow)
+      else window.setHasShadow(preferences.windowShadow.enabled)
+    }
+    editor?.frame?.setShadow(preferences.windowShadow)
     if (windowsAcrylic) {
-      const frame = editors.get(window.id)?.frame
+      const frame = editor?.frame
       if (frame) frame.setAcrylic(material === 'acrylic', !nativeTheme.shouldUseDarkColors)
       else window.setBackgroundMaterial(material === 'acrylic' ? 'acrylic' : 'none')
       window.setTitleBarOverlay(overlayColors())
@@ -221,6 +243,10 @@ function createWindow(initialFile?: DocumentFile) {
     keys: new ShortcutSequence(), documents: new Set(initialFile ? [initialFile.path] : []), watchRevision: 0, draftRevisions: new Map() }
   editors.set(window.id, editor)
   lastEditor = editor
+  if (process.platform === 'darwin') {
+    try { editor.macShadow = installMacShadow(window) }
+    catch (error) { console.warn('无法应用 macOS 窗口阴影样式。', error) }
+  }
   if (process.platform === 'win32') {
     try { editor.frame = installWindowFrame(window, windowsAcrylic) }
     catch (error) { console.warn('无法应用 Windows 窗口边框。', error) }
@@ -311,7 +337,7 @@ void app.whenReady().then(async () => {
     }
     return net.fetch(pathToFileURL(target).href)
   })
-  const data = app.getPath('userData')
+  const { data, previous, documents: defaultLibrary, stickers: defaultStickerDirectory } = storage
   sizeFile = path.join(data, 'window-size.json')
   const settings = path.join(data, 'preferences.json')
   const recentFile = path.join(data, 'recent.json')
@@ -332,8 +358,6 @@ void app.whenReady().then(async () => {
     const size = JSON.parse(sizeText)
     if (Number.isInteger(size.width) && size.width >= 660 && Number.isInteger(size.height) && size.height >= 510) windowSize = size
   } catch {}
-  const defaultLibrary = path.join(app.getPath('home'), '.ymd')
-  const defaultStickerDirectory = path.join(data, 'stickers')
   const localMapLocations = new LocalMapLocations(path.join(data, 'map-locations.json'))
   let oldProject: unknown
   try {
@@ -344,7 +368,10 @@ void app.whenReady().then(async () => {
     preferences = defaultPreferences
   }
   function updateAttachmentDirectories() {
-    files.attachmentDirectory = preferences.attachmentDirectory
+    files.attachmentDirectory = preferences.attachmentMode === 'fixed' ? preferences.attachmentDirectory : undefined
+    files.attachmentFolder = preferences.attachmentFolder
+    files.attachmentFolders = new Set(['assets', preferences.attachmentFolder, ...(preferences.attachmentFolders ?? [])].map(name => name.toLowerCase()))
+    files.showAttachmentDirectories = preferences.showAttachmentDirectories
     files.attachmentDirectories = [...new Set([...(preferences.attachmentDirectories ?? []),
       ...(preferences.attachmentDirectory ? [preferences.attachmentDirectory] : [])])]
   }
@@ -379,7 +406,15 @@ void app.whenReady().then(async () => {
       ? items.map(item => item.path === entry.path ? opened : item)
       : [opened, ...items]
   })
-  const oldLibrary = path.join(data, 'Documents')
+  const oldLibrary = path.join(previous, 'Documents')
+  const workspaceMarker = path.join(data, '.workspace-layout-v2')
+  const legacyRoot = await realpath(storage.root)
+  const reserved = ['documents', 'stickers', 'config']
+  files.hiddenStorageDirectories = new Set(reserved.map(name => path.join(legacyRoot, name)))
+  const hasLegacyWorkspace = (await readdir(legacyRoot, { withFileTypes: true })).some(item =>
+    !item.name.startsWith('.') && !reserved.includes(item.name.toLowerCase()) && !item.isSymbolicLink() &&
+    (item.isDirectory() || fileKind(item.name)))
+  await migrateStickers(previous, defaultStickerDirectory, data).catch(error => { console.warn('无法迁移旧版贴纸。', error) })
   await mkdir(data, { recursive: true })
   if (storedRecent === undefined) {
     const oldEntries = await readdir(oldLibrary).catch(() => [])
@@ -403,7 +438,7 @@ void app.whenReady().then(async () => {
         const opened = await Promise.all(savedEntries.slice(index, index + 32).map(async saved => {
           if (typeof saved?.path !== 'string' || !path.isAbsolute(saved.path)) return null
           const entry = await (saved.kind === 'directory' ? files.authorizeDirectory(saved.path) : files.authorizeFileEntry(saved.path)).catch(() => null)
-          return entry && { ...entry, lastOpened: Number.isFinite(saved.lastOpened) ? saved.lastOpened as number : undefined }
+          return entry && { ...entry, name: entry.path === legacyRoot && entry.kind === 'directory' ? '旧版文档' : entry.name, lastOpened: Number.isFinite(saved.lastOpened) ? saved.lastOpened as number : undefined }
         }))
         for (const entry of opened) {
           if (!entry || seen.has(entry.path)) continue
@@ -414,6 +449,14 @@ void app.whenReady().then(async () => {
     }
     recent.sort((left, right) => (right.lastOpened ?? 0) - (left.lastOpened ?? 0))
     files.retainRoots(roots())
+  }
+
+  if (!await lstat(workspaceMarker).catch(() => null)) {
+    if (hasLegacyWorkspace && library.path !== legacyRoot && !recent.some(entry => entry.path === legacyRoot)) {
+      const entry = await files.authorizeDirectory(legacyRoot)
+      await writeRecent(items => [...items.slice(0, recentFilesLimit - 1), { ...entry, name: '旧版文档' }])
+    }
+    await writeFile(workspaceMarker, '')
   }
 
   let documentHistory = recent.filter(entry => entry.kind !== 'directory').slice(0, documentHistoryLimit)
@@ -572,7 +615,7 @@ void app.whenReady().then(async () => {
   }
   async function checkedStorageDirectory(kind: StorageDirectory) {
     const directory = resourceDirectory(kind)
-    if (!directory) throw new Error('附件保存在各文档旁的 assets 文件夹。')
+    if (!directory) throw new Error('未选择固定附件目录。')
     const isDefault = kind === 'stickers' && !preferences.stickerDirectory
     if (isDefault) await mkdir(directory, { recursive: true })
     if (!(await lstat(directory)).isDirectory() || !isDefault && await realpath(directory) !== directory) throw new Error('存储目录已移动或无效。')
@@ -594,11 +637,12 @@ void app.whenReady().then(async () => {
       if (!(await stat(selected)).isDirectory()) throw new Error('请选择文件夹。')
     }
     await storePreferences(current => kind === 'stickers' ? { ...current, stickerDirectory: selected }
-      : { ...current, attachmentDirectory: selected, attachmentDirectories: [...new Set([
+      : { ...current, attachmentMode: selected ? 'fixed' : 'relative', attachmentDirectory: selected, attachmentDirectories: [...new Set([
         ...(current.attachmentDirectories ?? []), ...(current.attachmentDirectory ? [current.attachmentDirectory] : []),
       ])] })
     updateAttachmentDirectories()
     broadcast('ymd:preferences', preferences)
+    broadcast('ymd:workspaceChanged', { library, recent })
   })
   handle('openStorageDirectory', async (kind: StorageDirectory) => {
     const message = await shell.openPath(await checkedStorageDirectory(kind))
@@ -873,9 +917,16 @@ void app.whenReady().then(async () => {
       defaultPath: path.dirname(canonical), properties: ['openFile', 'multiSelections'],
       filters: [{ name: '图片', extensions: Object.keys(markdownImageExtensions) }],
     })
-    return result.canceled ? [] : files.importImageFiles(canonical, result.filePaths)
+    if (result.canceled) return []
+    const images = await files.importImageFiles(canonical, result.filePaths)
+    if (images.length && files.showAttachmentDirectories) broadcast('ymd:workspaceChanged', { library, recent })
+    return images
   })
-  handle('importMarkdownImages', (file: string, images: MarkdownImageUpload[]) => files.importImageBytes(file, images))
+  handle('importMarkdownImages', async (file: string, images: MarkdownImageUpload[]) => {
+    const attachments = await files.importImageBytes(file, images)
+    if (attachments.length && files.showAttachmentDirectories) broadcast('ymd:workspaceChanged', { library, recent })
+    return attachments
+  })
   handleEditor('pasteMarkdownClipboard', ({ window }) => window.webContents.paste())
   handle('readMarkdownImage', (file: string, source: string) => {
     if (typeof source !== 'string') throw new Error('图片路径无效。')
@@ -1067,15 +1118,23 @@ void app.whenReady().then(async () => {
   handle('setPreferences', async (value: Partial<Preferences>) => {
     let changedShortcuts = false
     let changedBackground = false
+    let changedAttachmentTree = false
     const updated = await storePreferences(current => {
       const next = normalizePreferences({ ...current, ...value, libraryDirectory: current.libraryDirectory,
         attachmentDirectory: current.attachmentDirectory, attachmentDirectories: current.attachmentDirectories,
+        attachmentFolders: [...new Set([...(current.attachmentFolders ?? []), current.attachmentFolder])],
         stickerDirectory: current.stickerDirectory, expandedFolders: current.expandedFolders, hiddenLocalEntries: current.hiddenLocalEntries })
+      changedAttachmentTree = current.showAttachmentDirectories !== next.showAttachmentDirectories ||
+        current.attachmentFolder !== next.attachmentFolder
+      if (next.attachmentMode === 'fixed' && !next.attachmentDirectory) next.attachmentMode = 'relative'
       changedShortcuts = JSON.stringify(current.shortcuts) !== JSON.stringify(next.shortcuts)
       changedBackground = current.theme !== next.theme ||
-        windowMaterial(current) !== windowMaterial(next)
+        windowMaterial(current) !== windowMaterial(next) ||
+        JSON.stringify(current.windowShadow) !== JSON.stringify(next.windowShadow)
       return next
     })
+    updateAttachmentDirectories()
+    if (changedAttachmentTree) broadcast('ymd:workspaceChanged', { library, recent })
     if (changedShortcuts) installMenu()
     if (changedBackground) applyBackground()
     broadcast('ymd:preferences', updated)

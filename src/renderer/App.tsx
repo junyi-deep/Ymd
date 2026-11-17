@@ -1,6 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState, type CSSProperties, type MouseEvent, type ReactNode } from 'react'
 import { AppWindow, ArrowLeft, Check, ChevronDown, ChevronRight, CircleAlert, Copy, FilePlus2, FileText, FolderInput, Home, ListChecks, ListTree, Network, PanelLeft, LocateFixed, Minus, Pencil, Pin, Plus, Save, Search, Settings2, Shapes, Star, Trash2, X } from 'lucide-react'
 import { defaultPreferences, defaultUpdateProxy, windowBlurTint, windowMaterialFor, type Command, type DocumentFile, type EditorMode, type Entry, type FileKind, type Preferences, type RecoveryEntry, type Scope, type SearchHit, type TreeChange, type TreeMutation, type UpdateProxyInput, type VersionStatus } from '../shared/contracts'
+import { documentLinkPath } from './documentLinks'
 import { FileTreeRow, FilesTree, type TreeDrag, type TreeRename } from './FilesTree'
 import type { SettingsPage } from './Settings'
 import { PaneResize } from './PaneResize'
@@ -610,6 +611,15 @@ export function App() {
     })
   }
 
+  function followDocumentLink(document: string, href: string) {
+    if (/^(https?:|mailto:)/i.test(href)) { run(() => window.desktop.openExternal(href)); return }
+    try {
+      const linked = documentLinkPath(href, document, platform)
+      if (linked) openPath(linked)
+      else setNotice('此链接指向不受支持的文件类型。')
+    } catch { setNotice('链接无效。') }
+  }
+
   function markedSection(title: string, paths: string[], Icon: typeof Pin) {
     if (!paths.length) return null
     return <section><div className="section-heading"><h2>{title}</h2></div>
@@ -703,7 +713,12 @@ export function App() {
     const key = shortcutValue(preferences.shortcuts, id, platform)
     return key ? <kbd aria-hidden="true">{shortcutLabel(key, platform)}</kbd> : <ChevronRight size={16} />
   }
-  const local = recent.filter(entry => entry.path !== library.path && (entry.kind === 'directory' || scopeOf(entry.path) === 'local')).slice(0, preferences.recentLimit)
+  const attachmentNames = new Set(['assets', preferences.attachmentFolder, ...(preferences.attachmentFolders ?? [])].map(name => name.toLowerCase()))
+  const fixedAttachments = [preferences.attachmentDirectory, ...(preferences.attachmentDirectories ?? [])].filter((directory): directory is string => !!directory)
+  const local = recent.filter(entry => entry.path !== library.path && (entry.kind === 'directory'
+    ? preferences.showAttachmentDirectories || !attachmentNames.has(entry.name.toLowerCase()) &&
+      !fixedAttachments.some(directory => platform === 'win32' ? directory.toLowerCase() === entry.path.toLowerCase() : directory === entry.path)
+    : scopeOf(entry.path) === 'local')).slice(0, preferences.recentLimit)
   const expandedFolders = new Set(preferences.expandedFolders)
   const hiddenLocalEntries = new Set(preferences.hiddenLocalEntries)
   const treeRename: TreeRename | undefined = renamingEntry && {
@@ -920,6 +935,7 @@ export function App() {
                   searchEngine={preferences.searchEngine} registerFlush={registerFlush}
                   find={find} jump={jump?.path === active.path ? jump : undefined} onChange={edit}
                   report={error => setNotice(message(error))}
+                  followLink={href => followDocumentLink(active.path, href)}
                   pinned={marks.pinned.includes(active.path)} starred={marks.starred.includes(active.path)}
                   togglePin={() => marks.toggle('pinned', active.path)} toggleStar={() => marks.toggle('starred', active.path)}
                   move={() => moveFile(active)} trash={() => setPrompt({ type: 'trash', session: active })}
@@ -944,7 +960,7 @@ export function App() {
                   })} />
                 : active.mode === 'outline'
                   ? <OutlineEditor key={active.path + ':' + active.reload} text={active.text} name={active.name} path={active.path} position={position!}
-                    filenameTitle={filenameTitle} platform={platform} remoteImages={preferences.remoteImages} sessions={outlineSessions.current} onChange={edit}
+                    filenameTitle={filenameTitle} platform={platform} followLink={href => followDocumentLink(active.path, href)} remoteImages={preferences.remoteImages} sessions={outlineSessions.current} onChange={edit}
                     width={preferences.outlinePageWidth} codeLineNumbers={preferences.outlineCodeLineNumbers} setWidth={outlinePageWidth => updatePreferences({ outlinePageWidth })}
                     remainderVisible={preferences.outlineRemainderVisible} setRemainderVisible={outlineRemainderVisible => updatePreferences({ outlineRemainderVisible })} />
                   : <MindMapEditor key={active.path + ':' + active.reload} text={active.text} name={active.name} path={active.path} dark={dark} onChange={edit} find={find} position={position!}

@@ -57,6 +57,10 @@ export class Files {
   private singles = new Set<string>()
   private writes = new Map<string, Promise<unknown>>()
   private renameSortNames = new Map<string, Map<string, string>>()
+  attachmentFolder = 'assets'
+  attachmentFolders = new Set(['assets'])
+  showAttachmentDirectories = false
+  hiddenStorageDirectories = new Set<string>()
   attachmentDirectory?: string
   attachmentDirectories: string[] = []
 
@@ -108,6 +112,9 @@ export class Files {
     const entries: Entry[] = []
     for (const entry of await readdir(root, { withFileTypes: true })) {
       if (entry.name.startsWith('.')) continue
+      const location = path.join(root, entry.name)
+      if (entry.isDirectory() && (this.hiddenStorageDirectories.has(location) ||
+        !this.showAttachmentDirectories && this.isAttachmentDirectory(location, entry.name))) continue
       const kind = entry.isDirectory() ? 'directory' : entry.isFile() ? fileKind(entry.name) : undefined
       if (kind) entries.push({ kind, path: path.join(root, entry.name), name: entry.name })
     }
@@ -119,6 +126,11 @@ export class Files {
     }
     return entries.sort((a, b) => Number(b.kind === 'directory') - Number(a.kind === 'directory') ||
       (aliases?.get(a.path) ?? a.name).localeCompare(aliases?.get(b.path) ?? b.name, undefined, { numeric: true }))
+  }
+
+  isAttachmentDirectory(directory: string, name = path.basename(directory)) {
+    return this.attachmentFolders.has(name.toLowerCase()) ||
+      this.attachmentDirectories.some(registered => path.relative(registered, directory) === '')
   }
 
   async read(file: string, keepAccess = false): Promise<DocumentFile> {
@@ -216,10 +228,11 @@ export class Files {
       }
       return { ...image, extension }
     })
-    const directory = this.attachmentDirectory ?? path.join(path.dirname(original), 'assets')
-    if (!this.attachmentDirectory) await mkdir(directory, { recursive: true })
+    const fixed = this.attachmentDirectory
+    const directory = fixed ?? path.join(path.dirname(original), this.attachmentFolder)
+    if (!fixed) await mkdir(directory, { recursive: true })
     const info = await lstat(directory)
-    if (!info.isDirectory() || this.attachmentDirectory && await realpath(directory) !== directory) throw new Error('附件目录无效。')
+    if (!info.isDirectory() || await realpath(directory) !== directory) throw new Error('附件目录无效。')
     const paths: string[] = []
     const attachments: MarkdownImageAttachment[] = []
     try {

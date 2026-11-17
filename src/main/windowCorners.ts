@@ -1,5 +1,6 @@
 import { app, type BrowserWindow } from 'electron'
 import path from 'node:path'
+import { defaultPreferences, windowShadowPresets, type WindowShadowPreferences } from '../shared/contracts'
 
 export function installWindowFrame(window: BrowserWindow, supportsAcrylic: boolean) {
   // A Win32 region clips renderer content and input. Acrylic needs a separate clipped visual.
@@ -21,6 +22,7 @@ export function installWindowFrame(window: BrowserWindow, supportsAcrylic: boole
   const native = loadFrameLibrary()
   const backdrop = supportsAcrylic && native ? acrylicVisual(native) : undefined
   const shadow = native && shadowSurface(native)
+  let shadowStyle = defaultPreferences.windowShadow
   let wantsAcrylic = false
   let acrylicTint = 0xd3d3d3
   let applied: string | undefined
@@ -57,7 +59,8 @@ export function installWindowFrame(window: BrowserWindow, supportsAcrylic: boole
     const dpi = dpiFor(handle) || 96
     const radius = Math.round(8 * dpi / 96)
     backdrop?.update(wantsAcrylic, radius, acrylicTint)
-    shadow?.show(rect[0] + left, rect[1] + top, right - left, bottom - top, radius, dpi)
+    if (shadowStyle.enabled) shadow?.show(rect[0] + left, rect[1] + top, right - left, bottom - top, radius, dpi, shadowStyle)
+    else shadow?.hide()
     const shape = `${width}:${height}:${left}:${top}:${right}:${bottom}:${radius}`
     if (!refresh && shape === applied) return
     const region = createRegion(left, top, right, bottom, 2 * radius, 2 * radius)
@@ -106,6 +109,10 @@ export function installWindowFrame(window: BrowserWindow, supportsAcrylic: boole
   update()
 
   return {
+    setShadow(next: WindowShadowPreferences) {
+      shadowStyle = next
+      schedule()
+    },
     setAcrylic(enabled: boolean, light: boolean) {
       wantsAcrylic = enabled
       acrylicTint = light ? 0xd3d3d3 : 0x232323
@@ -158,15 +165,16 @@ export function installWindowFrame(window: BrowserWindow, supportsAcrylic: boole
 
   function shadowSurface(library: NonNullable<typeof native>) {
     const create = library.func('void * CreateEditorShadow(void *window)')
-    const update = library.func('void UpdateEditorShadow(void *shadow, int left, int top, int width, int height, int radius, int dpi)')
+    const update = library.func('void UpdateEditorShadow(void *shadow, int left, int top, int width, int height, int radius, int dpi, int spread, int blur, uint32_t color)')
     const destroy = library.func('void DestroyEditorShadow(void *shadow)')
     const instance = create(handle)
     if (!instance) return
     return {
-      show: (x: number, y: number, width: number, height: number, radius: number, dpi: number) => {
-        update(instance, x, y, width, height, radius, dpi)
+      show: (x: number, y: number, width: number, height: number, radius: number, dpi: number, settings: WindowShadowPreferences) => {
+        const { spread, blur } = windowShadowPresets[settings.preset]
+        update(instance, x, y, width, height, radius, dpi, spread, blur, Number.parseInt(settings.color.slice(1), 16))
       },
-      hide: () => { update(instance, 0, 0, 0, 0, 0, 0) },
+      hide: () => { update(instance, 0, 0, 0, 0, 0, 0, 0, 0, 0) },
       destroy: () => { destroy(instance) },
     }
   }

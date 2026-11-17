@@ -8,8 +8,8 @@ const { app, BrowserWindow, nativeTheme } = require('electron')
 
 const windows = process.platform === 'win32'
 const profile = mkdtempSync(path.join(os.tmpdir(), 'ymd-window-material-'))
-const documents = path.join(profile, '.ymd')
-mkdirSync(documents)
+const documents = path.join(profile, '.ymd', 'documents')
+mkdirSync(documents, { recursive: true })
 writeFileSync(path.join(documents, 'Window check.md'), '# Window check\n')
 app.setPath('userData', profile)
 app.setPath('home', profile)
@@ -149,6 +149,13 @@ async function check(window) {
   await evaluate(`document.querySelector('.sidebar-footer').click()`)
   await waitFor(() => evaluate(`!!document.querySelector('${switcher}')`), Boolean, 'Appearance settings visible')
   assert.equal(await evaluate(`document.querySelector('${switcher}').getAttribute('aria-checked')`), 'true')
+  const shadowToggle = 'button[role="switch"][aria-label="窗口阴影"]'
+  assert.equal(await evaluate(`document.querySelector('${shadowToggle}').getAttribute('aria-checked')`), 'true')
+  await toggle(shadowToggle)
+  await waitFor(() => evaluate(`!document.querySelector('[aria-label="自定义阴影颜色"]')`), Boolean, 'Disabling the shadow hides its settings')
+  if (windows) await waitFor(shadow, value => !value, 'The Windows shadow surface disappears when disabled')
+  await toggle(shadowToggle)
+  if (windows) await waitFor(shadow, Boolean, 'Enabling the shadow restores its Windows surface')
   const slider = 'input[aria-label="背景透明度"]'
   const setTransparency = value => evaluate(`(() => {
     const input = document.querySelector('${slider}')

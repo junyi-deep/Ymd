@@ -1,10 +1,7 @@
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
-#include <algorithm>
-#include <cmath>
-#include <cstdint>
-#include <cstring>
+#include "shadow-pixels.h"
 #include <new>
 
 namespace {
@@ -14,8 +11,10 @@ struct WindowShadow {
   SIZE lastSize{};
   int lastRadius = 0;
   int lastSpread = 0;
+  int lastBlur = 0;
+  uint32_t lastColor = 0;
 
-  bool Draw(POINT position, SIZE size, int radius, int spread) {
+  bool Draw(POINT position, SIZE size, int radius, int spread, int blur, uint32_t color) {
     const HDC dc = CreateCompatibleDC(nullptr);
     if (!dc) return false;
 
@@ -31,25 +30,7 @@ struct WindowShadow {
     bool drawn = false;
 
     if (previous && bits) {
-      // BGRA with premultiplied alpha. Only the perimeter is painted, so the shadow
-      // never darkens editor content or the clear or Acrylic sidebar.
-      const auto pixels = static_cast<uint32_t*>(bits);
-      std::memset(pixels, 0, static_cast<size_t>(size.cx) * size.cy * 4);
-      const int extent = spread + radius;
-      for (int y = 0; y < size.cy; ++y) {
-        const double dy = extent - std::min(y + .5, size.cy - y - .5);
-        for (int x = 0; x < size.cx; ++x) {
-          if (dy <= 0 && x == extent) x = size.cx - extent;
-          const double dx = extent - std::min(x + .5, size.cx - x - .5);
-          const double distance = std::hypot(std::max(dx, 0.), std::max(dy, 0.)) +
-            std::min(std::max(dx, dy), 0.) - radius;
-          if (distance > 1 && distance < spread) {
-            const double falloff = 1 - distance / spread;
-            const auto alpha = static_cast<uint32_t>(std::lround(78 * std::min(1., (distance - 1) / 2) * falloff * falloff));
-            pixels[static_cast<size_t>(y) * size.cx + x] = alpha << 24;
-          }
-        }
-      }
+      PaintWindowShadow(static_cast<uint32_t*>(bits), size.cx, size.cy, radius, spread, blur, color);
       POINT origin{};
       BLENDFUNCTION blend{AC_SRC_OVER, 0, 255, AC_SRC_ALPHA};
       drawn = UpdateLayeredWindow(window, nullptr, &position, &size, dc, &origin, 0, &blend, ULW_ALPHA);
@@ -75,20 +56,25 @@ extern "C" __declspec(dllexport) WindowShadow* CreateEditorShadow(HWND owner) no
 }
 
 extern "C" __declspec(dllexport) void UpdateEditorShadow(WindowShadow* shadow, int left, int top, int width,
-                                                         int height, int radius, int dpi) noexcept {
+                                                         int height, int radius, int dpi,
+                                                         int spread, int blur, uint32_t color) noexcept {
   if (!width || !height) {
     ShowWindow(shadow->window, SW_HIDE);
     return;
   }
-  const int spread = (18 * dpi + 95) / 96;
-  const POINT position{left - spread, top - spread};
-  const SIZE size{width + 2 * spread, height + 2 * spread};
+  spread = (spread * dpi + 48) / 96;
+  blur = (blur * dpi + 48) / 96;
+  const int margin = spread + blur;
+  const POINT position{left - margin, top - margin};
+  const SIZE size{width + 2 * margin, height + 2 * margin};
   if (size.cx != shadow->lastSize.cx || size.cy != shadow->lastSize.cy ||
-      radius != shadow->lastRadius || spread != shadow->lastSpread) {
-    if (!shadow->Draw(position, size, radius, spread)) return;
+      radius != shadow->lastRadius || spread != shadow->lastSpread || blur != shadow->lastBlur || color != shadow->lastColor) {
+    if (!shadow->Draw(position, size, radius, spread, blur, color)) return;
     shadow->lastSize = size;
     shadow->lastRadius = radius;
     shadow->lastSpread = spread;
+    shadow->lastBlur = blur;
+    shadow->lastColor = color;
   } else {
     SetWindowPos(shadow->window, nullptr, position.x, position.y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
   }

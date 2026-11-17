@@ -6,6 +6,7 @@ const path = require('node:path')
 const root = path.resolve(__dirname, '..')
 const output = path.join(root, 'dist', 'main')
 const library = path.join(output, 'window-backdrop.dll')
+const macLibrary = path.join(output, 'window-shadow.dylib')
 
 function build() {
   mkdirSync(output, { recursive: true })
@@ -28,8 +29,17 @@ function build() {
 }
 
 if (require.main === module && process.platform === 'win32') build()
+if (require.main === module && process.platform === 'darwin') {
+  mkdirSync(output, { recursive: true })
+  execFileSync('xcrun', ['clang++', '-std=c++20', '-O2', '-dynamiclib', '-fobjc-arc', '-arch', 'arm64',
+    '-framework', 'AppKit', '-framework', 'CoreGraphics', path.join(root, 'src', 'main', 'native', 'mac-window-shadow.mm'),
+    '-o', macLibrary], { stdio: 'inherit' })
+}
 
 module.exports = ({ electronPlatformName }) => {
+  if (electronPlatformName === 'darwin' && !existsSync(macLibrary)) {
+    throw new Error('Build the macOS shadow library before packaging.')
+  }
   if (electronPlatformName === 'win32' && !existsSync(library)) {
     throw new Error('Run the Windows build with Visual Studio C++ Build Tools and a Windows 11 SDK before packaging.')
   }

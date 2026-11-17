@@ -1,6 +1,6 @@
 import { createContext, useContext, useState, type ReactNode } from 'react'
 import { ArrowLeft, HardDrive, Info, Keyboard, Palette, RefreshCw, Search, SlidersHorizontal, X } from 'lucide-react'
-import { interfaceFontSizes, markdownPageWidths, recentFilesLimit, searchEngines, type StorageDirectory, type Entry, type Preferences, type SearchEngine, type UpdateProxy, type UpdateProxyInput, type VersionStatus } from '../shared/contracts'
+import { attachmentFolderName, interfaceFontSizes, windowShadowColors, windowShadowPresets, markdownPageWidths, recentFilesLimit, searchEngines, type StorageDirectory, type Entry, type Preferences, type SearchEngine, type UpdateProxy, type UpdateProxyInput, type VersionStatus } from '../shared/contracts'
 import { UpdateProxySettings } from './UpdateProxySettings'
 import { FontPicker } from './FontPicker'
 import { ShortcutSettings } from './ShortcutSettings'
@@ -132,8 +132,35 @@ export function Settings({ preferences, platform, library, windowsAcrylic, macRe
               </div>
             </Row>}
           </div>
+          <h2 className="settings-group-title">窗口阴影</h2>
+          <div className="settings-group">
+            <Row label="窗口阴影" detail="显示窗口外侧的阴影。">
+              <button className="switch" type="button" role="switch" aria-label="窗口阴影" aria-checked={preferences.windowShadow.enabled}
+                onClick={() => onChange({ windowShadow: { ...preferences.windowShadow, enabled: !preferences.windowShadow.enabled } })} />
+            </Row>
+            {preferences.windowShadow.enabled && <>
+              <Row label="阴影档位" detail="每档组合不同的阴影扩散半径与模糊半径。">
+                <Choices value={preferences.windowShadow.preset} choices={Object.entries(windowShadowPresets).map(([key, option]) =>
+                  [key as keyof typeof windowShadowPresets, option.label] as const)}
+                  onChange={preset => onChange({ windowShadow: { ...preferences.windowShadow, preset } })} />
+              </Row>
+              <Row label="阴影颜色">
+                <div className="shadow-colors">
+                  {windowShadowColors.map(([color, label]) => <button type="button" key={color} className="shadow-swatch"
+                    style={{ backgroundColor: color }} aria-pressed={preferences.windowShadow.color === color}
+                    aria-label={label} title={label} onClick={() => onChange({ windowShadow: { ...preferences.windowShadow, color } })} />)}
+                  <input type="color" aria-label="自定义阴影颜色" title="自定义阴影颜色" value={preferences.windowShadow.color}
+                    onChange={event => onChange({ windowShadow: { ...preferences.windowShadow, color: event.currentTarget.value } })} />
+                </div>
+              </Row>
+            </>}
+          </div>
           <h2 className="settings-group-title">文档</h2>
           <div className="settings-group">
+            <Row label="显示附件目录" detail="在文件树中显示文档附件文件夹。">
+              <button className="switch" type="button" role="switch" aria-label="显示附件目录" aria-checked={preferences.showAttachmentDirectories}
+                onClick={() => onChange({ showAttachmentDirectories: !preferences.showAttachmentDirectories })} />
+            </Row>
             <Row label="将文件名显示为标题" detail="在 Markdown 和大纲正文顶部显示文件名，双击可重命名。">
               <button className="switch" type="button" role="switch" aria-label="将文件名显示为标题" aria-checked={preferences.showFilenameTitle}
                 onClick={() => onChange({ showFilenameTitle: !preferences.showFilenameTitle })} />
@@ -203,16 +230,35 @@ export function Settings({ preferences, platform, library, windowsAcrylic, macRe
                 <button className="tool-button" onClick={() => onLibraryChange()}>更改位置…</button>
               </div>
             </Row>
-            {([
-              ['attachments', '附件目录', preferences.attachmentDirectory, '默认保存在各文档旁的 assets 文件夹。'],
-              ['stickers', '思维导图贴纸目录', preferences.stickerDirectory, defaultStickerDirectory],
-            ] as const).map(([kind, label, custom, fallback]) => <Row key={kind} label={label} detail={custom ?? fallback}>
+            <Row label="附件目录" detail={preferences.attachmentMode === 'fixed' ? preferences.attachmentDirectory : '相对路径以当前文档所在目录为基准。'}>
+              <Choices value={preferences.attachmentMode} choices={ [['relative', '相对路径'], ['fixed', '固定目录']] }
+                onChange={mode => {
+                  if (mode === preferences.attachmentMode) return
+                  if (mode === 'fixed' && !preferences.attachmentDirectory) onStorageChange('attachments')
+                  else onChange({ attachmentMode: mode })
+                }} />
+            </Row>
+            {preferences.attachmentMode === 'relative' ? <Row label="附件文件夹名称" detail="默认为 assets。">
+              <input aria-label="附件文件夹名称" className="setting-folder" key={preferences.attachmentFolder} defaultValue={preferences.attachmentFolder}
+                maxLength={120} onBlur={event => {
+                  const input = event.currentTarget
+                  const name = attachmentFolderName(input.value) ?? preferences.attachmentFolder
+                  input.value = name
+                  if (name !== preferences.attachmentFolder) onChange({ attachmentFolder: name })
+                }} onKeyDown={event => { if (event.key === 'Enter') event.currentTarget.blur() }} />
+            </Row> : <Row label="固定附件目录" detail={preferences.attachmentDirectory}>
               <div className="setting-actions">
-                {(custom || kind === 'stickers') && <button className="tool-button" onClick={() => onOpenStorage(kind)}>显示文件夹</button>}
-                {custom && <button className="tool-button" onClick={() => onStorageChange(kind, true)}>恢复默认</button>}
-                <button className="tool-button" onClick={() => onStorageChange(kind)}>更改位置…</button>
+                <button className="tool-button" onClick={() => onOpenStorage('attachments')}>显示文件夹</button>
+                <button className="tool-button" onClick={() => onStorageChange('attachments')}>更改位置…</button>
               </div>
-            </Row>)}
+            </Row>}
+            <Row label="思维导图贴纸目录" detail={preferences.stickerDirectory ?? defaultStickerDirectory}>
+              <div className="setting-actions">
+                <button className="tool-button" onClick={() => onOpenStorage('stickers')}>显示文件夹</button>
+                {preferences.stickerDirectory && <button className="tool-button" onClick={() => onStorageChange('stickers', true)}>恢复默认</button>}
+                <button className="tool-button" onClick={() => onStorageChange('stickers')}>更改位置…</button>
+              </div>
+            </Row>
             <Row label="本机文件显示条数" detail="文件和文件夹合计，最多显示 500 条。">
               <input className="setting-count" type="number" min={1} max={recentFilesLimit} aria-label="本机文件显示条数"
                 key={preferences.recentLimit} defaultValue={preferences.recentLimit}
