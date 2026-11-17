@@ -44,10 +44,11 @@ export function useDocuments() {
 
   function open(file: DocumentFile, scope: Scope, fallback: EditorMode = scope === 'journal' ? 'outline' : 'markdown') {
     const opened = Date.now()
+    const remembered = documentMode(file.path)
+    const stored = scope === 'journal' && remembered === 'map' ? 'outline' : remembered
     if (!latest.current.some(session => session.path === file.path)) {
-      update(sessions => [...sessions, { ...file, saved: file.text, scope, mode: documentMode(file.path) ?? fallback, reload: 0, opened }])
+      update(sessions => [...sessions, { ...file, saved: file.text, scope, mode: stored ?? fallback, reload: 0, opened }])
     } else {
-      const stored = documentMode(file.path)
       patch(file.path, { opened, scope, ...(stored ? { mode: stored } : {}) })
     }
     setActive(file.path)

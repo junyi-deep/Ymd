@@ -1,5 +1,6 @@
 import { useEffect, useState, type DragEvent, type MouseEvent } from 'react'
 import { Check, ChevronDown, ChevronRight, Ellipsis, FileText, Folder, FolderOpen, Minus, Plus, Shapes, Trash2 } from 'lucide-react'
+import { RenameInput } from './RenameInput'
 import type { Entry } from '../shared/contracts'
 
 export const DocumentIcon = ({ kind }: { kind: Entry['kind'] }) => kind === 'drawing' ? <Shapes size={17} /> : <FileText size={17} />
@@ -18,14 +19,15 @@ export interface TreeRename {
   name: string
   busy: boolean
   change: (name: string) => void
-  save: () => void
+  save: (name: string) => void
   cancel: () => void
 }
 
-export function FileTreeRow({ entry, depth, selected, open, onClick, onMenu, onCreate, checked, onCheck, rename, drag, onExpand, onDelete, onRemove, reorderable = false }: {
+export function FileTreeRow({ entry, depth, selected, menuOpen, open, onClick, onMenu, onCreate, checked, onCheck, rename, drag, onExpand, onDelete, onRemove, reorderable = false }: {
   entry: Entry
   depth: number
   selected?: boolean
+  menuOpen?: boolean
   open?: boolean
   onClick: (event: MouseEvent<HTMLButtonElement>) => void
   onMenu: (x: number, y: number) => void
@@ -59,7 +61,7 @@ export function FileTreeRow({ entry, depth, selected, open, onClick, onMenu, onC
     {open ? <FolderOpen size={17} /> : <Folder size={17} />}
     {open ? <ChevronDown className="tree-disclosure" size={17} /> : <ChevronRight className="tree-disclosure" size={17} />}
   </span> : <DocumentIcon kind={entry.kind} />
-  return <div className="tree-item" data-selected={selected || checked} data-drop-target={dropTarget}
+  return <div className="tree-item" data-selected={selected || checked} data-menu-open={menuOpen} data-tree-path={entry.path} data-drop-target={dropTarget}
     style={{ paddingInlineStart: `min(${5 + depth * 17}px, max(5px, 100% - 99px))` }}
     onDragOver={event => {
       const place = dropPlace(event)
@@ -85,14 +87,7 @@ export function FileTreeRow({ entry, depth, selected, open, onClick, onMenu, onC
     {checked !== undefined && <input type="checkbox" checked={checked} aria-label={'选择 ' + entry.name} onChange={onCheck} />}
     {checked !== undefined && folder && <button type="button" className="icon-button tree-batch-folder"
       aria-label={(open ? '收起 ' : '展开 ') + entry.name} aria-expanded={open} onClick={onExpand}>{glyph}</button>}
-    {rename ? <div className="tree-row tree-rename">{glyph}<input type="text" aria-label="新名称" value={rename.name} readOnly={rename.busy}
-      autoFocus onFocus={event => event.currentTarget.select()} onChange={event => rename.change(event.target.value)}
-      onBlur={() => { if (!rename.busy) rename.cancel() }}
-      onKeyDown={event => {
-        if (event.nativeEvent.isComposing || rename.busy) return
-        if (event.key === 'Enter' && rename.name.trim()) { event.preventDefault(); rename.save() }
-        if (event.key === 'Escape') { event.stopPropagation(); rename.cancel() }
-      }} /></div> :
+    {rename ? <div className="tree-row tree-rename">{glyph}<RenameInput label="新名称" {...rename} /></div> :
       <button className="tree-row" title={entry.name} aria-expanded={folder && checked === undefined ? open : undefined}
         draggable={!!drag} onDragStart={event => {
           if (!drag) return
@@ -120,6 +115,7 @@ export function FileTreeRow({ entry, depth, selected, open, onClick, onMenu, onC
 interface Props {
   directory: Entry
   active?: string
+  menuPath?: string
   revision: number
   depth?: number
   expanded?: boolean
@@ -139,7 +135,7 @@ interface Props {
   onSelect?: (entry: Entry) => void
 }
 
-export function FilesTree({ directory, active, revision, depth = 0, expanded = false, expandedPaths, hiddenPaths, onToggle,
+export function FilesTree({ directory, active, menuPath, revision, depth = 0, expanded = false, expandedPaths, hiddenPaths, onToggle,
   onOpen, onExpand, onCreate, onMenu, selection, onSelect, rename, drag, onDelete, onRemove, reorderable }: Props) {
   const open = expanded || expandedPaths.has(directory.path)
   const [entries, setEntries] = useState<Entry[]>()
@@ -162,7 +158,7 @@ export function FilesTree({ directory, active, revision, depth = 0, expanded = f
   }, [directory.path, open, revision])
 
   return <>
-    {!expanded && <FileTreeRow entry={directory} depth={depth} open={open}
+    {!expanded && <FileTreeRow entry={directory} depth={depth} open={open} menuOpen={menuPath === directory.path}
       rename={rename?.path === directory.path ? rename : undefined}
       drag={selection ? undefined : drag} onExpand={toggleOpen} reorderable={reorderable}
       onDelete={onDelete && (() => onDelete(directory))} onRemove={onRemove && (() => onRemove(directory))}
@@ -179,8 +175,8 @@ export function FilesTree({ directory, active, revision, depth = 0, expanded = f
         const level = expanded ? depth : depth + 1
         return entry.kind === 'directory'
           ? <FilesTree key={entry.path} directory={entry} depth={level}
-            {...{ active, revision, expandedPaths, hiddenPaths, onToggle, onOpen, onExpand, onCreate, onMenu, selection, onSelect, rename, drag, onDelete, onRemove }} />
-          : <FileTreeRow key={entry.path} depth={level} entry={entry} selected={entry.path === active}
+            {...{ active, menuPath, revision, expandedPaths, hiddenPaths, onToggle, onOpen, onExpand, onCreate, onMenu, selection, onSelect, rename, drag, onDelete, onRemove }} />
+          : <FileTreeRow key={entry.path} depth={level} entry={entry} selected={entry.path === active} menuOpen={menuPath === entry.path}
             drag={selection ? undefined : drag}
             onDelete={onDelete && (() => onDelete(entry))} onRemove={onRemove && (() => onRemove(entry))}
             rename={rename?.path === entry.path ? rename : undefined}

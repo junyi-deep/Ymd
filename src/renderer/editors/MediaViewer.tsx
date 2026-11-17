@@ -1,11 +1,12 @@
 import { useLayoutEffect, useRef, useState, type PointerEvent } from 'react'
-import { Crop, Download, Maximize, Maximize2, Minimize2, Minus, Plus, RotateCcw, RotateCw, X } from 'lucide-react'
+import { ArrowLeft, ArrowRight, Crop, Download, Maximize, Maximize2, Minimize2, Minus, Plus, RotateCcw, RotateCw, X } from 'lucide-react'
 import type { MediaPreview } from './mediaPreview'
 
 type Point = { x: number; y: number }
 type Size = { width: number; height: number }
 type CropArea = { start: Point; end: Point }
 const center = { x: .5, y: .5 }
+const defaultThumbnail = { width: 134, height: 92 }
 const clip = (value: number, from = 0, to = 1) => Math.min(to, Math.max(from, value))
 
 function pixelCrop(area: CropArea | undefined, size: Size) {
@@ -29,6 +30,9 @@ export function MediaViewer({ request, close }: { request: MediaPreview; close: 
   const [area, setArea] = useState<CropArea>()
   const [notice, setNotice] = useState('')
   const [busy, setBusy] = useState(false)
+  const [thumbnail, setThumbnail] = useState<Size>(defaultThumbnail)
+  const [thumbnailSide, setThumbnailSide] = useState<'left' | 'right'>('right')
+  const thumbnailDrag = useRef<{ x: number; y: number; width: number; height: number } | undefined>(undefined)
   const drag = useRef<{ pointer: number; start: Point; location: Point; crop?: Point } | undefined>(undefined)
   const fit = size ? Math.min(request.type === 'diagram' ? 2 : 1, Math.max(1, frame.width - 48) / size.width, Math.max(1, frame.height - 48) / size.height) : 1
   const scale = fit * zoom
@@ -108,9 +112,20 @@ export function MediaViewer({ request, close }: { request: MediaPreview; close: 
     })
   }
 
-  const thumbScale = size ? Math.min(134 / size.width, 92 / size.height) : 1
+  const thumbBounds = {
+    width: clip(thumbnail.width, 76, Math.max(76, Math.min(320, frame.width - 55))),
+    height: clip(thumbnail.height, 54, Math.max(54, Math.min(240, frame.height - 55))),
+  }
+  const thumbScale = size ? Math.min(thumbBounds.width / size.width, thumbBounds.height / size.height) : 1
   const tw = Math.max(1, (size?.width ?? 1) * thumbScale)
   const th = Math.max(1, (size?.height ?? 1) * thumbScale)
+
+  function resizeThumbnail(width: number, height: number) {
+    setThumbnail({
+      width: clip(width, 76, Math.max(76, Math.min(320, frame.width - 55))),
+      height: clip(height, 54, Math.max(54, Math.min(240, frame.height - 55))),
+    })
+  }
   const selection = area && pixelCrop(area, { width, height })
   const edited = source !== request.src
   function download(format: 'svg' | 'png') {
@@ -154,7 +169,7 @@ export function MediaViewer({ request, close }: { request: MediaPreview; close: 
         setLocation({ x: actual.x + move.x, y: actual.y + move.y })
       }}
       onPointerDown={event => {
-        if (!size || event.button !== 0 || (event.target instanceof Element && event.target.closest('.media-thumb'))) return
+        if (!size || event.button !== 0 || (event.target instanceof Element && event.target.closest('.media-thumb-frame'))) return
         const start = point(event)
         const crop = cropping ? convert(start) : undefined
         drag.current = { pointer: event.pointerId, start, location: actual, crop }
@@ -176,12 +191,40 @@ export function MediaViewer({ request, close }: { request: MediaPreview; close: 
         onError={() => { setSize(undefined); setNotice('无法显示图片。') }} />
       {cropping && selection && <div className="media-crop-area"
         style={{ left: left + selection.x, top: top + selection.y, width: selection.width, height: selection.height }} />}
-      {size && !cropping && <div className="media-thumb" role="group" aria-label="缩略图导航" tabIndex={0}
-        style={{ width: tw, height: th }}
-        onPointerDown={event => { event.stopPropagation(); event.currentTarget.setPointerCapture(event.pointerId); navigateThumb(event) }}
-        onPointerMove={event => { if (event.currentTarget.hasPointerCapture(event.pointerId)) navigateThumb(event) }}>
-        <img src={source} alt="" draggable={false} />
-        <span style={{ left: (actual.x - marginX) * tw, top: (actual.y - marginY) * th, width: 2 * marginX * tw, height: 2 * marginY * th }} />
+      {size && !cropping && <div className="media-thumb-frame" data-side={thumbnailSide} style={thumbBounds}>
+        <div className="media-thumb" role="group" aria-label="缩略图导航" tabIndex={0}
+          style={{ width: tw, height: th }}
+          onPointerDown={event => { if (event.button !== 0) return; event.currentTarget.setPointerCapture(event.pointerId); navigateThumb(event) }}
+          onPointerMove={event => { if (event.currentTarget.hasPointerCapture(event.pointerId)) navigateThumb(event) }}>
+          <img src={source} alt="" draggable={false} />
+          <span style={{ left: (actual.x - marginX) * tw, top: (actual.y - marginY) * th, width: 2 * marginX * tw, height: 2 * marginY * th }} />
+        </div>
+        <button type="button" className="icon-button media-thumb-switch"
+          aria-label={thumbnailSide === 'right' ? '小地图移到左下角' : '小地图移到右下角'}
+          title={thumbnailSide === 'right' ? '移到左下角' : '移到右下角'}
+          onClick={() => setThumbnailSide(current => current === 'right' ? 'left' : 'right')}>
+          {thumbnailSide === 'right' ? <ArrowLeft size={15} /> : <ArrowRight size={15} />}
+        </button>
+        <button type="button" className="media-thumb-resize" aria-label="调整小地图宽高" title="调整小地图宽高"
+          onPointerDown={event => {
+            if (event.button !== 0) return
+            event.preventDefault()
+            event.currentTarget.setPointerCapture(event.pointerId)
+            thumbnailDrag.current = { x: event.clientX, y: event.clientY, ...thumbBounds }
+          }} onPointerMove={event => {
+            const start = thumbnailDrag.current
+            if (!start || !event.currentTarget.hasPointerCapture(event.pointerId)) return
+            const dx = (event.clientX - start.x) * (thumbnailSide === 'right' ? -1 : 1)
+            resizeThumbnail(start.width + dx, start.height + start.y - event.clientY)
+          }} onLostPointerCapture={() => { thumbnailDrag.current = undefined }}
+          onKeyDown={event => {
+            const move: Record<string, [number, number]> = { ArrowLeft: [-8, 0], ArrowRight: [8, 0], ArrowUp: [0, 8], ArrowDown: [0, -8] }
+            const delta = move[event.key]
+            if (!delta) return
+            event.preventDefault()
+            event.stopPropagation()
+            resizeThumbnail(thumbBounds.width + delta[0], thumbBounds.height + delta[1])
+          }} />
       </div>}
     </div>
     {(notice || cropping) && <p className="media-notice" role={notice ? 'alert' : undefined}>{notice || '拖动选取裁剪范围，再点击应用裁剪。'}</p>}

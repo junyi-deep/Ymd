@@ -17,7 +17,7 @@ import { defaultKeymap, history, historyKeymap } from '@codemirror/commands'
 import { markdownKeymap } from '@codemirror/lang-markdown'
 import { ensureSyntaxTree, indentUnit, syntaxHighlighting, syntaxTree } from '@codemirror/language'
 import { openSearchPanel, search, searchKeymap } from '@codemirror/search'
-import { Compartment, EditorState, Prec, type Range } from '@codemirror/state'
+import { Compartment, EditorState, Prec, StateEffect, type EditorSelection, type Range } from '@codemirror/state'
 import { Decoration, EditorView, highlightSpecialChars, keymap, ViewPlugin, WidgetType, type DecorationSet, type ViewUpdate } from '@codemirror/view'
 import { classHighlighter } from '@lezer/highlight'
 import { markdownPageWidths, type CodeBlockPreferences, type ContextMenuItem, type MarkdownOutlinePreferences, type MarkdownPageWidth, type SearchEngine } from '../../shared/contracts'
@@ -57,10 +57,14 @@ class TaskBox extends WidgetType {
   }
 }
 
-function liveMarkdown(view: EditorView, path: string, loadRemote: boolean) {
+type PreviewSelection = { selection: EditorSelection; focused: boolean }
+const refreshPreview = StateEffect.define<null>()
+
+function liveMarkdown(view: EditorView, path: string, loadRemote: boolean,
+  preview = { selection: view.state.selection, focused: view.hasFocus }) {
   const ranges: Range<Decoration>[] = []
   const state = view.state
-  const visible = (from: number, to: number) => state.selection.ranges.some(range => !state.readOnly && range.from <= to && range.to >= from)
+  const visible = (from: number, to: number) => preview.selection.ranges.some(range => !state.readOnly && range.from <= to && range.to >= from)
   const activeLine = (from: number) => {
     const line = state.doc.lineAt(from)
     return visible(line.from, line.to)
@@ -122,7 +126,7 @@ function liveMarkdown(view: EditorView, path: string, loadRemote: boolean) {
         ranges.push(Decoration.replace({ widget: new TaskBox(from, /x/i.test(state.sliceDoc(from, to)), state.readOnly) }).range(from, to))
       }
       if (isImageNode(name)) {
-        const editing = view.hasFocus && visible(from, to)
+        const editing = preview.focused && visible(from, to)
         const reference = !editing && sourceLine.to >= to ? readImageReference(state, node.node) : undefined
         if (reference) {
           const standalone = sourceLine.text.trim() === reference.markdown
@@ -130,7 +134,7 @@ function liveMarkdown(view: EditorView, path: string, loadRemote: boolean) {
         }
         return false
       }
-      if ((name === 'Link' || name === 'Autolink') && !(view.hasFocus && visible(from, to))) {
+      if ((name === 'Link' || name === 'Autolink') && !(preview.focused && visible(from, to))) {
         const marks = node.node.getChildren('LinkMark')
         const labelFrom = marks[0]?.to ?? from
         const labelTo = marks[1]?.from ?? to
@@ -144,7 +148,7 @@ function liveMarkdown(view: EditorView, path: string, loadRemote: boolean) {
             start = end + 1
           }
           ranges.push(Decoration.mark({ tagName: 'a', class: 'md-link',
-            attributes: { href, title: destination.title || href } }).range(labelFrom, labelTo))
+            attributes: { href, title: destination.title || href, draggable: 'false' } }).range(labelFrom, labelTo))
         }
       }
       if (markers.has(name) && parent && parent.name !== 'FencedCode') {
@@ -170,15 +174,69 @@ class Bullet extends WidgetType {
 
 const live = (path: string, loadRemote: boolean) => ViewPlugin.fromClass(class {
   decorations: DecorationSet
+  private preview?: PreviewSelection
+  private pressedSelection?: EditorSelection
+  private pointer?: AbortController
+  private settle?: ReturnType<typeof setTimeout>
+  private moved = false
 
-  constructor(view: EditorView) { this.decorations = liveMarkdown(view, path, loadRemote) }
+  constructor(private readonly view: EditorView) { this.decorations = liveMarkdown(view, path, loadRemote) }
+
+  beginPointer(event: MouseEvent) {
+    if (event.button !== 0) return
+    this.destroy()
+    // Keep the symbols hidden or visible exactly as they were when the drag began.
+    // Revealing a delimiter moves the glyphs underneath CodeMirror's mouse hit-testing.
+    this.pressedSelection = this.view.state.selection
+    this.preview ??= { selection: this.pressedSelection, focused: this.view.hasFocus }
+    const document = this.view.contentDOM.ownerDocument
+    const pointer = this.pointer = new AbortController()
+    this.moved = false
+    const end = () => {
+      pointer.abort()
+      this.pointer = undefined
+      // A link click follows mouseup. Keep the rendered anchor in place until it runs.
+      this.settle = setTimeout(() => {
+        this.settle = undefined
+        this.pressedSelection = undefined
+        if (!this.view.state.selection.ranges.every(range => range.empty)) return
+        this.preview = undefined
+        this.view.dispatch({ effects: refreshPreview.of(null) })
+      }, 0)
+    }
+    document.addEventListener('mousemove', move => {
+      if (!(move.buttons & 1)) end()
+      else if (Math.hypot(move.clientX - event.clientX, move.clientY - event.clientY) > 4) this.moved = true
+    }, { signal: pointer.signal })
+    document.addEventListener('mouseup', end, { signal: pointer.signal, once: true })
+    document.defaultView?.addEventListener('blur', end, { signal: pointer.signal, once: true })
+  }
+
+  activateLink(event: MouseEvent) {
+    if (event.detail === 0) return true
+    if (this.moved || event.shiftKey || !this.view.state.selection.main.empty) return false
+    // Clicking a link is navigation, so keep the caret where it was before the click.
+    if (this.pressedSelection) this.view.dispatch({ selection: this.pressedSelection })
+    return true
+  }
 
   update(update: ViewUpdate) {
-    if (update.startState.readOnly !== update.state.readOnly || update.docChanged || update.selectionSet || update.focusChanged || update.viewportChanged || syntaxTree(update.startState) !== syntaxTree(update.state)) {
-      this.decorations = liveMarkdown(update.view, path, loadRemote)
+    if (update.docChanged || update.transactions.some(tr => tr.selection && !tr.isUserEvent('select.pointer'))) this.preview = undefined
+    if (update.startState.readOnly !== update.state.readOnly || update.docChanged || update.selectionSet || update.focusChanged || update.viewportChanged ||
+      syntaxTree(update.startState) !== syntaxTree(update.state) ||
+      update.transactions.some(tr => tr.effects.some(effect => effect.is(refreshPreview)))) {
+      this.decorations = liveMarkdown(update.view, path, loadRemote, this.preview)
     }
   }
-}, { decorations: plugin => plugin.decorations })
+
+  destroy() {
+    this.pointer?.abort()
+    clearTimeout(this.settle)
+  }
+}, {
+  decorations: plugin => plugin.decorations,
+  eventObservers: { mousedown(event) { this.beginPointer(event) } },
+})
 
 type StatusKind = 'words' | 'lines' | 'modified'
 type OpenMenu = 'outline-depth' | 'outline-numbering' | 'more' | 'status'
@@ -270,6 +328,7 @@ export function MarkdownEditor({ text, name, path, modified, platform, remoteIma
   const readMode = useRef(new Compartment())
   const renderMode = useRef(new Compartment())
   const keyMode = useRef(new Compartment())
+  const livePreview = useMemo(() => live(path, remoteImages), [path, remoteImages])
   change.current = onChange
   const showTable = () => {
     setTableHover(undefined)
@@ -308,7 +367,7 @@ export function MarkdownEditor({ text, name, path, modified, platform, remoteIma
             ...markdownKeymap, ...searchKeymap.filter(binding => binding.key !== 'Mod-f')])),
           EditorView.contentAttributes.of({ 'aria-label': 'Markdown 编辑器', spellcheck: 'false' }),
           markdownImageIntake(path, report),
-          renderMode.current.of(sourceMode.current ? [] : [live(path, remoteImages), codeBlockPreferences.of(codeBlocks), renderedBlocks, markdownTable, markdownNotes]),
+          renderMode.current.of(sourceMode.current ? [] : [livePreview, codeBlockPreferences.of(codeBlocks), renderedBlocks, markdownTable, markdownNotes]),
           readMode.current.of([]), titleMode.current.of(titleExtension),
           EditorView.updateListener.of(update => {
             if (update.docChanged) change.current(bom + update.state.doc.toString().replaceAll('\n', newline))
@@ -342,8 +401,8 @@ export function MarkdownEditor({ text, name, path, modified, platform, remoteIma
   }, [registerFlush])
 
   useEffect(() => {
-    view.current?.dispatch({ effects: renderMode.current.reconfigure(source ? [] : [live(path, remoteImages), codeBlockPreferences.of(codeBlocks), renderedBlocks, markdownTable, markdownNotes]) })
-  }, [source, path, remoteImages, codeBlocks])
+    view.current?.dispatch({ effects: renderMode.current.reconfigure(source ? [] : [livePreview, codeBlockPreferences.of(codeBlocks), renderedBlocks, markdownTable, markdownNotes]) })
+  }, [source, livePreview, codeBlocks])
   useEffect(() => {
     view.current?.dispatch({ effects: readMode.current.reconfigure([
       EditorState.readOnly.of(reading), EditorView.editable.of(!reading),
@@ -605,12 +664,11 @@ export function MarkdownEditor({ text, name, path, modified, platform, remoteIma
           </div>
         </div>
         {hasTitle && createPortal(filenameTitle, titleHost)}
-        <div className="markdown-surface" ref={host} onMouseDownCapture={event => {
-          if (event.button === 0 && event.target instanceof Element && event.target.closest('a.md-link') && !event.target.closest('button')) event.preventDefault()
-        }} onClick={event => {
+        <div className="markdown-surface" ref={host} onClick={event => {
           const anchor = event.target instanceof Element && event.target.closest<HTMLAnchorElement>('a.md-link')
           if (!anchor) return
           event.preventDefault()
+          if (view.current?.plugin(livePreview)?.activateLink(event.nativeEvent) === false) return
           const href = anchor.getAttribute('href')
           if (!href) return
           if (href.startsWith('#')) {

@@ -206,8 +206,8 @@ export function Settings({ preferences, platform, library, windowsAcrylic, macRe
           </div>
         </> : <div className="settings-group">
           {page === '通用' && <>
-            <Row label="自动清理空日志" detail="仅清理保留期以外的空日志，并移到系统回收站。">
-              <select aria-label="自动清理空日志" value={preferences.journalCleanup} onChange={event => {
+            <Row label="自动清理空小记" detail="仅清理保留期以外的空小记，并移到系统回收站。">
+              <select aria-label="自动清理空小记" value={preferences.journalCleanup} onChange={event => {
                 const choice = journalCleanupChoices.find(([key]) => key === event.target.value)
                 if (choice) onChange({ journalCleanup: choice[0] })
               }}>

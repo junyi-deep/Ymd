@@ -2,6 +2,15 @@
 #include "shadow-pixels.h"
 #include <memory>
 
+@interface YmdShadowPanel : NSPanel
+@end
+
+@implementation YmdShadowPanel
+- (NSRect)constrainFrameRect:(NSRect)rect toScreen:(NSScreen*)screen {
+  return rect;
+}
+@end
+
 @interface YmdShadowView : NSView
 @property int spread;
 @property int blur;
@@ -56,7 +65,7 @@ extern "C" MacWindowShadow* CreateMacEditorShadow(NSView* nativeView) {
   if (!editor) return nullptr;
   auto* shadow = new MacWindowShadow{};
   shadow->editor = editor;
-  shadow->panel = [[NSPanel alloc] initWithContentRect:NSZeroRect
+  shadow->panel = [[YmdShadowPanel alloc] initWithContentRect:NSZeroRect
     styleMask:NSWindowStyleMaskBorderless | NSWindowStyleMaskNonactivatingPanel
     backing:NSBackingStoreBuffered defer:NO];
   shadow->panel.title = @"Ymd window shadow";
@@ -87,7 +96,7 @@ extern "C" void UpdateMacEditorShadow(MacWindowShadow* shadow, int show, int spr
   const NSRect frame = NSInsetRect(editor.frame, -margin, -margin);
   const bool resized = !NSEqualSizes(frame.size, panel.frame.size);
   if (!NSEqualRects(frame, panel.frame)) [panel setFrame:frame display:resized];
-  if (!panel.parentWindow) [editor addChildWindow:panel ordered:NSWindowAbove];
+  if (!panel.parentWindow) [editor addChildWindow:panel ordered:NSWindowBelow];
   if (styleChanged || resized) [view setNeedsDisplay:YES];
 }
 

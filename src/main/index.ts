@@ -580,6 +580,21 @@ void app.whenReady().then(async () => {
       return file
     })
   })
+  handleEditor('deleteJournal', (editor, date: string, version?: string) => runJournal(async () => {
+    const file = journals.file(date)
+    if ([...editors.values()].some(other => other !== editor && other.documents.has(file))) {
+      throw new Error('此小记正在另一个窗口打开。')
+    }
+    const current = await files.read(file)
+    if (version !== undefined && current.version !== version) throw new Error('小记已在磁盘上发生变化，请重新载入。')
+    await shell.trashItem(file)
+    await updateDocumentHistory(entries => entries.filter(entry => entry.path !== file)).catch(error => { console.warn(error) })
+    await writeRecent(items => items.some(entry => entry.path === file) ? items.filter(entry => entry.path !== file) : items)
+      .catch(error => { console.warn(error) })
+    const result = await journalSnapshot()
+    broadcast('ymd:journalsChanged', result)
+    return result
+  }))
   handle('previewJournal', (date: string) => journals.preview(date))
   handle('cleanJournals', async () => {
     await rollJournalDay()
@@ -741,16 +756,26 @@ void app.whenReady().then(async () => {
   })
   handle('listRecent', () => recent)
   handle('touchRecent', (file: string) => writeRecent(items => {
-    const matches = items.filter(entry => entry.path === file || entry.kind === 'directory' && containsPath(entry.path, file))
+    const matches = items.filter(entry => entry.path === file)
     if (!matches.length) return items
     const now = Date.now()
     return items.map(entry => matches.includes(entry) ? { ...entry, lastOpened: now } : entry)
   }, false))
   handle('removeRecent', (file: string) => writeRecent(items => items.filter(item => item.path !== file)))
-  handle('clearRecent', () => writeRecent(items => {
-    const opened = [...editors.values()].flatMap(editor => [...editor.documents])
-    return items.filter(entry => opened.some(file => file === entry.path || entry.kind === 'directory' && containsPath(entry.path, file)))
-  }))
+  handle('removeRecentEntries', async (paths: string[]) => {
+    if (!Array.isArray(paths) || paths.length > 1000 ||
+        paths.some(file => typeof file !== 'string' || !path.isAbsolute(file))) throw new Error('无效的本机文件选择。')
+    const selected = new Set(paths)
+    const hidden = paths.filter(file => !recent.some(entry => entry.path === file) &&
+      recent.some(entry => entry.kind === 'directory' && containsPath(entry.path, file) && !selected.has(entry.path)))
+    if (hidden.length) {
+      await storePreferences(current => ({
+        ...current, hiddenLocalEntries: [...new Set([...current.hiddenLocalEntries, ...hidden])].slice(-3000),
+      }))
+      broadcast('ymd:preferences', preferences)
+    }
+    return writeRecent(items => items.some(item => selected.has(item.path)) ? items.filter(item => !selected.has(item.path)) : items)
+  })
   handle('reorderRecent', (file: string, target: string, after: boolean) => writeRecent(items => {
     const entry = items.find(item => item.path === file)
     if (!entry || file === target) return items
@@ -829,8 +854,31 @@ void app.whenReady().then(async () => {
     editor.documents.add(document.path)
     const relative = path.relative(library.path, document.path)
     if (path.isAbsolute(relative) || relative.split(path.sep)[0] === '..') {
-      const { path, name, kind } = document
-      await remember({ path, name, kind })
+      let enclosing: Entry | undefined
+      await writeRecent(items => {
+        enclosing = items.filter(entry => entry.kind === 'directory' && containsPath(entry.path, document.path))
+          .sort((left, right) => (right.lastOpened ?? 0) - (left.lastOpened ?? 0))[0]
+        const opened = enclosing ?? { path: document.path, name: document.name, kind: document.kind }
+        return [{ ...opened, lastOpened: Date.now() }, ...items.filter(entry => entry.path !== opened.path && entry.path !== document.path)]
+      })
+      const expand: string[] = []
+      if (enclosing) {
+        let folder = path.dirname(document.path)
+        while (containsPath(enclosing.path, folder)) {
+          expand.push(folder)
+          if (path.relative(enclosing.path, folder) === '') break
+          folder = path.dirname(folder)
+        }
+      }
+      if (expand.length || preferences.localCollapsed) {
+        const revealed = new Set([...expand, document.path])
+        await storePreferences(current => ({
+          ...current, localCollapsed: false,
+          expandedFolders: [...new Set([...current.expandedFolders, ...expand])].slice(-3000),
+          hiddenLocalEntries: current.hiddenLocalEntries.filter(file => !revealed.has(file)),
+        }))
+        broadcast('ymd:preferences', preferences)
+      }
     }
     return document
   })
@@ -869,6 +917,7 @@ void app.whenReady().then(async () => {
       temporaryRoots.add(destination)
     }
     const changes: TreeChange[] = []
+    const copyParents = new Set<Entry>()
     try {
       for (const source of entries) {
         try {
@@ -876,6 +925,11 @@ void app.whenReady().then(async () => {
           const canonical = await (folder ? files.authorizedDirectory(source.path) : files.authorizedFile(source.path))
           if (canonical === library.path || folder && containsPath(canonical, library.path)) throw new Error('请先在设置中更改文档库位置。')
           let target: Entry | undefined
+          if (operation === 'copy') {
+            const parent = await files.authorizeDirectory(path.dirname(canonical))
+            copyParents.add(parent)
+            temporaryRoots.add(parent)
+          }
           if (folder) {
             if (copying) target = await files.copyDirectory(canonical, operation === 'import' ? library.path : undefined)
             else if (operation === 'trash') await shell.trashItem(canonical)
@@ -896,6 +950,14 @@ void app.whenReady().then(async () => {
         } catch (error) {
           changes.push({ source, error: error instanceof Error ? error.message : String(error) })
         }
+      }
+      if (operation === 'copy') {
+        await writeRecent(items => {
+          const copies = changes.flatMap(({ target }) => target && !containsPath(library.path, target.path) &&
+            !items.some(entry => entry.kind === 'directory' && containsPath(entry.path, target.path))
+            ? [{ ...target, lastOpened: Date.now() }] : [])
+          return copies.length ? [...copies, ...items] : items
+        }).catch(error => { console.warn('无法保存副本的最近打开记录。', error) })
       }
       if (!copying) {
         await writeRecent(items => {
@@ -925,6 +987,7 @@ void app.whenReady().then(async () => {
       return changes
     } finally {
       if (destination) temporaryRoots.delete(destination)
+      for (const parent of copyParents) temporaryRoots.delete(parent)
       files.retainRoots(roots())
     }
   }

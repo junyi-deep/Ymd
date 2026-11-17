@@ -225,8 +225,8 @@ export interface Desktop {
   chooseLocalDirectory(): Promise<Entry[] | null>
   listRecent(): Promise<Entry[]>
   touchRecent(path: string): Promise<Entry[]>
+  removeRecentEntries(paths: string[]): Promise<Entry[]>
   removeRecent(path: string): Promise<Entry[]>
-  clearRecent(): Promise<Entry[]>
   reorderRecent(path: string, target: string, after: boolean): Promise<Entry[]>
   setFolderExpanded(path: string, expanded: boolean): Promise<void>
   hideLocalEntry(path: string): Promise<void>
@@ -235,6 +235,7 @@ export interface Desktop {
   onDocumentHistory(callback: (entries: Entry[]) => void): () => void
   listJournals(): Promise<JournalList>
   openJournal(date: string): Promise<DocumentFile>
+  deleteJournal(date: string, version?: string): Promise<JournalList>
   previewJournal(date: string): Promise<{ text: string; truncated: boolean } | null>
   cleanJournals(): Promise<{ removed: string[]; failed: number }>
   onJournalsChanged(callback: (journals: JournalList) => void): () => void

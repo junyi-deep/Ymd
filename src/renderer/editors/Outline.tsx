@@ -23,9 +23,10 @@ const typingTypes = new Set(['insertText', 'deleteContentBackward', 'deleteConte
 const blockTitle = (node: Block) => node.text.split('\n')[0].trim() || '空块'
 const cursor = (id: string, start: number, end = start): OutlineCaret => ({ id, start, end })
 
-export function OutlineEditor({ text, name, path, platform, remoteImages, sessions, width, setWidth, remainderVisible, setRemainderVisible, followLink, onChange, position, filenameTitle, codeLineNumbers }: {
+export function OutlineEditor({ text, name, path, platform, remoteImages, sessions, width, setWidth, remainderVisible, setRemainderVisible, followLink, onChange, position, filenameTitle, codeLineNumbers, embedded = false }: {
   position: DocumentViewPosition
   codeLineNumbers: boolean
+  embedded?: boolean
   filenameTitle?: React.ReactNode
   text: string; name: string; path: string; platform: string; remoteImages: boolean; sessions: Map<string, OutlineSession>
   width: MarkdownPageWidth; setWidth: (value: MarkdownPageWidth) => void
@@ -654,7 +655,7 @@ export function OutlineEditor({ text, name, path, platform, remoteImages, sessio
     }}>
     {media && <MediaViewer request={media} close={() => setMedia(undefined)} />}
     <div className="outline-content">
-      <div className="outline-toolbar" role="toolbar" aria-label="大纲工具栏">
+      {(!embedded || focused) && <div className="outline-toolbar" role="toolbar" aria-label="大纲工具栏">
         <nav aria-label="大纲路径">
           {focused && <>
             <button className="tool-button" onClick={() => setBranch()}>{name.replace(/\.(?:md|markdown)$/i, '')}</button>
@@ -663,14 +664,14 @@ export function OutlineEditor({ text, name, path, platform, remoteImages, sessio
                 : <button className="tool-button" onClick={() => setBranch(node.id)}>{blockTitle(node)}</button>}</span>)}
           </>}
         </nav>
-        <div className="menu-anchor">
+        {!embedded && <div className="menu-anchor">
           <button type="button" className="icon-button" title="页宽设置" aria-label="页宽设置" aria-haspopup="menu" aria-expanded={widthMenu}
             onClick={() => setWidthMenu(!widthMenu)}><BetweenHorizontalStart size={16} /></button>
           {widthMenu && <MarkdownMenu close={() => setWidthMenu(false)} items={markdownPageWidths.map(([value, label]) => ({
             label, selected: width === value, run: () => setWidth(value),
           }))} />}
-        </div>
-      </div>
+        </div>}
+      </div>}
       {filenameTitle}
       {render(focused ? [focused] : blocks)}
       <button className="tool-button outline-add" onClick={() => addBlock(focused?.id)}><Plus size={17} />新增块</button>

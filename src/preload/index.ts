@@ -10,8 +10,8 @@ const desktop: Desktop = {
   chooseLocalDirectory: () => ipcRenderer.invoke('ymd:chooseLocalDirectory'),
   listRecent: () => ipcRenderer.invoke('ymd:listRecent'),
   touchRecent: path => ipcRenderer.invoke('ymd:touchRecent', path),
+  removeRecentEntries: paths => ipcRenderer.invoke('ymd:removeRecentEntries', paths),
   removeRecent: path => ipcRenderer.invoke('ymd:removeRecent', path),
-  clearRecent: () => ipcRenderer.invoke('ymd:clearRecent'),
   reorderRecent: (path, target, after) => ipcRenderer.invoke('ymd:reorderRecent', path, target, after),
   setFolderExpanded: (path, expanded) => ipcRenderer.invoke('ymd:setFolderExpanded', path, expanded),
   hideLocalEntry: path => ipcRenderer.invoke('ymd:hideLocalEntry', path),
@@ -24,6 +24,7 @@ const desktop: Desktop = {
   },
   listJournals: () => ipcRenderer.invoke('ymd:listJournals'),
   openJournal: date => ipcRenderer.invoke('ymd:openJournal', date),
+  deleteJournal: (date, version) => ipcRenderer.invoke('ymd:deleteJournal', date, version),
   previewJournal: date => ipcRenderer.invoke('ymd:previewJournal', date),
   cleanJournals: () => ipcRenderer.invoke('ymd:cleanJournals'),
   onJournalsChanged: callback => {

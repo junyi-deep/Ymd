@@ -52,6 +52,8 @@ jobs:
       - run: npm run build
       - name: Check native window material
         run: node node_modules/electron/cli.js scripts/check-window-material.cjs
+      - name: Check Markdown drag selection
+        run: node node_modules/electron/cli.js scripts/check-markdown-selection.cjs
       - name: Package
         run: npm exec -- electron-builder --${{ matrix.platform }} --${{ matrix.arch }} --publish never
       - name: Verify macOS update bundle

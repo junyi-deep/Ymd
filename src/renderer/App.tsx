@@ -1,8 +1,9 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState, type CSSProperties, type MouseEvent, type ReactNode } from 'react'
 import { AppWindow, ArrowLeft, CalendarDays, Check, ChevronDown, ChevronRight, CircleAlert, Copy, FilePlus2, FileText, FolderInput, Home, ListChecks, ListTree, Network, PanelLeft, LocateFixed, Minus, Pencil, Pin, Plus, Save, Search, Settings2, Shapes, Star, Trash2, X } from 'lucide-react'
-import { defaultPreferences, defaultUpdateProxy, windowBlurTint, windowMaterialFor, type Command, type DocumentFile, type EditorMode, type Entry, type FileKind, type JournalList, type Preferences, type RecoveryEntry, type Scope, type SearchHit, type TreeChange, type TreeMutation, type UpdateProxyInput, type VersionStatus } from '../shared/contracts'
+import { defaultPreferences, defaultUpdateProxy, windowBlurTint, windowMaterialFor, type Command, type DocumentFile, type EditorMode, type Entry, type FileKind, type JournalDay, type JournalList, type Preferences, type RecoveryEntry, type Scope, type SearchHit, type TreeChange, type TreeMutation, type UpdateProxyInput, type VersionStatus } from '../shared/contracts'
 import { documentLinkPath } from './documentLinks'
 import { documentModePaths, moveDocumentMode } from './documentModes'
+import { RenameInput } from './RenameInput'
 import { FileTreeRow, FilesTree, type TreeDrag, type TreeRename } from './FilesTree'
 import type { SettingsPage } from './Settings'
 import { PaneResize } from './PaneResize'
@@ -41,7 +42,6 @@ type Prompt =
   | { type: 'recovery' }
   | { type: 'trash'; session: Session }
   | { type: 'tree-trash'; entries: Entry[] }
-  | { type: 'clear-recent' }
 
 export function App() {
   const sessions = useDocuments()
@@ -56,6 +56,8 @@ export function App() {
   const [documentHistory, setDocumentHistory] = useState<Entry[]>([])
   const [treeMenu, setTreeMenu] = useState<{ kind: 'create' | 'open' | 'entry' | 'batch'; target?: Entry; x: number; y: number; recent?: boolean; anchor?: HTMLButtonElement }>()
   const [batch, setBatch] = useState<Map<string, Entry>>()
+  const [batchScope, setBatchScope] = useState<'library' | 'local'>('library')
+  const [revealLocalPath, setRevealLocalPath] = useState<string>()
   const [renamingEntry, setRenamingEntry] = useState<{ entry: Entry; name: string }>()
   const draggingEntry = useRef<{ entry: Entry; reorderable: boolean }>(undefined)
   const [windowsAcrylic, setWindowsAcrylic] = useState(false)
@@ -344,9 +346,26 @@ export function App() {
       try {
         const result = await window.desktop.cleanJournals()
         result.removed.forEach(file => moveDocumentMode(file))
-        setNotice((result.removed.length ? '已将 ' + result.removed.length + ' 篇空日志移到回收站。' : '没有可清理的空日志。') +
+        setNotice((result.removed.length ? '已将 ' + result.removed.length + ' 篇空小记移到回收站。' : '没有可清理的空小记。') +
           (result.failed ? ' 有 ' + result.failed + ' 篇未能移到回收站。' : ''))
       } finally { setCleaningJournals(false) }
+    })
+  }
+
+  function deleteJournal(day: JournalDay) {
+    flushEditor.current?.()
+    run(async () => {
+      if (!await sessions.save(day.path)) throw new Error('小记存在保存冲突，请处理后重试。')
+      const session = sessions.latest.current.find(document => document.path === day.path)
+      const updated = await window.desktop.deleteJournal(day.date, session?.version)
+      updateTreePaths([{ source: { path: day.path, name: day.date + '.md', kind: 'markdown' } }], false)
+      setJournals(updated)
+      if (active?.path === day.path) {
+        const index = journals?.days.findIndex(item => item.path === day.path) ?? 0
+        const adjacent = updated.days[Math.max(0, Math.min(index, updated.days.length - 1))]
+        if (adjacent) openJournal(adjacent.date)
+        else sessions.showHome()
+      }
     })
   }
 
@@ -358,7 +377,7 @@ export function App() {
 
   async function followMapDocument(target: TopicLink) {
     const path = target.document && mapDocumentPath(target.document)
-    if (!path) return false
+    if (!path || scopeOf(path) === 'journal') return false
     const intent = ++openIntent.current
     try {
       const file = await readMapDocument(path)
@@ -382,7 +401,13 @@ export function App() {
       const file = await window.desktop.chooseFile()
       if (file) {
         setRecent(await window.desktop.listRecent())
-        if (intent === openIntent.current) showFile(file)
+        if (intent === openIntent.current) {
+          showFile(file)
+          if (scopeOf(file.path) === 'local') {
+            setSidebar(true)
+            setRevealLocalPath(file.path)
+          }
+        }
       }
     })
   }
@@ -538,7 +563,7 @@ export function App() {
     }
   }
 
-  function create(kind: FileKind = 'markdown', directory = library) {
+  function create(kind: FileKind = 'markdown', directory = library, inlineRename = false) {
     if (!directory) return
     const intent = ++openIntent.current
     flushEditor.current?.()
@@ -546,16 +571,38 @@ export function App() {
       const file = await window.desktop.create(directory.path, kind)
       if (file.kind === 'markdown') initializeMapSettings(file.path, lastPreferences.current.mapDefaults)
       setRevision(value => value + 1)
-      if (intent === openIntent.current) showFile(file)
+      if (intent === openIntent.current) {
+        showFile(file)
+        if (inlineRename) startTreeRename(file)
+      }
     })
   }
 
-  function createFolder(directory = library) {
+  function createFolder(directory = library, inlineRename = false) {
     if (!directory) return
     run(async () => {
-      await window.desktop.createFolder(directory.path)
+      const folder = await window.desktop.createFolder(directory.path)
+      if (inlineRename) startTreeRename(folder)
       setRevision(value => value + 1)
     })
+  }
+
+  const entryName = (entry: Entry) => entry.kind === 'directory' ? entry.name : entry.name.replace(/\.[^.]+$/, '')
+  function startTreeRename(entry: Entry) {
+    setRenamingEntry({ entry, name: entryName(entry) })
+  }
+
+  function saveRename(entry: Entry, value: string, cancel: () => void) {
+    const name = value.trim()
+    if (!name || name === entryName(entry)) cancel()
+    else mutateEntries('rename', [entry], name)
+  }
+
+  function startBatch(scope: 'library' | 'local') {
+    setBatchScope(scope)
+    setBatch(new Map())
+    if (scope === 'library' && preferences.libraryCollapsed) updatePreferences({ libraryCollapsed: false })
+    if (scope === 'local' && preferences.localCollapsed) updatePreferences({ localCollapsed: false })
   }
 
   function toggleBatch(entry: Entry) {
@@ -698,17 +745,9 @@ export function App() {
     const basename = session.name.replace(/\.[^.]+$/, '')
     const editing = rename?.session.path === session.path && !!rename.inDocument === inDocument
     const start = () => setRename({ session, name: basename, inDocument })
-    if (editing) return <input className="document-rename" aria-label={inDocument ? '文档标题' : '文档名称'}
-      autoFocus readOnly={busy} value={rename.name} onFocus={event => event.currentTarget.select()}
-      onChange={event => setRename({ ...rename, name: event.target.value })}
-      onBlur={() => { if (!busy) setRename(undefined) }} onKeyDown={event => {
-        if (event.nativeEvent.isComposing || busy) return
-        if (event.key === 'Escape') { event.stopPropagation(); setRename(undefined) }
-        if (event.key === 'Enter' && rename.name.trim()) {
-          event.preventDefault()
-          mutateEntries('rename', [rename.session], rename.name)
-        }
-      }} />
+    if (editing) return <RenameInput className="document-rename" label={inDocument ? '文档标题' : '文档名称'}
+      name={rename.name} busy={busy} change={name => setRename({ ...rename, name })}
+      save={name => saveRename(rename.session, name, () => setRename(undefined))} cancel={() => setRename(undefined)} />
     return <button className="document-name" title={session.path} aria-label={'重命名 ' + (inDocument ? basename : session.name)}
       onDoubleClick={start} onKeyDown={event => {
         if (event.key === 'F2' || event.key === 'Enter') { event.preventDefault(); start() }
@@ -722,16 +761,17 @@ export function App() {
     return <FilesTree key={entry.path} directory={entry} active={settings ? undefined : active?.path} {...{ revision, expanded }}
       onOpen={file => openPath(file.path, scope)}
       onCreate={(target, x, y) => setTreeMenu({ kind: 'create', target, x, y })}
-      selection={scope === 'library' ? batch : undefined} onSelect={scope === 'library' ? toggleBatch : undefined}
+      selection={scope === batchScope ? batch : undefined} onSelect={scope === batchScope ? toggleBatch : undefined}
+      menuPath={treeMenu?.target?.path}
       expandedPaths={expandedFolders} hiddenPaths={scope === 'local' ? hiddenLocalEntries : undefined}
       onToggle={(folder, open) => run(() => window.desktop.setFolderExpanded(folder.path, open))}
       onDelete={busy ? undefined : target => mutateEntries('trash', [target])}
       onRemove={scope === 'local' ? removeLocalEntry : undefined}
       reorderable={scope === 'local'} drag={!busy ? treeDrag : undefined} rename={treeRename}
       onMenu={(target, x, y) => {
-        if (scope === 'library' && batch) {
+        if (scope === batchScope && batch) {
           if (!batch.has(target.path)) toggleBatch(target)
-          setTreeMenu({ kind: 'batch', x, y })
+          setTreeMenu({ kind: 'batch', target, x, y })
         } else setTreeMenu({ kind: 'entry', target, x, y, recent: scope === 'local' && target.path === entry.path })
       }}
       onExpand={scope === 'local' ? directory => {
@@ -744,6 +784,23 @@ export function App() {
       else await window.desktop.hideLocalEntry(entry.path)
     })
   }
+
+  useEffect(() => {
+    if (!revealLocalPath || !sidebar || settings) return
+    const tree = document.getElementById('local-section-files')
+    if (!tree) return
+    const reveal = () => {
+      const row = tree.querySelector<HTMLElement>('[data-tree-path="' + CSS.escape(revealLocalPath) + '"]')
+      if (row) {
+        row.scrollIntoView({ block: 'nearest' })
+        setRevealLocalPath(undefined)
+      }
+    }
+    const observer = new MutationObserver(reveal)
+    observer.observe(tree, { childList: true, subtree: true })
+    reveal()
+    return () => observer.disconnect()
+  }, [revealLocalPath, sidebar, settings])
 
   const viewingJournal = active?.scope === 'journal'
   useEffect(() => {
@@ -775,7 +832,7 @@ export function App() {
   const treeRename: TreeRename | undefined = renamingEntry && {
     path: renamingEntry.entry.path, name: renamingEntry.name, busy,
     change: name => setRenamingEntry({ ...renamingEntry, name }),
-    save: () => mutateEntries('rename', [renamingEntry.entry], renamingEntry.name),
+    save: name => saveRename(renamingEntry.entry, name, () => setRenamingEntry(undefined)),
     cancel: () => setRenamingEntry(undefined),
   }
   const activeScope = active && scopeOf(active.path)
@@ -797,14 +854,18 @@ export function App() {
     },
   }
   const newItems = (directory: Entry): MenuItem[] => [
-    { label: 'Markdown 文档', icon: <FilePlus2 size={16} />, run: () => create('markdown', directory) },
-    { label: '绘图文件', icon: <Shapes size={16} />, run: () => create('drawing', directory) },
-    { label: '文件夹', icon: <FolderInput size={16} />, run: () => createFolder(directory) },
+    { label: 'Markdown 文档', icon: <FilePlus2 size={16} />, run: () => create('markdown', directory, true) },
+    { label: '绘图文件', icon: <Shapes size={16} />, run: () => create('drawing', directory, true) },
+    { label: '文件夹', icon: <FolderInput size={16} />, run: () => createFolder(directory, true) },
   ]
   const chosen = [...(batch?.values() ?? [])]
   const batchItems: MenuItem[] = [
     { label: '创建副本', icon: <Copy size={16} />, disabled: !chosen.length, run: () => mutateEntries('copy', chosen, undefined, true) },
     { label: '移动到…', icon: <FolderInput size={16} />, disabled: !chosen.length, run: () => mutateEntries('move', chosen, undefined, true) },
+    ...(batchScope === 'local' ? [{ label: '移除', icon: <Minus size={16} />, disabled: !chosen.length, run: () => run(async () => {
+      setRecent(await window.desktop.removeRecentEntries(chosen.map(entry => entry.path)))
+      setBatch(new Map())
+    }) }] : []),
     { label: '删除', icon: <Trash2 size={16} />, disabled: !chosen.length, run: () => setPrompt({ type: 'tree-trash', entries: chosen }) },
   ]
   const treeItems: MenuItem[] = treeMenu?.kind === 'batch' ? batchItems : treeMenu?.kind === 'open' ? [
@@ -827,8 +888,7 @@ export function App() {
     } else {
       items.unshift({ label: '导入到我的文档', icon: <FolderInput size={16} />, run: () => mutateEntries('import', [target]) })
     }
-    items.push({ label: '重命名', icon: <Pencil size={16} />, run: () => setRenamingEntry({ entry: target,
-      name: target.kind === 'directory' ? target.name : target.name.replace(/\.[^.]+$/, '') }) })
+    items.push({ label: '重命名', icon: <Pencil size={16} />, run: () => startTreeRename(target) })
     if (scopeOf(target.path) === 'library') items.push({ label: '删除', icon: <Trash2 size={16} />, separator: true,
       run: () => setPrompt({ type: 'tree-trash', entries: [target] }) })
     if (treeMenu.recent) items.push({ label: '从最近记录移除', icon: <Minus size={16} />, separator: true, run: () => removeLocalEntry(target) })
@@ -887,7 +947,7 @@ export function App() {
           : active.mode === 'outline'
             ? <OutlineEditor key={active.path + ':' + active.reload} text={active.text} name={active.name} path={active.path} position={position!}
               filenameTitle={filenameTitle} platform={platform} followLink={href => followDocumentLink(active.path, href)} remoteImages={preferences.remoteImages} sessions={outlineSessions.current} onChange={edit}
-              width={preferences.outlinePageWidth} codeLineNumbers={preferences.outlineCodeLineNumbers} setWidth={outlinePageWidth => updatePreferences({ outlinePageWidth })}
+              width={preferences.outlinePageWidth} embedded={viewingJournal} codeLineNumbers={preferences.outlineCodeLineNumbers} setWidth={outlinePageWidth => updatePreferences({ outlinePageWidth })}
               remainderVisible={preferences.outlineRemainderVisible} setRemainderVisible={outlineRemainderVisible => updatePreferences({ outlineRemainderVisible })} />
             : <MindMapEditor key={active.path + ':' + active.reload} text={active.text} name={active.name} path={active.path} dark={dark} onChange={edit} find={find} position={position!}
               overviewPreferences={preferences.mapOverview} panelWidth={preferences.mapPanelWidth}
@@ -908,19 +968,19 @@ export function App() {
       <div className="window-controls flex items-center gap-1">
         <IconButton label="切换侧栏" click={() => { if (settings) setSettings(false); else setSidebar(!sidebar) }}><PanelLeft size={17} /></IconButton>
         <IconButton label="主页" click={home}><Home size={17} /></IconButton>
-        {!sidebar && !settings && <IconButton label="每日日志" click={() => openJournal()}><CalendarDays size={17} /></IconButton>}
+        {!sidebar && !settings && <IconButton label="每日小记" click={() => openJournal()}><CalendarDays size={17} /></IconButton>}
       </div>
       <div className="titlebar-content">
         <div className="title-path flex min-w-0 items-center gap-2">
           {settings ? <span>设置</span> : active
-            ? <><span className="source-label">{activeScope === 'journal' ? '每日日志' : activeScope === 'library' ? '我的文档' : '本机文件'}</span>
+            ? <><span className="source-label">{activeScope === 'journal' ? '每日小记' : activeScope === 'library' ? '我的文档' : '本机文件'}</span>
               <ChevronRight size={14} />
               {viewingJournal ? <strong>{active.name.replace(/\.md$/, '')}</strong> : documentName(active)}
               {dirty && <span className="unsaved-dot" title="未保存" />}</>
             : <strong>Ymd</strong>}
         </div>
         {!settings && active?.kind === 'markdown' && <div className="segments mode-switch" aria-label="编辑模式">
-          {modes.map(({ value, label, icon: Icon }) => <button key={value} type="button" title={label} aria-label={label}
+          {modes.filter(item => !viewingJournal || item.value !== 'map').map(({ value, label, icon: Icon }) => <button key={value} type="button" title={label} aria-label={label}
             aria-pressed={active.mode === value} onClick={() => { flushEditor.current?.(); sessions.setMode(active.path, value as EditorMode) }}>
             <Icon size={14} /><span>{label}</span></button>)}
         </div>}
@@ -946,7 +1006,7 @@ export function App() {
         {sidebar && <aside className="sidebar">
           <div className="sidebar-scroll">
             <button className="tree-row journal-nav" type="button" data-selected={viewingJournal} onClick={() => openJournal()}>
-              <CalendarDays size={17} /><span>每日日志</span>
+              <CalendarDays size={17} /><span>每日小记</span>
             </button>
             {markedSection('置顶', marks.pinned, Pin)}
             {markedSection('收藏', marks.starred, Star)}
@@ -955,14 +1015,14 @@ export function App() {
                 onClick={() => updatePreferences({ libraryCollapsed: !preferences.libraryCollapsed })}>
                 {preferences.libraryCollapsed ? <ChevronRight size={13} /> : <ChevronDown size={13} />}我的文档</button></h2>
                 <div className="section-actions">
-                  {batch ? <>
+                  {batch && batchScope === 'library' ? <>
                     <button className="icon-button" type="button" aria-label="全选我的文档" title="全选" onClick={() => run(async () => {
                       const entries = await window.desktop.list(library.path)
                       setBatch(current => entries.every(entry => current?.has(entry.path)) ? new Map() : new Map(entries.map(entry => [entry.path, entry])))
                     })}><Check size={15} /></button>
                     <IconButton label="退出批量操作" click={() => setBatch(undefined)}><X size={17} /></IconButton>
                   </> : <>
-                    <IconButton label="批量操作" click={() => setBatch(new Map())}><ListChecks size={16} /></IconButton>
+                    <IconButton label="批量操作" click={() => startBatch('library')}><ListChecks size={16} /></IconButton>
                     <button className="icon-button" type="button" aria-label="在我的文档新建" title="新建" aria-haspopup="menu"
                       onClick={event => menuAt(event, 'create', library)}><Plus size={17} /></button>
                   </>}
@@ -975,18 +1035,28 @@ export function App() {
                 onClick={() => updatePreferences({ localCollapsed: !preferences.localCollapsed })}>
                 {preferences.localCollapsed ? <ChevronRight size={13} /> : <ChevronDown size={13} />}本机文件</button></h2>
                 <div className="section-actions">
-                <IconButton label="清空本机文件" click={() => setPrompt({ type: 'clear-recent' })} disabled={!local.length}><Trash2 size={16} /></IconButton>
+                {batch && batchScope === 'local' ? <>
+                  <IconButton label="全选本机文件" click={() => setBatch(current => local.every(entry => current?.has(entry.path))
+                    ? new Map() : new Map(local.map(entry => [entry.path, entry])))}><Check size={15} /></IconButton>
+                  <IconButton label="退出本机文件批量操作" click={() => setBatch(undefined)}><X size={17} /></IconButton>
+                </> : <IconButton label="本机文件批量操作" click={() => startBatch('local')} disabled={!local.length}><ListChecks size={16} /></IconButton>}
                 <button className="icon-button" type="button" aria-label="添加本机文件或文件夹" title="打开" aria-haspopup="menu"
                   onClick={event => menuAt(event, 'open')}><Plus size={17} /></button>
                 </div>
               </div>
               <div id="local-section-files">{!preferences.localCollapsed && (local.length ? local.map(entry => entry.kind === 'directory' ? tree(entry, 'local', false) :
-                <FileTreeRow key={entry.path} entry={entry} depth={0} selected={active?.path === entry.path}
+                <FileTreeRow key={entry.path} entry={entry} depth={0} selected={active?.path === entry.path} menuOpen={treeMenu?.target?.path === entry.path}
+                  checked={batchScope === 'local' ? batch?.has(entry.path) : undefined} onCheck={() => toggleBatch(entry)}
                   rename={treeRename?.path === entry.path ? treeRename : undefined}
-                  reorderable drag={!busy ? treeDrag : undefined} onRemove={() => removeLocalEntry(entry)}
+                  reorderable drag={!busy && !(batch && batchScope === 'local') ? treeDrag : undefined} onRemove={() => removeLocalEntry(entry)}
                   onDelete={busy ? undefined : () => mutateEntries('trash', [entry])}
-                  onClick={() => openPath(entry.path, 'local')}
-                  onMenu={(x, y) => setTreeMenu({ kind: 'entry', target: entry, x, y, recent: true })} />)
+                  onClick={() => batch && batchScope === 'local' ? toggleBatch(entry) : openPath(entry.path, 'local')}
+                  onMenu={(x, y) => {
+                    if (batch && batchScope === 'local') {
+                      if (!batch.has(entry.path)) toggleBatch(entry)
+                      setTreeMenu({ kind: 'batch', target: entry, x, y })
+                    } else setTreeMenu({ kind: 'entry', target: entry, x, y, recent: true })
+                  }} />)
                 : <button className="tree-row subtle" onClick={event => menuAt(event, 'open')}><FileText size={17} /><span>打开本机文件或文件夹…</span></button>)}</div>
             </section>
           </div>
@@ -1024,7 +1094,7 @@ export function App() {
                 {documentHistory.map(entry => {
                   const Icon = entry.kind === 'drawing' ? Shapes : FileText
                   const parent = entry.path.slice(0, -entry.name.length).replace(/[\\/]$/, '')
-                  const location = scopeOf(entry.path) === 'journal' ? '每日日志' : scopeOf(entry.path) === 'library' ? '我的文档' + parent.slice(library.path.length) : parent
+                  const location = scopeOf(entry.path) === 'journal' ? '每日小记' : scopeOf(entry.path) === 'library' ? '我的文档' + parent.slice(library.path.length) : parent
                   return <li key={entry.path}><button type="button" className="tree-row" title={entry.path}
                     onClick={() => openPath(entry.path, undefined, true)}>
                     <Icon size={17} aria-hidden="true" /><span><strong>{entry.name}</strong><small>{location}</small></span>
@@ -1032,8 +1102,10 @@ export function App() {
                 })}
               </ul> : <p>还没有最近打开的文档。</p>}
             </section>
-          </div></div> : viewingJournal ? <Suspense fallback={<div className="startup">正在加载日志…</div>}>
-            <JournalStream list={journals} active={active.path} open={openJournal} clean={cleanJournals} cleaning={cleaningJournals}
+          </div></div> : viewingJournal ? <Suspense fallback={<div className="startup">正在加载小记…</div>}>
+            <JournalStream list={journals} active={active.path} open={openJournal} clean={cleanJournals} cleaning={cleaningJournals} remove={deleteJournal}
+              width={active.mode === 'outline' ? preferences.outlinePageWidth : preferences.markdownPageWidth}
+              setWidth={width => updatePreferences(active.mode === 'outline' ? { outlinePageWidth: width } : { markdownPageWidth: width })}
               drafts={new Map(sessions.documents.map(document => [document.path, document.text]))}
               remoteImages={preferences.remoteImages} followLink={followDocumentLink}>{documentEditor}</JournalStream>
           </Suspense> : documentEditor}
@@ -1052,15 +1124,6 @@ export function App() {
       items={treeItems} close={() => setTreeMenu(undefined)} point={treeMenu} anchor={treeMenu.anchor} nativeStyle />}
     {searchOpen && <Suspense fallback={null}><SearchDialog documents={sessions.documents} onOpen={openFromSearch} onClose={() => setSearchOpen(false)} /></Suspense>}
     <dialog ref={modal} onCancel={event => { event.preventDefault(); if (!busy) dismissPrompt() }} onClose={() => setNotice('')}>
-      {prompt?.type === 'clear-recent' && <div>
-        <h2>清空本机文件</h2><p>从侧栏移除列表记录。磁盘文件和仍在窗口中打开的文档及其文件夹会保留。</p>
-        {notice && <p className="form-error" role="alert">{notice}</p>}
-        <footer><button disabled={busy} onClick={dismissPrompt}>取消</button><button className="primary" disabled={busy}
-          onClick={() => run(async () => {
-            setBusy(true)
-            try { setRecent(await window.desktop.clearRecent()); setPrompt(undefined) } finally { setBusy(false) }
-          })}>清空</button></footer>
-      </div>}
       {prompt?.type === 'tree-trash' && <div>
         <h2>移到回收站</h2>
         <p>{prompt.entries.length === 1 ? '将「' + prompt.entries[0].name + '」移到系统回收站。' : '将选中的 ' + prompt.entries.length + ' 项移到系统回收站。'}</p>
