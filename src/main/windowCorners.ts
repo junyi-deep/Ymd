@@ -16,13 +16,16 @@ export function installWindowCorners(window: BrowserWindow) {
   const handle = window.getNativeWindowHandle().readBigUInt64LE()
   const rect = new Int32Array(4)
   let applied: string | undefined
+  let needsRefresh = false
   let pending: NodeJS.Immediate | undefined
 
   function update() {
     pending = undefined
     if (window.isDestroyed() || window.isMinimized()) return
+    const refresh = needsRefresh
+    needsRefresh = false
     if (window.isMaximized() || window.isFullScreen() || window.isSnapped()) {
-      if (applied !== undefined && setRegion(handle, null, 1)) applied = undefined
+      if ((applied !== undefined || refresh) && setRegion(handle, null, 1)) applied = undefined
       return
     }
     if (!getRect(handle, rect)) return
@@ -30,7 +33,7 @@ export function installWindowCorners(window: BrowserWindow) {
     const height = rect[3] - rect[1]
     const diameter = Math.round(16 * (dpiFor(handle) || 96) / 96)
     const shape = `${width}:${height}:${diameter}`
-    if (shape === applied || width <= 0 || height <= 0) return
+    if ((!refresh && shape === applied) || width <= 0 || height <= 0) return
     const region = createRegion(0, 0, width + 1, height + 1, diameter, diameter)
     if (!region) return
     // Windows owns the region after a successful SetWindowRgn.
@@ -39,6 +42,12 @@ export function installWindowCorners(window: BrowserWindow) {
   }
 
   const schedule = () => { pending ??= setImmediate(update) }
+  const reapply = () => {
+    needsRefresh = true
+    schedule()
+  }
+  window.on('show', reapply)
+  window.webContents.once('did-finish-load', reapply)
   window.on('resize', schedule)
   window.on('move', schedule)
   window.on('maximize', schedule)

@@ -195,9 +195,11 @@ function createWindow(initialFile?: DocumentFile) {
   nativeTheme.themeSource = preferences.theme
   const material = windowMaterial()
   const workArea = screen.getPrimaryDisplay().workAreaSize
+  // Electron treats a transparent Windows window covering the work area as maximized.
+  const reserve = process.platform === 'win32' ? 24 : 0
   const window = new BrowserWindow({
-    width: Math.max(660, Math.min(windowSize.width, workArea.width)),
-    height: Math.max(510, Math.min(windowSize.height, workArea.height)),
+    width: Math.max(660, Math.min(windowSize.width, workArea.width - reserve)),
+    height: Math.max(510, Math.min(windowSize.height, workArea.height - reserve)),
     minWidth: 660,
     minHeight: 510,
     title: 'Ymd',

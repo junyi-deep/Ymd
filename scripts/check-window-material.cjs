@@ -107,8 +107,11 @@ async function check(window) {
   const before = await waitMaterial(glass)
   assert.match(before.sidebar, /^rgba\(/)
   assert.match(before.page, /^rgb\(/)
-  if (windows) assert.equal(await dwmBackdrop(window), 3)
-  else assert.equal(vibrancyCalls.at(-1), 'hud')
+  const region = windows ? roundedRegion(window) : undefined
+  if (windows) {
+    assert.equal(await dwmBackdrop(window), 3)
+    await waitFor(region, value => value === 'rounded', 'First window is rounded at its startup size')
+  } else assert.equal(vibrancyCalls.at(-1), 'hud')
 
   const sample = 'button.tree-row[title="Window check.md"]'
   await waitFor(() => evaluate(`!!document.querySelector('${sample}')`), Boolean, 'Sample listed')
@@ -118,7 +121,6 @@ async function check(window) {
   if (windows) {
     await waitFor(snapshot, value => value.captionStart > 0 && value.captionStart < 680 && value.toolsEnd <= value.captionStart + 1,
       'Window tools stay clear of the caption buttons')
-    const region = roundedRegion(window)
     await waitFor(region, value => value === 'rounded', 'Restored window has physically rounded corners')
     window.maximize()
     await waitFor(region, value => value === 'none', 'Maximized window is unclipped')
