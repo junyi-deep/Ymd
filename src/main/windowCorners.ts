@@ -9,6 +9,7 @@ export function installWindowFrame(window: BrowserWindow, supportsAcrylic: boole
   const gdi = koffi.load('gdi32.dll')
   const dwm = koffi.load('dwmapi.dll')
   const getRect = user.func('int __stdcall GetWindowRect(void *window, _Out_ int32_t *rect)')
+  const setAttribute = dwm.func('int __stdcall DwmSetWindowAttribute(void *window, uint32_t attribute, const uint32_t *value, uint32_t size)')
   const getFrame = dwm.func('int __stdcall DwmGetWindowAttribute(void *window, uint32_t attribute, _Out_ int32_t *rect, uint32_t size)')
   const dpiFor = user.func('uint32_t __stdcall GetDpiForWindow(void *window)')
   const setRegion = user.func('int __stdcall SetWindowRgn(void *window, void *region, int redraw)')
@@ -17,6 +18,10 @@ export function installWindowFrame(window: BrowserWindow, supportsAcrylic: boole
   const combine = gdi.func('int __stdcall CombineRgn(void *destination, void *first, void *second, int mode)')
   const deleteRegion = gdi.func('int __stdcall DeleteObject(void *region)')
   const handle = window.getNativeWindowHandle().readBigUInt64LE()
+  // DWMWA_BORDER_COLOR = 34, DWMWA_COLOR_NONE = 0xFFFFFFFE (Windows 11+).
+  const noBorder = new Uint32Array([0xfffffffe])
+  const suppressBorder = () => { setAttribute(handle, 34, noBorder, noBorder.byteLength) }
+  suppressBorder()
   const rect = new Int32Array(4)
   const frame = new Int32Array(4)
   const native = loadFrameLibrary()
@@ -87,6 +92,7 @@ export function installWindowFrame(window: BrowserWindow, supportsAcrylic: boole
   const schedule = () => { pending ??= setImmediate(update) }
   const reapply = () => {
     needsRefresh = true
+    suppressBorder()
     schedule()
   }
   window.on('show', reapply)
@@ -95,12 +101,12 @@ export function installWindowFrame(window: BrowserWindow, supportsAcrylic: boole
   window.on('resize', schedule)
   window.on('move', schedule)
   window.on('maximize', schedule)
-  window.on('unmaximize', schedule)
+  window.on('unmaximize', reapply)
   window.on('minimize', schedule)
   window.on('restore', schedule)
   window.on('enter-full-screen', schedule)
   window.on('leave-full-screen', schedule)
-  window.on('focus', schedule)
+  window.on('focus', reapply)
   window.once('closed', () => {
     clearImmediate(pending)
     shadow?.destroy()

@@ -4,8 +4,9 @@ import { mkdir, readdir, readFile, writeFile, rename, open, lstat, realpath, sta
 import { renameSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { attachmentFolderName, defaultPreferences, interfaceFontSizes, documentHistoryLimit, mapExportExtensions, markdownImageExtension, markdownImageExtensions, paneWidths, recentFilesLimit, searchEngines, windowMaterialFor, windowShadowPresets } from '../shared/contracts'
+import { attachmentFolderName, defaultPreferences, interfaceFontSizes, journalCleanupChoices, documentHistoryLimit, mapExportExtensions, markdownImageExtension, markdownImageExtensions, paneWidths, recentFilesLimit, searchEngines, windowMaterialFor, windowShadowPresets } from '../shared/contracts'
 import type { Command, ContextMenuItem, Desktop, DocumentFile, Entry, FileKind, MapExportKind, MapShotRect, MarkdownImageUpload, Preferences, StorageDirectory, TreeChange, TreeMutation } from '../shared/contracts'
+import { Journals, journalDate } from './journals'
 import { initializeStorage, migrateStickers } from './storage'
 import { installMacShadow } from './macShadow'
 import { installWindowFrame } from './windowCorners'
@@ -56,6 +57,7 @@ function normalizePreferences(value: (Partial<Preferences> & { solidBackground?:
   const directory = (raw: unknown) => typeof raw === 'string' && path.isAbsolute(raw) ? raw : undefined
   const map = value?.mapDefaults
   return {
+    journalCleanup: journalCleanupChoices.find(([key]) => key === value?.journalCleanup)?.[0] ?? 'off',
     theme: value?.theme === 'dark' || value?.theme === 'light' ? value.theme : 'system',
     size: value?.size === 'small' || value?.size === 'large' || value?.size === 'custom' ? value.size : 'normal',
     interfaceFontSize: width(value?.interfaceFontSize, interfaceFontSizes) ?? defaultPreferences.interfaceFontSize,
@@ -378,11 +380,13 @@ void app.whenReady().then(async () => {
   updateAttachmentDirectories()
   let library = (preferences.libraryDirectory && await files.authorizeDirectory(preferences.libraryDirectory).catch(() => null))
     || await files.library(defaultLibrary)
+  const journalRoot = await files.library(path.join(storage.root, 'journals'))
+  const journals = new Journals(journalRoot.path)
   let recent: Entry[] = []
   let recentWrite: Promise<unknown> = Promise.resolve()
   let treeWrite: Promise<TreeChange[] | null> = Promise.resolve(null)
   const temporaryRoots = new Set<Entry>()
-  const roots = () => [library, ...recent.filter(entry => entry.kind === 'directory' && entry.path !== library.path), ...temporaryRoots]
+  const roots = () => [library, journalRoot, ...recent.filter(entry => entry.kind === 'directory' && entry.path !== library.path && entry.path !== journalRoot.path), ...temporaryRoots]
   const writeRecent = (change: (items: Entry[]) => Entry[], publish = true) => {
     const task = recentWrite.catch(() => {}).then(async () => {
       const changed = change(recent)
@@ -409,7 +413,7 @@ void app.whenReady().then(async () => {
   const oldLibrary = path.join(previous, 'Documents')
   const workspaceMarker = path.join(data, '.workspace-layout-v2')
   const legacyRoot = await realpath(storage.root)
-  const reserved = ['documents', 'stickers', 'config']
+  const reserved = ['documents', 'stickers', 'config', 'journals']
   files.hiddenStorageDirectories = new Set(reserved.map(name => path.join(legacyRoot, name)))
   const hasLegacyWorkspace = (await readdir(legacyRoot, { withFileTypes: true })).some(item =>
     !item.name.startsWith('.') && !reserved.includes(item.name.toLowerCase()) && !item.isSymbolicLink() &&
@@ -523,10 +527,73 @@ void app.whenReady().then(async () => {
     return library
   }
 
+  let today = ''
+  let journalWork: Promise<unknown> = Promise.resolve()
+  function runJournal<T>(operation: () => Promise<T>) {
+    const task = journalWork.catch(() => {}).then(operation)
+    journalWork = task
+    return task
+  }
+  const journalSnapshot = async () => ({ root: journalRoot, today, days: await journals.list() })
+  const isProtectedJournal = (file: string) => recovery.hasDraft(file) ||
+    [...editors.values()].some(editor => editor.documents.has(file) || editor.draftRevisions.has(file))
+  async function cleanJournals(cutoff: string) {
+    const result = await journals.clean(cutoff, isProtectedJournal, file => shell.trashItem(file))
+    if (result.removed.length) {
+      const removed = new Set(result.removed)
+      const updates = await Promise.allSettled([updateDocumentHistory(entries => entries.filter(entry => !removed.has(entry.path))),
+        writeRecent(items => items.filter(item => !removed.has(item.path)))])
+      for (const update of updates) if (update.status === 'rejected') console.warn('无法更新已清理日志的最近记录。', update.reason)
+    }
+    return result
+  }
+  function rollJournalDay(force = false) {
+    return runJournal(async () => {
+      const now = new Date()
+      const date = journalDate(now)
+      if (!force && date === today) return
+      await journals.ensureToday(date)
+      if (preferences.journalCleanup !== 'off') {
+        now.setDate(now.getDate() - Number(preferences.journalCleanup) + 1)
+        await cleanJournals(journalDate(now))
+      }
+      today = date
+      broadcast('ymd:journalsChanged', await journalSnapshot())
+    })
+  }
+  const pollJournal = () => { void rollJournalDay().catch(error => console.warn('无法更新每日日志。', error)) }
+  await rollJournalDay(true).catch(error => { console.warn('无法创建今日日志。', error) })
+  const dailyJournal = setInterval(pollJournal, 30_000)
+  dailyJournal.unref()
+  app.on('browser-window-focus', pollJournal)
+
+  handle('listJournals', async () => {
+    await rollJournalDay()
+    return runJournal(journalSnapshot)
+  })
+  handleEditor('openJournal', async (editor, date: string) => {
+    await rollJournalDay()
+    return runJournal(async () => {
+      if (date === today) await journals.ensureToday(date)
+      const file = await files.read(journals.file(date), true)
+      editor.documents.add(file.path)
+      return file
+    })
+  })
+  handle('previewJournal', (date: string) => journals.preview(date))
+  handle('cleanJournals', async () => {
+    await rollJournalDay()
+    return runJournal(async () => {
+      const result = await cleanJournals(today)
+      broadcast('ymd:journalsChanged', await journalSnapshot())
+      return result
+    })
+  })
+
   handleEditor('initialize', editor => {
     const initialFile = editor.initialFile
     editor.initialFile = undefined
-    return { library, recent, preferences, platform: process.platform, windowsAcrylic, initialFile,
+    return { library, journalRoot, recent, preferences, platform: process.platform, windowsAcrylic, initialFile,
       recoveries: recovery.list(), documentHistory, defaultStickerDirectory, macReducesTransparency: macReducesTransparency(), version: app.getVersion(),
       updateProxy: releases.network.publicProxy(), release: releases.status }
   })
@@ -767,7 +834,14 @@ void app.whenReady().then(async () => {
     }
     return document
   })
-  handle('read', (file: string) => files.read(file, true))
+  handleEditor('read', (editor, file: string) => {
+    if (typeof file !== 'string' || !journals.date(file)) return files.read(file, true)
+    return runJournal(async () => {
+      const result = await files.read(file, true)
+      editor.documents.add(result.path)
+      return result
+    })
+  })
   handle('create', (directory: string, kind: FileKind) => files.create(directory, kind))
   handle('createFolder', (directory: string) => files.createFolder(directory))
   async function mutateTree(window: BrowserWindow, mutation: TreeMutation): Promise<TreeChange[] | null> {
@@ -1119,6 +1193,7 @@ void app.whenReady().then(async () => {
     let changedShortcuts = false
     let changedBackground = false
     let changedAttachmentTree = false
+    let changedJournalCleanup = false
     const updated = await storePreferences(current => {
       const next = normalizePreferences({ ...current, ...value, libraryDirectory: current.libraryDirectory,
         attachmentDirectory: current.attachmentDirectory, attachmentDirectories: current.attachmentDirectories,
@@ -1127,6 +1202,7 @@ void app.whenReady().then(async () => {
       changedAttachmentTree = current.showAttachmentDirectories !== next.showAttachmentDirectories ||
         current.attachmentFolder !== next.attachmentFolder
       if (next.attachmentMode === 'fixed' && !next.attachmentDirectory) next.attachmentMode = 'relative'
+      changedJournalCleanup = current.journalCleanup !== next.journalCleanup
       changedShortcuts = JSON.stringify(current.shortcuts) !== JSON.stringify(next.shortcuts)
       changedBackground = current.theme !== next.theme ||
         windowMaterial(current) !== windowMaterial(next) ||
@@ -1137,6 +1213,7 @@ void app.whenReady().then(async () => {
     if (changedAttachmentTree) broadcast('ymd:workspaceChanged', { library, recent })
     if (changedShortcuts) installMenu()
     if (changedBackground) applyBackground()
+    if (changedJournalCleanup) void rollJournalDay(true).catch(error => console.warn('无法清理空日志。', error))
     broadcast('ymd:preferences', updated)
     return updated
   })

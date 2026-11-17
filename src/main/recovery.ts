@@ -31,6 +31,11 @@ export class Recovery {
       .map(({ id, path, updated }) => ({ id, path, updated }))
   }
 
+  hasDraft(file: string) {
+    return [...this.stale.values()].some(snapshot => snapshot.path === file) ||
+      [...this.pending.values()].some(entry => entry.latest?.path === file)
+  }
+
   get(id: string) { return this.stale.get(id) }
 
   async discard(id: string) {

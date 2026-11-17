@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import type { Command, Desktop, Entry, Preferences, RecoveryEntry, VersionStatus } from '../shared/contracts'
+import type { Command, Desktop, Entry, JournalList, Preferences, RecoveryEntry, VersionStatus } from '../shared/contracts'
 import type { PitchDesktop } from '../shared/pitch'
 
 const desktop: Desktop = {
@@ -21,6 +21,15 @@ const desktop: Desktop = {
     const listener = (_: unknown, entries: Entry[]) => callback(entries)
     ipcRenderer.on('ymd:documentHistory', listener)
     return () => ipcRenderer.removeListener('ymd:documentHistory', listener)
+  },
+  listJournals: () => ipcRenderer.invoke('ymd:listJournals'),
+  openJournal: date => ipcRenderer.invoke('ymd:openJournal', date),
+  previewJournal: date => ipcRenderer.invoke('ymd:previewJournal', date),
+  cleanJournals: () => ipcRenderer.invoke('ymd:cleanJournals'),
+  onJournalsChanged: callback => {
+    const listener = (_: unknown, journals: JournalList) => callback(journals)
+    ipcRenderer.on('ymd:journalsChanged', listener)
+    return () => ipcRenderer.removeListener('ymd:journalsChanged', listener)
   },
   search: query => ipcRenderer.invoke('ymd:search', query),
   cancelSearch: () => ipcRenderer.invoke('ymd:cancelSearch'),

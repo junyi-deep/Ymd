@@ -68,6 +68,8 @@ public static class AppWindow {
 
 $profile = Join-Path $env:RUNNER_TEMP 'ymd-installed-window'
 $nativeError = Join-Path $env:RUNNER_TEMP 'ymd-installed-window.stderr'
+New-Item -ItemType Directory -Force -Path $profile | Out-Null
+Set-Content -Path (Join-Path $profile 'preferences.json') -Value '{"theme":"dark","autoCheckUpdates":false}'
 $env:ELECTRON_ENABLE_LOGGING = '1'
 $main = Start-Process -FilePath $installed -ArgumentList "--user-data-dir=`"$profile`"" -RedirectStandardError $nativeError -PassThru
 try {
@@ -121,13 +123,21 @@ try {
           throw "The desktop is obscured at a visible window corner ($($point -join ','), RGB $($color.R),$($color.G),$($color.B))."
         }
       }
+      $side = [int]($image.Height / 2)
+      $top = $padding + 95
+      foreach ($point in @(@($top, $padding), @($padding, $side), @($top, $bottom))) {
+        $color = $image.GetPixel($point[0], $point[1])
+        if ([Math]::Min([int]$color.R, [Math]::Min([int]$color.G, [int]$color.B)) -gt 210) {
+          throw "A light window frame is visible at ($($point -join ','), RGB $($color.R),$($color.G),$($color.B))."
+        }
+      }
       $middle = [int]($image.Height / 2)
       $wallpaper = $image.GetPixel(0, $middle)
       $shadow = $image.GetPixel(($padding - 5), $middle)
       if ($wallpaper.G - $shadow.G -lt 12) { throw "The window did not cast a visible shadow (desktop G=$($wallpaper.G), edge G=$($shadow.G))." }
       $point = ([long]([int]($frame[1] + ($frame[3] - $frame[1]) / 2)) -shl 32) -bor ([long]($frame[0] - 5) -band 0xffffffffL)
       if ([AppWindow]::WindowFromPoint($point) -ne $back.Handle) { throw 'The window shadow intercepted pointer hit-testing.' }
-      Write-Output 'Verified four rounded corners and a click-through shadow on the composited desktop.'
+      Write-Output 'Verified borderless rounded corners and a click-through shadow on the composited desktop.'
     } catch {
       $image.Save((Join-Path $env:RUNNER_TEMP 'ymd-windows-window.png'), [Drawing.Imaging.ImageFormat]::Png)
       throw

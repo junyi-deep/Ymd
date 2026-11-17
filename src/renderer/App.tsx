@@ -1,7 +1,8 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState, type CSSProperties, type MouseEvent, type ReactNode } from 'react'
-import { AppWindow, ArrowLeft, Check, ChevronDown, ChevronRight, CircleAlert, Copy, FilePlus2, FileText, FolderInput, Home, ListChecks, ListTree, Network, PanelLeft, LocateFixed, Minus, Pencil, Pin, Plus, Save, Search, Settings2, Shapes, Star, Trash2, X } from 'lucide-react'
-import { defaultPreferences, defaultUpdateProxy, windowBlurTint, windowMaterialFor, type Command, type DocumentFile, type EditorMode, type Entry, type FileKind, type Preferences, type RecoveryEntry, type Scope, type SearchHit, type TreeChange, type TreeMutation, type UpdateProxyInput, type VersionStatus } from '../shared/contracts'
+import { AppWindow, ArrowLeft, CalendarDays, Check, ChevronDown, ChevronRight, CircleAlert, Copy, FilePlus2, FileText, FolderInput, Home, ListChecks, ListTree, Network, PanelLeft, LocateFixed, Minus, Pencil, Pin, Plus, Save, Search, Settings2, Shapes, Star, Trash2, X } from 'lucide-react'
+import { defaultPreferences, defaultUpdateProxy, windowBlurTint, windowMaterialFor, type Command, type DocumentFile, type EditorMode, type Entry, type FileKind, type JournalList, type Preferences, type RecoveryEntry, type Scope, type SearchHit, type TreeChange, type TreeMutation, type UpdateProxyInput, type VersionStatus } from '../shared/contracts'
 import { documentLinkPath } from './documentLinks'
+import { documentModePaths, moveDocumentMode } from './documentModes'
 import { FileTreeRow, FilesTree, type TreeDrag, type TreeRename } from './FilesTree'
 import type { SettingsPage } from './Settings'
 import { PaneResize } from './PaneResize'
@@ -22,6 +23,7 @@ const SearchDialog = lazy(() => import('./SearchDialog').then(module => ({ defau
 const MarkdownEditor = lazy(() => import('./editors/Markdown').then(module => ({ default: module.MarkdownEditor })))
 const OutlineEditor = lazy(() => import('./editors/Outline').then(module => ({ default: module.OutlineEditor })))
 const MindMapEditor = lazy(() => import('./editors/MindMap'))
+const JournalStream = lazy(() => import('./JournalStream'))
 const DrawingEditor = lazy(() => import('./editors/Drawing'))
 const modes = [
   { value: 'markdown', label: 'Markdown', icon: FileText },
@@ -46,6 +48,9 @@ export function App() {
   const marks = useFileMarks()
   const active = sessions.active
   const [library, setLibrary] = useState<Entry>()
+  const [journalRoot, setJournalRoot] = useState<Entry>()
+  const [journals, setJournals] = useState<JournalList>()
+  const [cleaningJournals, setCleaningJournals] = useState(false)
   const [recent, setRecent] = useState<Entry[]>([])
   const [defaultStickerDirectory, setDefaultStickerDirectory] = useState('')
   const [documentHistory, setDocumentHistory] = useState<Entry[]>([])
@@ -125,6 +130,7 @@ export function App() {
       discardInterruptedMapImports()
       const result = await window.desktop.initialize()
       setLibrary(result.library)
+      setJournalRoot(result.journalRoot)
       setRecent(result.recent)
       setDocumentHistory(result.documentHistory)
       setDefaultStickerDirectory(result.defaultStickerDirectory)
@@ -140,7 +146,7 @@ export function App() {
       if (result.recoveries.length) setPrompt({ type: 'recovery' })
       if (result.initialFile) {
         const file = result.initialFile
-        showFile(file, file.path.startsWith(result.library.path + (result.platform === 'win32' ? '\\' : '/')) ? 'library' : 'local')
+        showFile(file, isJournalPath(result.journalRoot, file.path, result.platform) ? 'journal' : file.path.startsWith(result.library.path + (result.platform === 'win32' ? '\\' : '/')) ? 'library' : 'local')
       }
     })
     const query = matchMedia('(prefers-color-scheme: dark)')
@@ -159,6 +165,7 @@ export function App() {
     const unsubscribePreferences = window.desktop.onPreferences(next => { lastPreferences.current = next; setPreferences(next) })
     const unsubscribeRecovery = window.desktop.onRecoveryList(setRecoveries)
     const unsubscribeHistory = window.desktop.onDocumentHistory(setDocumentHistory)
+    const unsubscribeJournals = window.desktop.onJournalsChanged(setJournals)
     const unsubscribeWorkspace = window.desktop.onWorkspaceChange(next => {
       setLibrary(next.library)
       setRecent(next.recent)
@@ -174,6 +181,7 @@ export function App() {
       unsubscribeRecovery()
       unsubscribeHistory()
       unsubscribeWorkspace()
+      unsubscribeJournals()
       query.removeEventListener('change', onTheme)
       window.removeEventListener('focus', onFocus)
     }
@@ -294,19 +302,52 @@ export function App() {
       target.startsWith(source.replace(/[\\/]$/, '') + (platform === 'win32' ? '\\' : '/'))
   }
 
+  function isJournalPath(root: Entry, file: string, system = platform) {
+    const name = file.split(/[\\/]/).at(-1)
+    if (!name || !/^\d{4}-\d{2}-\d{2}\.md$/.test(name)) return false
+    const parent = file.slice(0, -name.length - 1)
+    return system === 'win32' ? root.path.toLowerCase() === parent.toLowerCase() : root.path === parent
+  }
+
   function scopeOf(path: string): Scope {
+    if (journalRoot && isJournalPath(journalRoot, path)) return 'journal'
     return library && within(library, path) ? 'library' : 'local'
   }
 
   function showFile(file: Parameters<typeof sessions.open>[0], scope = scopeOf(file.path)) {
     if (active?.path !== file.path) flushEditor.current?.()
-    const openMap = file.kind === 'markdown' && !sessions.latest.current.some(document => document.path === file.path) &&
-      !!loadMapAppearance(file.path).imported
-    sessions.open(file, scope)
-    if (openMap) sessions.patch(file.path, { mode: 'map' })
+    if (journalRoot && isJournalPath(journalRoot, file.path)) scope = 'journal'
+    const fallback = scope === 'journal' ? 'outline' : file.kind === 'markdown' && loadMapAppearance(file.path).imported ? 'map' : 'markdown'
+    sessions.open(file, scope, fallback)
     setSettings(false)
     void window.desktop.recordDocumentOpen(file.path).catch(() => {})
     if (scope === 'local') void window.desktop.touchRecent(file.path).catch(() => {})
+  }
+
+  function openJournal(date?: string) {
+    const intent = ++openIntent.current
+    run(async () => {
+      const updated = await window.desktop.listJournals()
+      if (intent !== openIntent.current) return
+      setJournals(updated)
+      const day = date ?? updated.today
+      const entry = updated.days.find(item => item.date === day)
+      const file = sessions.latest.current.find(session => session.path === entry?.path) ?? await window.desktop.openJournal(day)
+      if (intent === openIntent.current) showFile(file, 'journal')
+    })
+  }
+
+  function cleanJournals() {
+    if (cleaningJournals) return
+    setCleaningJournals(true)
+    run(async () => {
+      try {
+        const result = await window.desktop.cleanJournals()
+        result.removed.forEach(file => moveDocumentMode(file))
+        setNotice((result.removed.length ? '已将 ' + result.removed.length + ' 篇空日志移到回收站。' : '没有可清理的空日志。') +
+          (result.failed ? ' 有 ' + result.failed + ' 篇未能移到回收站。' : ''))
+      } finally { setCleaningJournals(false) }
+    })
   }
 
   async function readMapDocument(path: string): Promise<DocumentFile> {
@@ -528,7 +569,7 @@ export function App() {
 
   function updateTreePaths(changes: TreeChange[], copying: boolean) {
     const paths = new Set([...marks.pinned, ...marks.starred, ...styledMapPaths(), ...registeredMapPaths(),
-      ...outlineDepthPaths(), ...sessions.latest.current.map(session => session.path)])
+      ...outlineDepthPaths(), ...documentModePaths(), ...sessions.latest.current.map(session => session.path)])
     const remapped = new Map<string, string | undefined>()
     let metadataFailed = false
     for (const { source, target } of changes) {
@@ -546,6 +587,7 @@ export function App() {
         } catch { metadataFailed = true }
         if (copying) continue
         moveOutlineDepth(old, next)
+        moveDocumentMode(old, next)
         remapped.set(old, next)
         const outline = outlineSessions.current.get(old)
         outlineSessions.current.delete(old)
@@ -673,7 +715,7 @@ export function App() {
       }}>{inDocument ? basename : session.name}</button>
   }
 
-  const filenameTitle = active && preferences.showFilenameTitle
+  const filenameTitle = active && active.scope !== 'journal' && preferences.showFilenameTitle
     ? <h1 className="filename-title">{documentName(active, true)}</h1> : undefined
 
   function tree(entry: Entry, scope: Scope, expanded: boolean) {
@@ -702,6 +744,15 @@ export function App() {
       else await window.desktop.hideLocalEntry(entry.path)
     })
   }
+
+  const viewingJournal = active?.scope === 'journal'
+  useEffect(() => {
+    if (!viewingJournal) return
+    let current = true
+    void window.desktop.listJournals().then(value => { if (current) setJournals(value) },
+      error => { if (current) setNotice(message(error)) })
+    return () => { current = false }
+  }, [viewingJournal])
 
   if (!library) return <div className="startup">{notice || '正在打开文档库…'}</div>
 
@@ -794,25 +845,83 @@ export function App() {
     {dirty ? <Save size={14} /> : <Check size={14} />}{dirty ? '未保存' : '已保存'}
   </button>
 
+  const documentEditor = active && <Suspense fallback={<div className="startup">正在加载编辑器…</div>}>
+      {active.kind === 'drawing'
+        ? <DrawingEditor key={active.path + ':' + active.reload} text={active.text} dark={dark} onChange={edit}
+          backup={() => run(async () => {
+            if (await window.desktop.saveCopy(active.path, active.text)) setNotice('已保存原文件副本。')
+          })}
+          reveal={() => run(() => window.desktop.reveal(active.path))} />
+        : active.mode === 'markdown'
+          ? <MarkdownEditor key={active.path + ':' + active.reload} text={active.text} name={active.name} path={active.path} modified={active.modified} platform={platform} remoteImages={preferences.remoteImages} keyOverrides={preferences.shortcuts} position={position!}
+            outline={preferences.markdownOutline} filenameTitle={filenameTitle} saveStatus={saveStatus}
+            width={preferences.markdownPageWidth} codeBlocks={preferences.codeBlocks} setWidth={markdownPageWidth => updatePreferences({ markdownPageWidth })}
+            updateOutline={patch => updatePreferences({ markdownOutline: { ...lastPreferences.current.markdownOutline, ...patch } })}
+            searchEngine={preferences.searchEngine} registerFlush={registerFlush}
+            find={find} jump={jump?.path === active.path ? jump : undefined} onChange={edit}
+            report={error => setNotice(message(error))}
+            followLink={href => followDocumentLink(active.path, href)}
+            pinned={marks.pinned.includes(active.path)} starred={marks.starred.includes(active.path)}
+            togglePin={() => marks.toggle('pinned', active.path)} toggleStar={() => marks.toggle('starred', active.path)}
+            move={viewingJournal ? undefined : () => moveFile(active)}
+            trash={viewingJournal ? undefined : () => setPrompt({ type: 'trash', session: active })}
+            shortcuts={() => { setSettingsPage('快捷键'); setSettings(true) }}
+            printDocument={() => run(async () => {
+              const { printMarkdown } = await import('./editors/printMarkdown')
+              return window.desktop.printDocument(active.name, await printMarkdown(active.path, active.text))
+            })}
+            exportPdf={() => run(async () => {
+              const { printMarkdown } = await import('./editors/printMarkdown')
+              return window.desktop.exportPdf(active.name, await printMarkdown(active.path, active.text))
+            })}
+            duplicate={() => run(async () => {
+              const file = await window.desktop.duplicate(active.path, library.path, active.text)
+              setRevision(value => value + 1)
+              showFile(file)
+            })}
+            reveal={() => run(() => window.desktop.reveal(active.path))}
+            saveCopy={() => run(async () => {
+              const file = await window.desktop.saveCopy(active.path, active.text)
+              if (file) { setRecent(await window.desktop.listRecent()); setRevision(value => value + 1); showFile(file) }
+            })} />
+          : active.mode === 'outline'
+            ? <OutlineEditor key={active.path + ':' + active.reload} text={active.text} name={active.name} path={active.path} position={position!}
+              filenameTitle={filenameTitle} platform={platform} followLink={href => followDocumentLink(active.path, href)} remoteImages={preferences.remoteImages} sessions={outlineSessions.current} onChange={edit}
+              width={preferences.outlinePageWidth} codeLineNumbers={preferences.outlineCodeLineNumbers} setWidth={outlinePageWidth => updatePreferences({ outlinePageWidth })}
+              remainderVisible={preferences.outlineRemainderVisible} setRemainderVisible={outlineRemainderVisible => updatePreferences({ outlineRemainderVisible })} />
+            : <MindMapEditor key={active.path + ':' + active.reload} text={active.text} name={active.name} path={active.path} dark={dark} onChange={edit} find={find} position={position!}
+              overviewPreferences={preferences.mapOverview} panelWidth={preferences.mapPanelWidth}
+              resizePanel={mapPanelWidth => updatePreferences({ mapPanelWidth })}
+              rememberSettings={patch => updatePreferences({ mapDefaults: { ...lastPreferences.current.mapDefaults, ...patch } })}
+              stickerDirectory={preferences.stickerDirectory}
+              platform={platform} keyOverrides={preferences.shortcuts} remoteImages={preferences.remoteImages}
+              remainderVisible={preferences.mapRemainderVisible} setRemainderVisible={mapRemainderVisible => updatePreferences({ mapRemainderVisible })}
+              registerFlush={registerFlush} importWorkbook={importWorkbook} importing={importing}
+              readMapDocument={readMapDocument} followMapDocument={followMapDocument} consumedMapJump={consumedMapJump}
+              entryJump={mapJump?.path === active.path ? mapJump.target : undefined}
+              linkDocuments={sessions.documents.filter(document => document.kind === 'markdown' && document.path !== active.path)} />}
+    </Suspense>
+
   return <div className="window" data-platform={platform} data-sidebar={sidebar || settings}
     style={{ '--sidebar-user-width': preferences.sidebarWidth === undefined ? undefined : preferences.sidebarWidth + 'px' } as CSSProperties}>
     <header className="titlebar flex items-center">
       <div className="window-controls flex items-center gap-1">
         <IconButton label="切换侧栏" click={() => { if (settings) setSettings(false); else setSidebar(!sidebar) }}><PanelLeft size={17} /></IconButton>
         <IconButton label="主页" click={home}><Home size={17} /></IconButton>
+        {!sidebar && !settings && <IconButton label="每日日志" click={() => openJournal()}><CalendarDays size={17} /></IconButton>}
       </div>
       <div className="titlebar-content">
         <div className="title-path flex min-w-0 items-center gap-2">
           {settings ? <span>设置</span> : active
-            ? <><span className="source-label">{activeScope === 'library' ? '我的文档' : '本机文件'}</span>
+            ? <><span className="source-label">{activeScope === 'journal' ? '每日日志' : activeScope === 'library' ? '我的文档' : '本机文件'}</span>
               <ChevronRight size={14} />
-              {documentName(active)}
+              {viewingJournal ? <strong>{active.name.replace(/\.md$/, '')}</strong> : documentName(active)}
               {dirty && <span className="unsaved-dot" title="未保存" />}</>
             : <strong>Ymd</strong>}
         </div>
         {!settings && active?.kind === 'markdown' && <div className="segments mode-switch" aria-label="编辑模式">
           {modes.map(({ value, label, icon: Icon }) => <button key={value} type="button" title={label} aria-label={label}
-            aria-pressed={active.mode === value} onClick={() => { flushEditor.current?.(); sessions.patch(active.path, { mode: value as EditorMode }) }}>
+            aria-pressed={active.mode === value} onClick={() => { flushEditor.current?.(); sessions.setMode(active.path, value as EditorMode) }}>
             <Icon size={14} /><span>{label}</span></button>)}
         </div>}
         <div className="title-actions ml-auto flex items-center gap-1">
@@ -836,6 +945,9 @@ export function App() {
         onChange={updatePreferences} /></Suspense> : <>
         {sidebar && <aside className="sidebar">
           <div className="sidebar-scroll">
+            <button className="tree-row journal-nav" type="button" data-selected={viewingJournal} onClick={() => openJournal()}>
+              <CalendarDays size={17} /><span>每日日志</span>
+            </button>
             {markedSection('置顶', marks.pinned, Pin)}
             {markedSection('收藏', marks.starred, Star)}
             <section>
@@ -912,7 +1024,7 @@ export function App() {
                 {documentHistory.map(entry => {
                   const Icon = entry.kind === 'drawing' ? Shapes : FileText
                   const parent = entry.path.slice(0, -entry.name.length).replace(/[\\/]$/, '')
-                  const location = scopeOf(entry.path) === 'library' ? '我的文档' + parent.slice(library.path.length) : parent
+                  const location = scopeOf(entry.path) === 'journal' ? '每日日志' : scopeOf(entry.path) === 'library' ? '我的文档' + parent.slice(library.path.length) : parent
                   return <li key={entry.path}><button type="button" className="tree-row" title={entry.path}
                     onClick={() => openPath(entry.path, undefined, true)}>
                     <Icon size={17} aria-hidden="true" /><span><strong>{entry.name}</strong><small>{location}</small></span>
@@ -920,61 +1032,11 @@ export function App() {
                 })}
               </ul> : <p>还没有最近打开的文档。</p>}
             </section>
-          </div></div> : <Suspense fallback={<div className="startup">正在加载编辑器…</div>}>
-            {active.kind === 'drawing'
-              ? <DrawingEditor key={active.path + ':' + active.reload} text={active.text} dark={dark} onChange={edit}
-                backup={() => run(async () => {
-                  if (await window.desktop.saveCopy(active.path, active.text)) setNotice('已保存原文件副本。')
-                })}
-                reveal={() => run(() => window.desktop.reveal(active.path))} />
-              : active.mode === 'markdown'
-                ? <MarkdownEditor key={active.path + ':' + active.reload} text={active.text} name={active.name} path={active.path} modified={active.modified} platform={platform} remoteImages={preferences.remoteImages} keyOverrides={preferences.shortcuts} position={position!}
-                  outline={preferences.markdownOutline} filenameTitle={filenameTitle} saveStatus={saveStatus}
-                  width={preferences.markdownPageWidth} codeBlocks={preferences.codeBlocks} setWidth={markdownPageWidth => updatePreferences({ markdownPageWidth })}
-                  updateOutline={patch => updatePreferences({ markdownOutline: { ...lastPreferences.current.markdownOutline, ...patch } })}
-                  searchEngine={preferences.searchEngine} registerFlush={registerFlush}
-                  find={find} jump={jump?.path === active.path ? jump : undefined} onChange={edit}
-                  report={error => setNotice(message(error))}
-                  followLink={href => followDocumentLink(active.path, href)}
-                  pinned={marks.pinned.includes(active.path)} starred={marks.starred.includes(active.path)}
-                  togglePin={() => marks.toggle('pinned', active.path)} toggleStar={() => marks.toggle('starred', active.path)}
-                  move={() => moveFile(active)} trash={() => setPrompt({ type: 'trash', session: active })}
-                  shortcuts={() => { setSettingsPage('快捷键'); setSettings(true) }}
-                  printDocument={() => run(async () => {
-                    const { printMarkdown } = await import('./editors/printMarkdown')
-                    return window.desktop.printDocument(active.name, await printMarkdown(active.path, active.text))
-                  })}
-                  exportPdf={() => run(async () => {
-                    const { printMarkdown } = await import('./editors/printMarkdown')
-                    return window.desktop.exportPdf(active.name, await printMarkdown(active.path, active.text))
-                  })}
-                  duplicate={() => run(async () => {
-                    const file = await window.desktop.duplicate(active.path, library.path, active.text)
-                    setRevision(value => value + 1)
-                    showFile(file)
-                  })}
-                  reveal={() => run(() => window.desktop.reveal(active.path))}
-                  saveCopy={() => run(async () => {
-                    const file = await window.desktop.saveCopy(active.path, active.text)
-                    if (file) { setRecent(await window.desktop.listRecent()); setRevision(value => value + 1); showFile(file) }
-                  })} />
-                : active.mode === 'outline'
-                  ? <OutlineEditor key={active.path + ':' + active.reload} text={active.text} name={active.name} path={active.path} position={position!}
-                    filenameTitle={filenameTitle} platform={platform} followLink={href => followDocumentLink(active.path, href)} remoteImages={preferences.remoteImages} sessions={outlineSessions.current} onChange={edit}
-                    width={preferences.outlinePageWidth} codeLineNumbers={preferences.outlineCodeLineNumbers} setWidth={outlinePageWidth => updatePreferences({ outlinePageWidth })}
-                    remainderVisible={preferences.outlineRemainderVisible} setRemainderVisible={outlineRemainderVisible => updatePreferences({ outlineRemainderVisible })} />
-                  : <MindMapEditor key={active.path + ':' + active.reload} text={active.text} name={active.name} path={active.path} dark={dark} onChange={edit} find={find} position={position!}
-                    overviewPreferences={preferences.mapOverview} panelWidth={preferences.mapPanelWidth}
-                    resizePanel={mapPanelWidth => updatePreferences({ mapPanelWidth })}
-                    rememberSettings={patch => updatePreferences({ mapDefaults: { ...lastPreferences.current.mapDefaults, ...patch } })}
-                    stickerDirectory={preferences.stickerDirectory}
-                    platform={platform} keyOverrides={preferences.shortcuts} remoteImages={preferences.remoteImages}
-                    remainderVisible={preferences.mapRemainderVisible} setRemainderVisible={mapRemainderVisible => updatePreferences({ mapRemainderVisible })}
-                    registerFlush={registerFlush} importWorkbook={importWorkbook} importing={importing}
-                    readMapDocument={readMapDocument} followMapDocument={followMapDocument} consumedMapJump={consumedMapJump}
-                    entryJump={mapJump?.path === active.path ? mapJump.target : undefined}
-                    linkDocuments={sessions.documents.filter(document => document.kind === 'markdown' && document.path !== active.path)} />}
-          </Suspense>}
+          </div></div> : viewingJournal ? <Suspense fallback={<div className="startup">正在加载日志…</div>}>
+            <JournalStream list={journals} active={active.path} open={openJournal} clean={cleanJournals} cleaning={cleaningJournals}
+              drafts={new Map(sessions.documents.map(document => [document.path, document.text]))}
+              remoteImages={preferences.remoteImages} followLink={followDocumentLink}>{documentEditor}</JournalStream>
+          </Suspense> : documentEditor}
           {active && (active.kind === 'drawing' || active.mode !== 'markdown') && <footer className="document-status">{saveStatus}</footer>}
         </main>
       </>}

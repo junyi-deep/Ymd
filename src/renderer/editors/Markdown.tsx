@@ -211,8 +211,8 @@ interface Props {
   reveal: () => void
   saveCopy: () => void
   duplicate: () => void
-  move: () => void
-  trash: () => void
+  move?: () => void
+  trash?: () => void
   shortcuts: () => void
   exportPdf: () => void
   printDocument: () => void
@@ -497,7 +497,7 @@ export function MarkdownEditor({ text, name, path, modified, platform, remoteIma
       label, selected: width === value, run: () => setWidth(value),
     })) },
     { label: '查找和替换', icon: <Search size={16} />, separator: true, run: () => { if (view.current) openSearchPanel(view.current) } },
-    { label: '移动到', icon: <FolderInput size={16} />, separator: true, run: move },
+    ...(move ? [{ label: '移动到', icon: <FolderInput size={16} />, separator: true, run: move }] : []),
     { label: pinned ? '从“置顶”移除' : '添加到“置顶”', icon: <Pin size={16} />, run: togglePin },
     { label: starred ? '取消收藏' : '添加到收藏', icon: <Star size={16} />, run: toggleStar },
     { label: '创建副本', icon: <Copy size={16} />, separator: true, run: duplicate },
@@ -516,7 +516,7 @@ export function MarkdownEditor({ text, name, path, modified, platform, remoteIma
       { label: '在文件管理器中显示', icon: <LocateFixed size={16} />, run: reveal },
       { label: '拷贝文件路径', icon: <Copy size={16} />, run: () => { void navigator.clipboard.writeText(path).catch(report) } },
     ] },
-    { label: '删除', icon: <Trash2 size={16} />, run: trash },
+    ...(trash ? [{ label: '删除', icon: <Trash2 size={16} />, run: trash }] : []),
     { label: '快捷键', icon: <Keyboard size={16} />, separator: true, run: shortcuts },
   ]
   const statusItems: MenuItem[] = ([

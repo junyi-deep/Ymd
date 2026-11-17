@@ -1,4 +1,5 @@
 import { useRef, useState } from 'react'
+import { documentMode, rememberDocumentMode } from './documentModes'
 import type { DocumentFile, EditorMode, RecoveryDraft, Scope } from '../shared/contracts'
 
 export interface Session extends DocumentFile {
@@ -41,12 +42,20 @@ export function useDocuments() {
     }))
   }
 
-  function open(file: DocumentFile, scope: Scope) {
+  function open(file: DocumentFile, scope: Scope, fallback: EditorMode = scope === 'journal' ? 'outline' : 'markdown') {
     const opened = Date.now()
     if (!latest.current.some(session => session.path === file.path)) {
-      update(sessions => [...sessions, { ...file, saved: file.text, scope, mode: 'markdown', reload: 0, opened }])
-    } else patch(file.path, { opened })
+      update(sessions => [...sessions, { ...file, saved: file.text, scope, mode: documentMode(file.path) ?? fallback, reload: 0, opened }])
+    } else {
+      const stored = documentMode(file.path)
+      patch(file.path, { opened, scope, ...(stored ? { mode: stored } : {}) })
+    }
     setActive(file.path)
+  }
+
+  function setMode(path: string, mode: EditorMode) {
+    rememberDocumentMode(path, mode)
+    patch(path, { mode })
   }
 
   function applyDisk(session: Session, file: DocumentFile) {
@@ -137,7 +146,7 @@ export function useDocuments() {
     setActive(current => current === path ? target : current)
   }
 
-  return { documents, active: documents.find(document => document.path === active), open, patch, save, refresh, reload, restore, close, relocate, latest, journal,
+  return { documents, active: documents.find(document => document.path === active), open, patch, setMode, save, refresh, reload, restore, close, relocate, latest, journal,
     hasPending: (path?: string) => path ? saving.current.has(path) : saving.current.size > 0,
     waitForPending: (path?: string) => Promise.allSettled(path ? [saving.current.get(path)] : [...saving.current.values()]),
     showHome: () => setActive(undefined) }

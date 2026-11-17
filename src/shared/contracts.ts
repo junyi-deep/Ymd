@@ -3,7 +3,11 @@ import type { PitchRequest } from './pitch'
 import type { AppShortcut, ShortcutOverrides } from './shortcuts'
 
 export type FileKind = 'markdown' | 'drawing'
-export type Scope = 'library' | 'local'
+export type Scope = 'library' | 'local' | 'journal'
+export const journalCleanupChoices = [['off', '关闭'], ['1', '仅保留今日空日志'], ['7', '保留最近 7 天'], ['30', '保留最近 30 天']] as const
+export type JournalCleanup = (typeof journalCleanupChoices)[number][0]
+export type JournalDay = { date: string; path: string }
+export type JournalList = { root: Entry; today: string; days: JournalDay[] }
 export type EditorMode = 'markdown' | 'outline' | 'map'
 export type Theme = 'system' | 'light' | 'dark'
 export type MarkdownPageWidth = 'narrow' | 'normal' | 'wide'
@@ -103,6 +107,7 @@ export interface ContextMenuItem {
 
 export interface Preferences {
   theme: Theme
+  journalCleanup: JournalCleanup
   size: 'small' | 'normal' | 'large' | 'custom'
   interfaceFontSize: number
   interfaceFont: string
@@ -164,7 +169,7 @@ export const windowShadowColors = [
 export type WindowShadowPreferences = { enabled: boolean; preset: keyof typeof windowShadowPresets; color: string }
 
 export const defaultPreferences: Preferences = {
-  theme: 'system', size: 'normal', interfaceFontSize: 13, interfaceFont: 'system-ui',
+  theme: 'system', journalCleanup: 'off', size: 'normal', interfaceFontSize: 13, interfaceFont: 'system-ui',
   windowTransparent: true, windowBlur: true, libraryCollapsed: false, localCollapsed: false, windowTransparency: 80, showFilenameTitle: false, recentLimit: 50, expandedFolders: [], hiddenLocalEntries: [], animations: true, documentTheme: 'classic',
   windowShadow: { enabled: true, preset: 'normal', color: windowShadowColors[0][0] },
   attachmentMode: 'relative', attachmentFolder: 'assets', showAttachmentDirectories: false,
@@ -212,7 +217,7 @@ export function markdownImageExtension(name: string, type = '') {
 }
 
 export interface Desktop {
-  initialize(): Promise<{ library: Entry; recent: Entry[]; preferences: Preferences; platform: string; windowsAcrylic: boolean; macReducesTransparency: boolean; version: string; updateProxy: UpdateProxy; release: VersionStatus;
+  initialize(): Promise<{ library: Entry; journalRoot: Entry; recent: Entry[]; preferences: Preferences; platform: string; windowsAcrylic: boolean; macReducesTransparency: boolean; version: string; updateProxy: UpdateProxy; release: VersionStatus;
     initialFile?: DocumentFile; recoveries: RecoveryEntry[]; documentHistory: Entry[]; defaultStickerDirectory: string }>
   list(path: string): Promise<Entry[]>
   chooseLibraryDirectory(): Promise<Entry | null>
@@ -228,6 +233,11 @@ export interface Desktop {
   recordDocumentOpen(path: string): Promise<void>
   openHistoryDocument(path: string): Promise<DocumentFile | null>
   onDocumentHistory(callback: (entries: Entry[]) => void): () => void
+  listJournals(): Promise<JournalList>
+  openJournal(date: string): Promise<DocumentFile>
+  previewJournal(date: string): Promise<{ text: string; truncated: boolean } | null>
+  cleanJournals(): Promise<{ removed: string[]; failed: number }>
+  onJournalsChanged(callback: (journals: JournalList) => void): () => void
   search(query: string): Promise<SearchHit[]>
   cancelSearch(): Promise<void>
   chooseFile(kind?: FileKind): Promise<DocumentFile | null>

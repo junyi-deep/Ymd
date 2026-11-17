@@ -1,5 +1,5 @@
 import { useLayoutEffect, useRef, useState, type PointerEvent } from 'react'
-import { Crop, Download, Maximize, Minus, Plus, RotateCcw, RotateCw, X } from 'lucide-react'
+import { Crop, Download, Maximize, Maximize2, Minimize2, Minus, Plus, RotateCcw, RotateCw, X } from 'lucide-react'
 import type { MediaPreview } from './mediaPreview'
 
 type Point = { x: number; y: number }
@@ -22,6 +22,7 @@ export function MediaViewer({ request, close }: { request: MediaPreview; close: 
   const [frame, setFrame] = useState<Size>({ width: 1, height: 1 })
   const [size, setSize] = useState<Size>()
   const [source, setSource] = useState(request.src)
+  const [expanded, setExpanded] = useState(false)
   const [zoom, setZoom] = useState(1)
   const [location, setLocation] = useState<Point>(center)
   const [cropping, setCropping] = useState(false)
@@ -119,14 +120,18 @@ export function MediaViewer({ request, close }: { request: MediaPreview; close: 
     })
   }
 
-  return <dialog ref={modal} className="media-dialog" aria-label={request.type === 'diagram' ? '查看 Mermaid 图' : '查看图片'}
-    onCancel={event => { event.preventDefault(); if (cropping) { setCropping(false); setArea(undefined) } else close() }}>
+  return <dialog ref={modal} className="media-dialog" data-expanded={expanded} aria-label={request.type === 'diagram' ? '查看 Mermaid 图' : '查看图片'}
+    onCancel={event => { event.preventDefault(); if (cropping) { setCropping(false); setArea(undefined) } else if (expanded) setExpanded(false); else close() }}>
     <header><h2>{request.title}</h2><button type="button" className="icon-button" aria-label="关闭查看器" onClick={close}><X size={19} /></button></header>
     <div className="media-toolbar" role="toolbar" aria-label="图片操作">
       <button type="button" className="icon-button" aria-label="缩小" onClick={() => resize(1 / 1.25)}><Minus size={16} /></button>
       <button type="button" className="tool-button" aria-label="恢复适合窗口" onClick={resetView}>{Math.round(scale * 100)}%</button>
       <button type="button" className="icon-button" aria-label="放大" onClick={() => resize(1.25)}><Plus size={16} /></button>
       <button type="button" className="icon-button" aria-label="适合窗口" onClick={resetView}><Maximize size={15} /></button>
+      <button type="button" className="icon-button" aria-pressed={expanded} aria-label={expanded ? '退出应用内全屏' : '应用内全屏'}
+        title={expanded ? '退出应用内全屏' : '应用内全屏'} onClick={() => setExpanded(value => !value)}>
+        {expanded ? <Minimize2 size={15} /> : <Maximize2 size={15} />}
+      </button>
       {request.type === 'image' && <>
         <button type="button" className="tool-button" aria-pressed={cropping} disabled={busy || !size} onClick={() => { setCropping(!cropping); setArea(undefined) }}><Crop size={15} />裁剪</button>
         <button type="button" className="icon-button" aria-label="顺时针旋转" disabled={busy || cropping || !size} onClick={() => transform(undefined, true)}><RotateCw size={15} /></button>

@@ -1,6 +1,6 @@
 import { createContext, useContext, useState, type ReactNode } from 'react'
 import { ArrowLeft, HardDrive, Info, Keyboard, Palette, RefreshCw, Search, SlidersHorizontal, X } from 'lucide-react'
-import { attachmentFolderName, interfaceFontSizes, windowShadowColors, windowShadowPresets, markdownPageWidths, recentFilesLimit, searchEngines, type StorageDirectory, type Entry, type Preferences, type SearchEngine, type UpdateProxy, type UpdateProxyInput, type VersionStatus } from '../shared/contracts'
+import { attachmentFolderName, interfaceFontSizes, journalCleanupChoices, windowShadowColors, windowShadowPresets, markdownPageWidths, recentFilesLimit, searchEngines, type StorageDirectory, type Entry, type Preferences, type SearchEngine, type UpdateProxy, type UpdateProxyInput, type VersionStatus } from '../shared/contracts'
 import { UpdateProxySettings } from './UpdateProxySettings'
 import { FontPicker } from './FontPicker'
 import { ShortcutSettings } from './ShortcutSettings'
@@ -206,6 +206,14 @@ export function Settings({ preferences, platform, library, windowsAcrylic, macRe
           </div>
         </> : <div className="settings-group">
           {page === '通用' && <>
+            <Row label="自动清理空日志" detail="仅清理保留期以外的空日志，并移到系统回收站。">
+              <select aria-label="自动清理空日志" value={preferences.journalCleanup} onChange={event => {
+                const choice = journalCleanupChoices.find(([key]) => key === event.target.value)
+                if (choice) onChange({ journalCleanup: choice[0] })
+              }}>
+                {journalCleanupChoices.map(([key, label]) => <option value={key} key={key}>{label}</option>)}
+              </select>
+            </Row>
             <Row label="自动保存" detail="停止编辑后自动保存在本机。磁盘版本冲突时保留草稿。">
               <button className="switch" role="switch" aria-label="自动保存" aria-checked={preferences.autoSave}
                 onClick={() => onChange({ autoSave: !preferences.autoSave })} />
