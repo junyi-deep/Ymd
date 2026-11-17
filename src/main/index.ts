@@ -6,6 +6,7 @@ import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { defaultPreferences, interfaceFontSizes, documentHistoryLimit, mapExportExtensions, markdownImageExtension, markdownImageExtensions, paneWidths, recentFilesLimit, searchEngines, windowMaterialFor } from '../shared/contracts'
 import type { Command, ContextMenuItem, Desktop, DocumentFile, Entry, FileKind, MapExportKind, MapShotRect, MarkdownImageUpload, Preferences, StorageDirectory, TreeChange, TreeMutation } from '../shared/contracts'
+import { installWindowCorners } from './windowCorners'
 import { Files, containsPath, fileKind } from './files'
 import { LocalMapLocations } from './localMapLocations'
 import { searchRoots } from './search'
@@ -96,6 +97,7 @@ function normalizePreferences(value: (Partial<Preferences> & { solidBackground?:
       colored: typeof map?.colored === 'boolean' ? map.colored : undefined,
     },
     codeBlocks: { lineNumbers: value?.codeBlocks?.lineNumbers === true, wrap: value?.codeBlocks?.wrap === true },
+    outlineCodeLineNumbers: value?.outlineCodeLineNumbers === true,
     animations: value?.animations !== false,
     documentTheme: value?.documentTheme === 'paper' || value?.documentTheme === 'mono' ? value.documentTheme : 'classic',
     autoSave: value?.autoSave !== false,
@@ -216,6 +218,10 @@ function createWindow(initialFile?: DocumentFile) {
   editors.set(window.id, editor)
   lastEditor = editor
   applyBackground(window)
+  if (process.platform === 'win32') {
+    try { installWindowCorners(window) }
+    catch (error) { console.warn('无法应用 Windows 窗口圆角。', error) }
+  }
   window.on('focus', () => { lastEditor = editor })
   window.on('blur', () => editor.keys.reset())
   window.on('resize', () => {

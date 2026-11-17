@@ -129,6 +129,7 @@ export interface Preferences {
   mapOverview: { visible: boolean; position: 'left' | 'right' }
   mapDefaults: Partial<MapCanvasSettings>
   codeBlocks: CodeBlockPreferences
+  outlineCodeLineNumbers: boolean
   animations: boolean
   documentTheme: 'classic' | 'paper' | 'mono'
   autoSave: boolean
@@ -152,7 +153,7 @@ export const defaultPreferences: Preferences = {
   markdownOutline: { position: 'right', numbering: 'none', visible: false },
   markdownPageWidth: 'normal', outlinePageWidth: 'normal', outlineRemainderVisible: true, mapRemainderVisible: true,
   mapOverview: { visible: false, position: 'left' }, mapDefaults: {},
-  codeBlocks: { lineNumbers: false, wrap: false },
+  codeBlocks: { lineNumbers: false, wrap: false }, outlineCodeLineNumbers: false,
   autoSave: true, remoteImages: false, autoCheckUpdates: true, autoDownloadUpdates: false, searchEngine: 'google', shortcuts: {},
 }
 

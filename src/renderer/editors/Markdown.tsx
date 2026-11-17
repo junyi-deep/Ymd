@@ -1,6 +1,6 @@
 import { useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { createPortal } from 'react-dom'
-import { BetweenHorizontalStart, Check, Code2, Copy, Eye, FileDown, FileText, FolderInput, Info, Keyboard, ListTree, LocateFixed, MoreHorizontal, Pin, Printer, Search, Star, Trash2 } from 'lucide-react'
+import { BetweenHorizontalStart, Check, ChevronRight, Code2, Copy, Eye, FileDown, FileText, FolderInput, Info, Keyboard, ListTree, LocateFixed, MoreHorizontal, Pin, Printer, Search, Star, Layers, Trash2 } from 'lucide-react'
 import { MarkdownMenu, type MenuItem } from './MarkdownMenu'
 import { contextItems, insertMermaid, tabInList, typographyKeys } from './markdownCommands'
 import { markdownPlainText } from './markdownHtml'
@@ -23,6 +23,7 @@ import { markdownPageWidths, type CodeBlockPreferences, type ContextMenuItem, ty
 import type { DocumentViewPosition } from './viewPosition'
 import { colorOpening, highlightOpening, numberOpening } from './outlineTextStyle'
 import type { ShortcutOverrides } from '../../shared/shortcuts'
+import { getOutlineDepth, maxOutlineDepth, setOutlineDepth } from './markdownOutlineDepth'
 import { PaneResize } from '../PaneResize'
 
 class DocumentTitle extends WidgetType {
@@ -169,7 +170,7 @@ const live = (path: string, loadRemote: boolean) => ViewPlugin.fromClass(class {
 }, { decorations: plugin => plugin.decorations })
 
 type StatusKind = 'words' | 'lines' | 'modified'
-type OpenMenu = 'outline-numbering' | 'more' | 'status'
+type OpenMenu = 'outline-depth' | 'outline-numbering' | 'more' | 'status'
 type Heading = { pos: number; level: number; title: string }
 const outlineNumberings = [
   ['none', '不显示编号'], ['flat', '数字序号'], ['hierarchical', '带层级的数字序号'],
@@ -234,6 +235,13 @@ export function MarkdownEditor({ text, name, path, modified, platform, remoteIma
   const sourceMode = useRef(source)
   sourceMode.current = source
   const [menu, setMenu] = useState<OpenMenu>()
+  const [outlineDepth, changeOutlineDepth] = useState(() => getOutlineDepth(path))
+  const [expandedHeadings, setExpandedHeadings] = useState(new Map<string, boolean>())
+  const [activeHeading, setActiveHeading] = useState(-1)
+  const headingsNav = useRef<HTMLElement>(null)
+  const depthPopover = useRef<HTMLDivElement>(null)
+  const depthTrigger = useRef<HTMLButtonElement>(null)
+  const refreshHeading = useRef<(() => void) | undefined>(undefined)
   const [headings, setHeadings] = useState<Heading[]>([])
   const [status, setStatus] = useState<StatusKind>('words')
   const [reading, setReading] = useState(false)
@@ -292,6 +300,7 @@ export function MarkdownEditor({ text, name, path, modified, platform, remoteIma
           readMode.current.of([]), titleMode.current.of(titleExtension),
           EditorView.updateListener.of(update => {
             if (update.docChanged) change.current(bom + update.state.doc.toString().replaceAll('\n', newline))
+            if (update.geometryChanged || update.viewportChanged) refreshHeading.current?.()
           }),
         ],
       }),
@@ -386,18 +395,88 @@ export function MarkdownEditor({ text, name, path, modified, platform, remoteIma
     return () => window.clearTimeout(pending)
   }, [text, outline.visible])
   const numberedHeadings = useMemo(() => {
-    const ancestors: { level: number; ordinal: number; children: number }[] = []
+    const ancestors: { level: number; ordinal: number; children: number; pos: number }[] = []
     let roots = 0
     return headings.map((heading, index) => {
       while (ancestors.length && ancestors.at(-1)!.level >= heading.level) ancestors.pop()
       const parent = ancestors.at(-1)
       const depth = ancestors.length
-      ancestors.push({ level: heading.level, ordinal: parent ? ++parent.children : ++roots, children: 0 })
-      const number = outline.numbering === 'flat' ? String(index + 1) : outline.numbering === 'hierarchical'
-        ? ancestors.map(item => item.ordinal).join('.') : ''
-      return { ...heading, depth, number }
+      const lineage = ancestors.map(item => item.pos)
+      ancestors.push({ level: heading.level, ordinal: parent ? ++parent.children : ++roots, children: 0, pos: heading.pos })
+      const id = ancestors.map(item => item.ordinal).join('.')
+      const number = outline.numbering === 'flat' ? String(index + 1) : outline.numbering === 'hierarchical' ? id : ''
+      return { ...heading, id, depth, lineage, number, branch: (headings[index + 1]?.level ?? 0) > heading.level }
     })
   }, [headings, outline.numbering])
+  const displayedHeadings = useMemo(() => {
+    const parents: boolean[] = []
+    return numberedHeadings.flatMap(heading => {
+      parents.length = heading.depth
+      const visible = parents.every(Boolean)
+      const expanded = expandedHeadings.get(heading.id) ?? heading.depth + 1 < outlineDepth
+      parents.push(visible && expanded)
+      return visible ? [{ ...heading, expanded }] : []
+    })
+  }, [numberedHeadings, expandedHeadings, outlineDepth])
+  const currentHeading = numberedHeadings.find(item => item.pos === activeHeading)
+  const visibleActiveHeading = currentHeading && [activeHeading, ...currentHeading.lineage.toReversed()]
+    .find(pos => displayedHeadings.some(item => item.pos === pos))
+  useEffect(() => {
+    const editor = view.current
+    if (!outline.visible || !editor) return
+    let frame = 0
+    const refresh = () => {
+      if (frame) return
+      frame = requestAnimationFrame(() => {
+        frame = 0
+        const top = editor.scrollDOM.getBoundingClientRect().top - editor.documentTop
+        const offset = editor.lineBlockAtHeight(top + 24).from
+        let low = 0
+        let high = headings.length
+        while (low < high) {
+          const middle = (low + high) >>> 1
+          if (headings[middle].pos <= offset) low = middle + 1
+          else high = middle
+        }
+        setActiveHeading(headings[low - 1]?.pos ?? -1)
+      })
+    }
+    refreshHeading.current = refresh
+    editor.scrollDOM.addEventListener('scroll', refresh, { passive: true })
+    refresh()
+    return () => {
+      refreshHeading.current = undefined
+      cancelAnimationFrame(frame)
+      editor.scrollDOM.removeEventListener('scroll', refresh)
+    }
+  }, [headings, outline.visible])
+  useEffect(() => {
+    const nav = headingsNav.current
+    const current = nav?.querySelector('[aria-current="location"]')
+    if (!nav || !current) return
+    const outer = nav.getBoundingClientRect()
+    const item = current.getBoundingClientRect()
+    if (item.top < outer.top) nav.scrollTop -= outer.top - item.top
+    else if (item.bottom > outer.bottom) nav.scrollTop += item.bottom - outer.bottom
+  }, [visibleActiveHeading, displayedHeadings])
+  useEffect(() => {
+    if (menu !== 'outline-depth') return
+    const outside = (event: PointerEvent) => {
+      if (event.target instanceof Node && !depthPopover.current?.contains(event.target) &&
+          !depthTrigger.current?.contains(event.target)) close()
+    }
+    const escape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      close()
+      depthTrigger.current?.focus()
+    }
+    window.addEventListener('pointerdown', outside)
+    window.addEventListener('keydown', escape)
+    return () => {
+      window.removeEventListener('pointerdown', outside)
+      window.removeEventListener('keydown', escape)
+    }
+  }, [menu])
   const outlineItems: MenuItem[] = outlineNumberings.map(([numbering, label]) => ({
     label, selected: outline.numbering === numbering, run: () => { updateOutline({ numbering }); numberingTrigger.current?.focus() },
   }))
@@ -458,6 +537,9 @@ export function MarkdownEditor({ text, name, path, modified, platform, remoteIma
       style={{ '--outline-user-width': outline.width === undefined ? undefined : outline.width + 'px' } as CSSProperties}>
       {outline.visible && <aside id="markdown-outline" className="document-outline" aria-label="Markdown 标题目录">
         <header><strong>目录</strong><div className="outline-header-actions">
+          <button ref={depthTrigger} type="button" className="icon-button" title="目录层级" aria-label="目录层级"
+            aria-expanded={menu === 'outline-depth'} aria-controls="markdown-outline-depth"
+            onClick={() => toggleMenu('outline-depth')}><Layers size={16} /></button>
           <button ref={numberingTrigger} className="icon-button" title="目录编号" aria-label="目录编号" aria-haspopup="menu"
             aria-expanded={menu === 'outline-numbering'} onClick={event => {
               const rect = event.currentTarget.getBoundingClientRect()
@@ -467,13 +549,34 @@ export function MarkdownEditor({ text, name, path, modified, platform, remoteIma
         </div></header>
         {menu === 'outline-numbering' && numberingPoint && <MarkdownMenu items={outlineItems} close={close}
           point={numberingPoint} anchor={numberingTrigger.current ?? undefined} />}
-        <nav>{numberedHeadings.map(heading => <button type="button" key={heading.pos}
-          style={{ paddingInlineStart: 8 + heading.depth * 10 }} title={heading.title} onClick={() => {
-            const editor = view.current
-            if (!editor) return
-            editor.dispatch({ selection: { anchor: heading.pos }, effects: EditorView.scrollIntoView(heading.pos, { y: 'start', yMargin: 20 }) })
-            if (!reading) editor.focus()
-          }}>{heading.number && <span className="outline-heading-number">{heading.number}</span>}<span className="outline-heading-title">{heading.title}</span></button>)}</nav>
+        {menu === 'outline-depth' && <div id="markdown-outline-depth" ref={depthPopover} className="outline-depth"
+          style={{ '--outline-depth-progress': (outlineDepth - 1) * 20 + '%' } as CSSProperties}>
+          <div className="outline-depth-marks" aria-hidden="true">{Array.from({ length: maxOutlineDepth }, (_, index) =>
+            <i key={index} data-passed={index + 1 <= outlineDepth} />)}</div>
+          <input type="range" min={1} max={maxOutlineDepth} step={1} value={outlineDepth}
+            aria-label="显示目录层级" aria-valuetext={outlineDepth + ' 层'}
+            onChange={event => {
+              const value = event.currentTarget.valueAsNumber
+              changeOutlineDepth(value)
+              setExpandedHeadings(new Map())
+              setOutlineDepth(path, value)
+            }} />
+        </div>}
+        <nav ref={headingsNav} aria-label="文档标题">{displayedHeadings.map(heading => <div key={heading.pos} className="outline-heading-row"
+          data-current={heading.pos === visibleActiveHeading} style={{ paddingInlineStart: heading.depth * 10 }}>
+          {heading.branch ? <button type="button" className="outline-heading-toggle" aria-expanded={heading.expanded}
+            aria-label={(heading.expanded ? '折叠 ' : '展开 ') + heading.title} onClick={() =>
+              setExpandedHeadings(current => new Map(current).set(heading.id, !heading.expanded))}><ChevronRight size={13} /></button>
+            : <span className="outline-heading-toggle" />}
+          <button type="button" className="outline-heading-link" aria-current={heading.pos === visibleActiveHeading ? 'location' : undefined}
+            title={heading.title} onClick={() => {
+              const editor = view.current
+              if (!editor || heading.pos > editor.state.doc.length) return
+              editor.dispatch({ selection: { anchor: heading.pos }, effects: EditorView.scrollIntoView(heading.pos, { y: 'start', yMargin: 16 }) })
+              if (!reading) editor.focus()
+            }}>{heading.number && <span className="outline-heading-number">{heading.number}</span>}
+            <span className="outline-heading-title">{heading.title}</span></button>
+        </div>)}</nav>
         {!headings.length && <p>还没有标题</p>}
         <PaneResize pane="outline" side={outline.position} apply={width => updateOutline({ width })} />
       </aside>}

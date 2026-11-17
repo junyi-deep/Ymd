@@ -1,6 +1,6 @@
 {
   "name": "ymd",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": true,
   "description": "本地 Markdown 与 Excalidraw 编辑器",
   "author": "Ymd",
@@ -55,5 +55,8 @@
     "typescript": "^7.0.2",
     "vite": "^8.3.8",
     "wait-on": "^9.5.1"
+  },
+  "optionalDependencies": {
+    "koffi": "3.3.8"
   }
 }

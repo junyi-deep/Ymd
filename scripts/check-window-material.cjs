@@ -59,6 +59,24 @@ async function waitFor(read, matches, label) {
   throw new Error(`${label}. Last value ${JSON.stringify(result)}`)
 }
 
+function roundedRegion(window) {
+  const koffi = require('koffi')
+  const user = koffi.load('user32.dll')
+  const gdi = koffi.load('gdi32.dll')
+  const read = user.func('int __stdcall GetWindowRgn(void *window, void *region)')
+  const create = gdi.func('void * __stdcall CreateRectRgn(int, int, int, int)')
+  const contains = gdi.func('int __stdcall PtInRegion(void *region, int x, int y)')
+  const dispose = gdi.func('int __stdcall DeleteObject(void *region)')
+  const handle = window.getNativeWindowHandle().readBigUInt64LE()
+  return () => {
+    const region = create(0, 0, 0, 0)
+    try {
+      if (!read(handle, region)) return 'none'
+      return !contains(region, 0, 0) && contains(region, 16, 16) ? 'rounded' : 'square'
+    } finally { dispose(region) }
+  }
+}
+
 async function check(window) {
   const evaluate = source => window.webContents.executeJavaScript(source)
   const emulateTransparencyPreference = reduce => {
@@ -100,6 +118,12 @@ async function check(window) {
   if (windows) {
     await waitFor(snapshot, value => value.captionStart > 0 && value.captionStart < 680 && value.toolsEnd <= value.captionStart + 1,
       'Window tools stay clear of the caption buttons')
+    const region = roundedRegion(window)
+    await waitFor(region, value => value === 'rounded', 'Restored window has physically rounded corners')
+    window.maximize()
+    await waitFor(region, value => value === 'none', 'Maximized window is unclipped')
+    window.unmaximize()
+    await waitFor(region, value => value === 'rounded', 'Restoring the window reapplies rounded corners')
   }
   await evaluate(`document.querySelector('.sidebar-footer').click()`)
   await waitFor(() => evaluate(`!!document.querySelector('${switcher}')`), Boolean, 'Appearance settings visible')

@@ -157,6 +157,10 @@ export function Settings({ preferences, platform, library, windowsAcrylic, macRe
           </div>
           <h2 className="settings-group-title">大纲</h2>
           <div className="settings-group">
+            <Row label="大纲代码块显示行号">
+              <button className="switch" type="button" role="switch" aria-label="大纲代码块显示行号" aria-checked={preferences.outlineCodeLineNumbers}
+                onClick={() => onChange({ outlineCodeLineNumbers: !preferences.outlineCodeLineNumbers })} />
+            </Row>
             <Row label="大纲页宽"><Choices value={preferences.outlinePageWidth} choices={markdownPageWidths}
               onChange={outlinePageWidth => onChange({ outlinePageWidth })} /></Row>
             <Row label="展开文档正文">

@@ -72,6 +72,29 @@ jobs:
             if (-not $running) { Start-Sleep -Seconds 1 }
           }
           if (-not $running) { throw "NSIS did not restart the installed Ymd." }
+          Add-Type @'
+          using System;
+          using System.Runtime.InteropServices;
+          public static class WindowShape {
+            [DllImport("user32.dll")] static extern int GetWindowRgn(IntPtr window, IntPtr region);
+            [DllImport("gdi32.dll")] static extern IntPtr CreateRectRgn(int l, int t, int r, int b);
+            [DllImport("gdi32.dll")] static extern bool PtInRegion(IntPtr region, int x, int y);
+            [DllImport("gdi32.dll")] static extern bool DeleteObject(IntPtr region);
+            public static bool IsRounded(IntPtr window) {
+              if (window == IntPtr.Zero) return false;
+              IntPtr region = CreateRectRgn(0, 0, 0, 0);
+              try { return GetWindowRgn(window, region) > 0 && !PtInRegion(region, 0, 0) && PtInRegion(region, 16, 16); }
+              finally { DeleteObject(region); }
+            }
+          }
+          '@
+          $rounded = $false
+          for ($attempt = 0; $attempt -lt 20 -and -not $rounded; $attempt++) {
+            $running.Refresh()
+            $rounded = [WindowShape]::IsRounded($running.MainWindowHandle)
+            if (-not $rounded) { Start-Sleep -Seconds 1 }
+          }
+          if (-not $rounded) { throw "The installed Windows app did not apply its rounded window region." }
           Get-Process -Name Ymd -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $installed } | Stop-Process
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:

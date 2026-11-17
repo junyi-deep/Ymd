@@ -1,10 +1,8 @@
-import { LanguageDescription } from '@codemirror/language'
-import { languages } from '@codemirror/language-data'
-import { classHighlighter, highlightTree } from '@lezer/highlight'
 import { WidgetType, type EditorView } from '@codemirror/view'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { Check, Code2, Copy } from 'lucide-react'
+import { createCodeLanguagePicker, paintCode, replaceCodeLanguage } from './codeCard'
 import type { CodeBlockPreferences } from '../../shared/contracts'
 
 interface CodeBlock {
@@ -17,35 +15,9 @@ interface CodeBlock {
   quoteDepth: number
 }
 
-function fillCode(content: HTMLElement, code: string, colors: { from: number; to: number; classes: string }[]) {
-  let end = 0
-  const fragments = document.createDocumentFragment()
-  for (const { from, to, classes } of colors) {
-    if (from > end) fragments.append(document.createTextNode(code.slice(end, from)))
-    const span = document.createElement('span')
-    span.className = classes
-    span.textContent = code.slice(from, to)
-    fragments.append(span)
-    end = to
-  }
-  if (end < code.length) fragments.append(document.createTextNode(code.slice(end)))
-  if (!code || code.endsWith('\n')) {
-    const trailing = document.createElement('span')
-    trailing.ariaHidden = 'true'
-    trailing.className = 'md-code-trailing'
-    fragments.append(trailing)
-  }
-  content.replaceChildren(fragments)
-}
-
-let nextLanguageList = 0
-const languageToken = /^[^\s`{},]+/
-const languageOptions = languages.map(item => ({
-  name: item.name,
-  token: [item.name, ...item.alias].find(alias => !/\s/.test(alias))?.toLowerCase() ?? item.name.toLowerCase().replace(/ /g, '-'),
-}))
-
 export class CodePreview extends WidgetType {
+  private cancel?: () => void
+  destroy() { this.cancel?.() }
   constructor(readonly block: CodeBlock, readonly options: CodeBlockPreferences, readonly readOnly: boolean) { super() }
 
   get estimatedHeight() { return Math.min(620, (this.block.code.match(/\n/g)?.length ?? 0) * 21 + 57) }
@@ -74,53 +46,11 @@ export class CodePreview extends WidgetType {
       view.dispatch({ selection: { anchor: Math.min(start + Math.max(offset, 1), view.state.doc.length) }, scrollIntoView: true })
       view.focus()
     }
-    if (!this.readOnly && languageRange) {
-      const input = document.createElement('input')
-      input.className = 'md-code-language'
-      input.ariaLabel = '代码语言'
-      input.placeholder = '纯文本'
-      input.autocomplete = 'off'
-      input.spellcheck = false
-      const original = languageToken.exec(language)?.[0] ?? ''
-      input.value = original
-      input.title = '搜索或输入代码语言'
-      const suggestions = document.createElement('datalist')
-      suggestions.id = 'code-language-' + ++nextLanguageList
-      input.setAttribute('list', suggestions.id)
-      let committed = false
-      const commit = () => {
-        if (committed || !figure.isConnected) return
-        const query = input.value.trim()
-        const match = languageOptions.find(option => option.name.toLowerCase() === query.toLowerCase())
-        const value = match?.token ?? query
-        if (value === original || value && languageToken.exec(value)?.[0] !== value) { input.value = original; return }
-        const start = languageRange.from
-        const info = view.state.sliceDoc(start, languageRange.to)
-        committed = true
-        view.dispatch({ changes: { from: start, to: start + (languageToken.exec(info)?.[0].length ?? 0),
-          insert: value + (!original && info && value ? ' ' : '') },
-          userEvent: 'input' })
-      }
-      input.addEventListener('focus', () => {
-        if (!suggestions.childElementCount) for (const { token, name } of languageOptions) {
-          const option = document.createElement('option')
-          option.value = token
-          option.label = name
-          suggestions.append(option)
-        }
-        input.select()
-      })
-      input.addEventListener('change', () => queueMicrotask(commit))
-      input.addEventListener('keydown', event => {
-        if (event.isComposing) return
-        if (event.key === 'Enter') { event.preventDefault(); commit(); view.focus() }
-        if (event.key === 'Escape') { event.preventDefault(); input.value = original; view.focus() }
-      })
-      const field = document.createElement('div')
-      field.className = 'md-code-language-field'
-      field.append(input, suggestions)
-      toolbar.append(field)
-    } else toolbar.append(caption)
+    if (!this.readOnly && languageRange) toolbar.append(createCodeLanguagePicker(language, value => {
+      const info = view.state.sliceDoc(languageRange.from, languageRange.to)
+      view.dispatch({ changes: { ...languageRange, insert: replaceCodeLanguage(info, value) }, userEvent: 'input' })
+    }, () => view.focus()))
+    else toolbar.append(caption)
     function button(label: string, icon: typeof Copy, onClick: (button: HTMLButtonElement) => void) {
       const element = document.createElement('button')
       element.type = 'button'
@@ -177,46 +107,7 @@ export class CodePreview extends WidgetType {
         .then(id => { if (id === 0) return navigator.clipboard.writeText(selected || code) }).catch(() => {})
     })
     const content = document.createElement('code')
-    const qualifier = language.split(/[\s,{]/, 1)[0]
-    const match = LanguageDescription.matchLanguageName(languages, qualifier, false)
-    const setCode = (colors: { from: number; to: number; classes: string }[]) => {
-      if (!this.options.lineNumbers) fillCode(content, code, colors)
-      else {
-        // Number each logical line while keeping the selectable text unchanged.
-        const lines = code.split('\n')
-        const rows = document.createDocumentFragment()
-        let position = 0, colorIndex = 0
-        for (const [index, line] of lines.entries()) {
-          const row = document.createElement('span')
-          row.className = 'md-code-line'
-          row.dataset.line = String(index + 1)
-          const last = position + line.length
-          while (colorIndex < colors.length && colors[colorIndex].to <= position) colorIndex++
-          const through = []
-          for (let color = colorIndex; color < colors.length && colors[color].from < last; color++) {
-            const range = colors[color]
-            through.push({ from: Math.max(0, range.from - position), to: Math.min(line.length, range.to - position), classes: range.classes })
-          }
-          fillCode(row, line, through)
-          rows.append(row)
-          if (index + 1 < lines.length) rows.append('\n')
-          position = last + 1
-        }
-        content.replaceChildren(rows)
-        content.dataset.numbered = ''
-      }
-    }
-
-    setCode([])
-    if (match && code.length <= 150_000) void (match.support ? Promise.resolve(match.support) : match.load()).then(support => {
-      // Avoid replacing an active native selection while a language is loading.
-      const textSelection = document.getSelection()
-      if (!figure.isConnected || textSelection?.anchorNode && figure.contains(textSelection.anchorNode)) return
-      const colors: { from: number; to: number; classes: string }[] = []
-      highlightTree(support.language.parser.parse(code), classHighlighter, (from, to, classes) => colors.push({ from, to, classes }))
-      setCode(colors)
-      view.requestMeasure()
-    }).catch(() => {})
+    this.cancel = paintCode(content, code, language, this.options.lineNumbers, () => view.requestMeasure())
     body.append(content)
     figure.append(toolbar, body)
     return figure

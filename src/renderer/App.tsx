@@ -13,6 +13,7 @@ import { forgetAudio, storeAudio } from './editors/mapAudio'
 import { mapDocumentPath, mapDocumentSheets, registerMapDocument, registeredMapPaths, relocateMapDocument, removeMapDocument } from './editors/mapDocumentLinks'
 import { findTopic, type TopicLink } from './editors/mapTopicLinks'
 import { shortcutLabel, shortcutValue, type AppShortcut } from '../shared/shortcuts'
+import { moveOutlineDepth, outlineDepthPaths } from './editors/markdownOutlineDepth'
 import { MarkdownMenu, type MenuItem } from './editors/MarkdownMenu'
 
 const Settings = lazy(() => import('./Settings').then(module => ({ default: module.Settings })))
@@ -526,7 +527,7 @@ export function App() {
 
   function updateTreePaths(changes: TreeChange[], copying: boolean) {
     const paths = new Set([...marks.pinned, ...marks.starred, ...styledMapPaths(), ...registeredMapPaths(),
-      ...sessions.latest.current.map(session => session.path)])
+      ...outlineDepthPaths(), ...sessions.latest.current.map(session => session.path)])
     const remapped = new Map<string, string | undefined>()
     let metadataFailed = false
     for (const { source, target } of changes) {
@@ -543,6 +544,7 @@ export function App() {
           } else removeMapDocument(old)
         } catch { metadataFailed = true }
         if (copying) continue
+        moveOutlineDepth(old, next)
         remapped.set(old, next)
         const outline = outlineSessions.current.get(old)
         outlineSessions.current.delete(old)
@@ -628,6 +630,7 @@ export function App() {
       if (!saved) return
       const file = await operation(saved)
       if (!file || file.path === saved.path) return
+      moveOutlineDepth(saved.path, file.path)
       marks.relocate(saved.path, file.path)
       relocateMapAppearance(saved.path, file.path, file.name)
       sessions.close(saved.path)
@@ -942,7 +945,7 @@ export function App() {
                 : active.mode === 'outline'
                   ? <OutlineEditor key={active.path + ':' + active.reload} text={active.text} name={active.name} path={active.path} position={position!}
                     filenameTitle={filenameTitle} platform={platform} remoteImages={preferences.remoteImages} sessions={outlineSessions.current} onChange={edit}
-                    width={preferences.outlinePageWidth} setWidth={outlinePageWidth => updatePreferences({ outlinePageWidth })}
+                    width={preferences.outlinePageWidth} codeLineNumbers={preferences.outlineCodeLineNumbers} setWidth={outlinePageWidth => updatePreferences({ outlinePageWidth })}
                     remainderVisible={preferences.outlineRemainderVisible} setRemainderVisible={outlineRemainderVisible => updatePreferences({ outlineRemainderVisible })} />
                   : <MindMapEditor key={active.path + ':' + active.reload} text={active.text} name={active.name} path={active.path} dark={dark} onChange={edit} find={find} position={position!}
                     overviewPreferences={preferences.mapOverview} panelWidth={preferences.mapPanelWidth}

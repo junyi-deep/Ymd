@@ -8,6 +8,8 @@ import type { Links } from 'marked'
 import { markdownPageWidths, type MarkdownPageWidth } from '../../shared/contracts'
 import { DocumentRemainder } from './DocumentRemainder'
 import { MarkdownMenu } from './MarkdownMenu'
+import { OutlineCodeCard } from './OutlineCodeCard'
+import { completeCodeFence, outlineCode } from './outlineCode'
 import { OutlineMarkdown, outlineReferences } from './OutlineMarkdown'
 import { locateBlock, newBlock, projectionRemainder, writeList, type Block } from './listProjection'
 import { blockPath, editBlockText, flattenBlocks, moveBranches, openOutline, readBranches, removeBranches, selectedBranches, writeBranches,
@@ -18,8 +20,9 @@ const typingTypes = new Set(['insertText', 'deleteContentBackward', 'deleteConte
 const blockTitle = (node: Block) => node.text.split('\n')[0].trim() || '空块'
 const cursor = (id: string, start: number, end = start): OutlineCaret => ({ id, start, end })
 
-export function OutlineEditor({ text, name, path, platform, remoteImages, sessions, width, setWidth, remainderVisible, setRemainderVisible, onChange, position, filenameTitle }: {
+export function OutlineEditor({ text, name, path, platform, remoteImages, sessions, width, setWidth, remainderVisible, setRemainderVisible, onChange, position, filenameTitle, codeLineNumbers }: {
   position: DocumentViewPosition
+  codeLineNumbers: boolean
   filenameTitle?: React.ReactNode
   text: string; name: string; path: string; platform: string; remoteImages: boolean; sessions: Map<string, OutlineSession>
   width: MarkdownPageWidth; setWidth: (value: MarkdownPageWidth) => void
@@ -40,6 +43,7 @@ export function OutlineEditor({ text, name, path, platform, remoteImages, sessio
   const references = useMemo(() => outlineReferences(text), [text])
   const links = useMemo<Links | undefined>(() => references ? JSON.parse(references) : undefined, [references])
   const focus = useRef<OutlineCaret | undefined>(undefined)
+  const codeCaret = useRef<OutlineCaret | undefined>(undefined)
   const inputs = useRef(new Map<string, HTMLTextAreaElement>())
   const root = useRef<HTMLDivElement>(null)
   const anchor = useRef<string | undefined>(undefined)
@@ -97,6 +101,7 @@ export function OutlineEditor({ text, name, path, platform, remoteImages, sessio
     if (!editing) return
     const input = inputs.current.get(editing)
     if (input && document.activeElement === input) return cursor(editing, input.selectionStart, input.selectionEnd)
+    if (codeCaret.current?.id === editing) return codeCaret.current
   }
 
   function frame(at = caret()): OutlineFrame {
@@ -263,6 +268,15 @@ export function OutlineEditor({ text, name, path, platform, remoteImages, sessio
       return
     }
     if (key === 'Enter' && (shiftKey || mod || altKey)) return
+    if (key === 'Enter' && at.start === block.text.length && at.end === at.start) {
+      const fence = completeCodeFence(block.text)
+      if (fence) {
+        event.preventDefault()
+        const next = editBlockText(session.blocks, block.id, fence)
+        if (next) change(next, { before: at, after: cursor(block.id, block.text.length + 1) })
+        return
+      }
+    }
     const merge = key === 'Backspace' && !at.start && !at.end && !mod && !shiftKey && !altKey
     if (!move && key !== 'Enter' && key !== 'Tab' && !merge) return
 
@@ -413,6 +427,7 @@ export function OutlineEditor({ text, name, path, platform, remoteImages, sessio
   }
 
   function copy(event: ClipboardEvent<HTMLDivElement>, cut: boolean) {
+    if (event.target instanceof Element && event.target.closest('.outline-code-card')) return
     if (!selected.length || event.target instanceof HTMLTextAreaElement || document.getSelection()?.isCollapsed === false) return
     const branches = selectedBranches(blocks, selectedSet)
     if (!branches.length) return
@@ -422,6 +437,7 @@ export function OutlineEditor({ text, name, path, platform, remoteImages, sessio
   }
 
   function paste(event: ClipboardEvent<HTMLDivElement>) {
+    if (event.target instanceof Element && event.target.closest('.outline-code-card')) return
     const raw = event.clipboardData.getData('text/plain')
     if (!raw) return
     const branches = readBranches(raw)
@@ -521,6 +537,7 @@ export function OutlineEditor({ text, name, path, platform, remoteImages, sessio
   function render(nodes: Block[]) {
     return <ul>{nodes.map(node => {
       const closed = collapsed.has(node.id)
+      const code = outlineCode(node.text)
       return <li key={node.id} data-outline-block={node.id}>
         <div className="outline-row" data-selected={selectedSet.has(node.id)}
           data-drop={drop?.id === node.id ? drop.position : undefined}
@@ -563,8 +580,26 @@ export function OutlineEditor({ text, name, path, platform, remoteImages, sessio
                 event.dataTransfer.effectAllowed = 'move'
               }} onDragEnd={() => { drag.current = undefined; setDrop(undefined) }}><span /></button>
           </span>
-          {editing === node.id
-            ? <textarea aria-label="块内容" data-block={node.id} rows={Math.max(1, node.text.split('\n').length)} value={node.text}
+          {code ? <OutlineCodeCard fence={code} raw={node.text} editing={editing === node.id} showNumbers={codeLineNumbers}
+            request={focus.current?.id === node.id ? focus.current : undefined}
+            clearRequest={() => { if (focus.current?.id === node.id) focus.current = undefined }}
+            start={offset => cursorTo(cursor(node.id, offset))}
+            stop={() => {
+              typing.current = undefined
+              setEditing(current => current === node.id ? undefined : current)
+            }}
+            rememberCaret={(from, to) => { codeCaret.current = cursor(node.id, from, to) }}
+            change={(value, previous, previousEnd, next, continuous) => {
+              const replaced = editBlockText(session.blocks, node.id, value)
+              if (!replaced) return
+              const now = performance.now()
+              const group = typing.current
+              change(replaced, { before: cursor(node.id, previous, previousEnd), keepGroup: true,
+                coalesce: continuous && previous === previousEnd && group?.id === node.id && group.type === 'code' &&
+                  group.end === previous && now - group.time < 750 })
+              typing.current = continuous ? { id: node.id, type: 'code', time: now, end: next } : undefined
+            }} />
+            : editing === node.id ? <textarea aria-label="块内容" data-block={node.id} rows={Math.max(1, node.text.split('\n').length)} value={node.text}
                 ref={element => { if (element) inputs.current.set(node.id, element); else inputs.current.delete(node.id) }}
                 onBlur={() => { typing.current = undefined; setEditing(current => current === node.id ? undefined : current) }}
                 onKeyDown={event => {
