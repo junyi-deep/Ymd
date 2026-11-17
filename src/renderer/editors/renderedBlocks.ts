@@ -7,9 +7,11 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { Scan } from 'lucide-react'
 import { diagramPreview, openMediaPreview } from './mediaPreview'
 import { CodePreview } from './markdownCodePreview'
-import { displayMath, renderBlockPreview } from './markdownPreviewMedia'
+import { displayMath, scheduleBlockPreview } from './markdownPreviewMedia'
 
 class RenderedBlock extends WidgetType {
+  private cancel?: () => void
+  destroy() { this.cancel?.() }
   constructor(readonly code: string, readonly kind: 'mermaid' | 'math', readonly readOnly: boolean) { super() }
 
   eq(other: RenderedBlock) { return this.code === other.code && this.kind === other.kind && this.readOnly === other.readOnly }
@@ -39,7 +41,8 @@ class RenderedBlock extends WidgetType {
       view.focus()
     })
 
-    void renderBlockPreview(content, this.code, this.kind).then(() => {
+    this.cancel = scheduleBlockPreview(content, this.code, this.kind, view.scrollDOM, () => {
+      view.requestMeasure()
       const svg = diagram && content.querySelector('svg')
       if (!svg) return
       const button = document.createElement('button')
@@ -49,10 +52,11 @@ class RenderedBlock extends WidgetType {
       button.innerHTML = renderToStaticMarkup(createElement(Scan, { size: 16, 'aria-hidden': true }))
       button.addEventListener('click', () => openMediaPreview(figure, diagramPreview(svg)))
       tools.append(button)
-    }).catch(error => {
+    }, error => {
       content.classList.add('mermaid-error')
       content.textContent = (diagram ? 'Mermaid 无法渲染。' : '公式无法渲染。') + (error instanceof Error ? error.message : '')
-    }).finally(() => { if (figure.isConnected) view.requestMeasure() })
+      view.requestMeasure()
+    })
     return figure
   }
 }
@@ -98,8 +102,15 @@ function previews(state: EditorState): DecorationSet {
     } else {
       const prefix = state.sliceDoc(from.from, node.from)
       const start = /^[ \t>]*$/.test(prefix) ? from.from : node.from
-      const editAt = fenced ? node.from + 1 : Math.min(node.from + 1, to)
-      const widget = new CodePreview({ from: start, editAt, code, language, quoteDepth: (prefix.match(/>/g) ?? []).length }, state.facet(codeBlockPreferences), state.readOnly)
+      const codeStart = blocks[0]?.from ?? state.doc.line(Math.min(from.number + 1, state.doc.lines)).from
+      const editAt = Math.min(Math.max(node.from + 1, codeStart), to - 1)
+      const mark = fenced ? node.node.getChild('CodeMark') : null
+      const languageRange = mark ? { from: info?.from ?? mark.to, to: info?.to ?? mark.to } : undefined
+      const lineOffsets = code.split('\n').map((text, index) => {
+        const source = state.doc.line(from.number + Number(fenced) + index)
+        return (text && source.text.endsWith(text) ? source.to - text.length : source.from) - start
+      })
+      const widget = new CodePreview({ from: start, editAt, code, language, languageRange, lineOffsets, quoteDepth: (prefix.match(/>/g) ?? []).length }, state.facet(codeBlockPreferences), state.readOnly)
       ranges.push(Decoration.replace({ block: true, widget }).range(start, to))
     }
     return false

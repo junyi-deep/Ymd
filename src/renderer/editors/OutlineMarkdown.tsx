@@ -3,7 +3,7 @@ import { Marked, marked, type Links } from 'marked'
 import { markdownBody } from './markdownExtras'
 import { sanitizeMarkdownHtml } from './markdownHtml'
 import { decodeImageAttribute, markdownImageLine, readHtmlImage } from './markdownImageSyntax'
-import { createMarkdownImage, displayMath, renderBlockPreview, type PreviewImage } from './markdownPreviewMedia'
+import { createMarkdownImage, displayMath, scheduleBlockPreview, type PreviewImage } from './markdownPreviewMedia'
 
 const previews = new WeakMap<HTMLElement, { observer: IntersectionObserver; pending: Map<Element, () => void> }>()
 
@@ -47,6 +47,7 @@ export const OutlineMarkdown = memo(function OutlineMarkdown({ text, path, remot
   useLayoutEffect(() => {
     const view = root.current!
     const scroll = block ? view.closest<HTMLElement>('.outline-editor') : null
+    const cancelDiagrams: (() => void)[] = []
     const populate = () => {
       const markdown = text.replace(/^\uFEFF/, '')
       const source = block && /^\[[ xX]\]\s/.test(markdown) ? '- ' + markdown : markdown
@@ -119,18 +120,20 @@ export const OutlineMarkdown = memo(function OutlineMarkdown({ text, path, remot
         content.className = 'mermaid-content'
         content.textContent = diagram ? '正在绘制 Mermaid 图…' : '正在渲染公式…'
         figure.append(content)
-        void renderBlockPreview(content, preview.code, preview.kind).catch(() => {
+        cancelDiagrams.push(scheduleBlockPreview(content, preview.code, preview.kind,
+          scroll ?? view.closest('.outline-editor, .map-remainder .document-remainder-body'), undefined, () => {
           content.classList.add('mermaid-error')
           content.textContent = diagram ? 'Mermaid 无法渲染。' : '公式无法渲染。'
           const raw = document.createElement('pre')
           raw.textContent = preview.code
           figure.append(raw)
-        })
+        }))
       }
       view.replaceChildren(output)
     }
-    if (scroll && !view.hasChildNodes()) return deferPreview(scroll, view, populate)
-    populate()
+    const cancelPreview = scroll && !view.hasChildNodes() ? deferPreview(scroll, view, populate) : undefined
+    if (!cancelPreview) populate()
+    return () => { cancelPreview?.(); cancelDiagrams.forEach(cancel => cancel()) }
   }, [text, path, remoteImages, links, block])
 
   return <div ref={root} className={className} />

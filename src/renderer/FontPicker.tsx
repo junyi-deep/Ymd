@@ -1,10 +1,11 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { ArrowUpDown } from 'lucide-react'
 
 const builtIn = [['system-ui', '系统默认'], ['serif', '系统衬线'], ['monospace', '系统等宽']] as const
 let systemFonts: readonly string[] | undefined
 
-export function MindMapFontPicker({ label, value, change }: { label: string; value: string; change: (value: string) => void }) {
+export function FontPicker({ label, value, change, inline = false }: { label: string; value: string; change: (value: string) => void; inline?: boolean }) {
+  const picker = useRef<HTMLDivElement>(null)
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
   const [fonts, setFonts] = useState(systemFonts)
@@ -12,6 +13,15 @@ export function MindMapFontPicker({ label, value, change }: { label: string; val
   const shown = builtIn.find(([font]) => font === value)?.[1] ?? value
   const matches = [...builtIn, ...(fonts ?? []).map(name => [name, name] as const)]
     .filter(([font, name]) => (font + ' ' + name).toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())).slice(0, 80)
+
+  useEffect(() => {
+    if (!open) return
+    const dismiss = (event: PointerEvent) => {
+      if (event.target instanceof Node && !picker.current?.contains(event.target)) setOpen(false)
+    }
+    window.addEventListener('pointerdown', dismiss)
+    return () => window.removeEventListener('pointerdown', dismiss)
+  }, [open])
 
   async function toggle() {
     setOpen(!open)
@@ -27,12 +37,12 @@ export function MindMapFontPicker({ label, value, change }: { label: string; val
     } catch { setFailed(true) }
   }
 
-  return <div className="map-font-picker" onKeyDown={event => {
+  return <div ref={picker} className={inline ? "map-font-picker interface-font-picker" : "map-font-picker"} onKeyDown={event => {
     if (!open || event.key !== 'Escape') return
     event.stopPropagation()
     setOpen(false)
   }}>
-    <label>{label}<button type="button" className="tool-button" aria-label={label + ' ' + shown} aria-expanded={open}
+    <label>{!inline && label}<button type="button" className="tool-button" aria-label={label + ' ' + shown} aria-expanded={open}
       onClick={() => void toggle()}><span>{shown}</span><ArrowUpDown size={13} /></button></label>
     {open && <div className="map-font-options">
       <input type="search" autoFocus aria-label={'搜索' + label} value={query} placeholder="搜索系统字体"

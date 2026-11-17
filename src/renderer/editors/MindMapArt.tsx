@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Plus, RefreshCw, Search, Sticker, X } from 'lucide-react'
-import { artTransferType, loadMapSticker, type MapArt } from './mapStickers'
+import { artTransferType, builtInStickers, loadMapSticker, stickerLabel, type MapArt } from './mapStickers'
 
 function StickerTile({ name, apply }: { name: string; apply?: (art: MapArt) => void }) {
   const [art, setArt] = useState<MapArt>()
@@ -16,7 +16,7 @@ function StickerTile({ name, apply }: { name: string; apply?: (art: MapArt) => v
     observer.observe(element.current)
     return () => { active = false; observer.disconnect() }
   }, [name])
-  const label = art?.label ?? name
+  const label = stickerLabel(name)
   return <button ref={element} type="button" className="map-art-tile" aria-label={label} title={label}
     aria-disabled={!art || !apply} draggable={!!art}
     onClick={() => { if (art) apply?.(art) }} onDragStart={event => {
@@ -45,7 +45,8 @@ export function MindMapArt({ directory, target, close, apply }: {
     return () => { active = false }
   }, [directory, revision])
 
-  const found = names.filter(name => name.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()))
+  const search = query.trim().toLocaleLowerCase()
+  const found = [...builtInStickers, ...names].filter(name => stickerLabel(name).toLocaleLowerCase().includes(search) || name.toLocaleLowerCase().includes(search))
   async function add() {
     setBusy(true)
     try { setNames(await window.desktop.importMapStickers()); setNotice(''); setRevision(value => value + 1) }
@@ -65,7 +66,7 @@ export function MindMapArt({ directory, target, close, apply }: {
     <div className="map-art-grid">
       {found.map(name => <StickerTile key={(directory ?? '') + ':' + revision + ':' + name} name={name} apply={target ? apply : undefined} />)}
     </div>
-    {notice ? <p className="map-format-empty" role="alert">{notice}</p> : !found.length &&
-      <p className="map-format-empty">{names.length ? '未找到匹配的贴纸。' : '点击加号将图片添加到全局贴纸目录。'}</p>}
+    {notice && <p className="map-format-empty" role="alert">{notice}</p>}
+    {!found.length && <p className="map-format-empty">未找到匹配的贴纸。</p>}
   </aside>
 }

@@ -18,16 +18,16 @@ function highlight(text: string, query: string): ReactNode {
 }
 
 function draftResult(document: Session, needle: string): SearchHit | undefined {
-  const { path, name, kind, modified, opened, text } = document
+  const { path, name, kind, created, modified, opened, text } = document
   const index = kind === 'markdown' ? text.toLowerCase().indexOf(needle) : -1
   if (index < 0 && !name.toLowerCase().includes(needle)) return
   const offset = Math.max(0, index - 24)
   const line = index >= 0 ? text.slice(0, index).split(/\r\n|\n|\r/).length : undefined
-  return { path, name, kind, location: path.slice(0, path.length - name.length - 1), modified, opened, line,
+  return { path, name, kind, location: path.slice(0, path.length - name.length - 1), created, modified, opened, line,
     snippet: index < 0 ? undefined : text.slice(offset, index + needle.length + 100).replace(/\s+/g, ' ').trim() }
 }
 
-const timeFormat = new Intl.DateTimeFormat('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+const timeFormat = new Intl.DateTimeFormat('zh-CN', { year: 'numeric', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })
 
 export function SearchDialog({ documents, onOpen, onClose }: {
   documents: Session[]
@@ -101,8 +101,11 @@ export function SearchDialog({ documents, onOpen, onClose }: {
         <div className="min-w-0">
           <strong>{highlight(hit.name, needle)}</strong>
           {hit.snippet && <p className="search-snippet">{highlight(hit.snippet, needle)}</p>}
-          <small title={hit.path}>{hit.location}{hit.opened ? ` · ${timeFormat.format(hit.opened)} 打开` : ''}
-            {hit.modified ? ` · ${timeFormat.format(hit.modified)} 修改` : ''}</small>
+          <small title={hit.path}>{hit.location}</small>
+          <div className="search-result-times">
+            {([['创建', hit.created], ['修改', hit.modified], ['打开', hit.opened]] as const).map(([label, value]) =>
+              value && <time key={label} dateTime={new Date(value).toISOString()}>{label} {timeFormat.format(value)}</time>)}
+          </div>
         </div>
       </div>)}
       {!hits.length && <p className="search-empty" role="status">{!needle ? '还没有浏览记录' : remote?.query !== needle

@@ -12,6 +12,8 @@ interface CodeBlock {
   editAt: number
   code: string
   language: string
+  languageRange?: { from: number; to: number }
+  lineOffsets: number[]
   quoteDepth: number
 }
 
@@ -36,6 +38,13 @@ function fillCode(content: HTMLElement, code: string, colors: { from: number; to
   content.replaceChildren(fragments)
 }
 
+let nextLanguageList = 0
+const languageToken = /^[^\s`{},]+/
+const languageOptions = languages.map(item => ({
+  name: item.name,
+  token: [item.name, ...item.alias].find(alias => !/\s/.test(alias))?.toLowerCase() ?? item.name.toLowerCase().replace(/ /g, '-'),
+}))
+
 export class CodePreview extends WidgetType {
   constructor(readonly block: CodeBlock, readonly options: CodeBlockPreferences, readonly readOnly: boolean) { super() }
 
@@ -43,12 +52,14 @@ export class CodePreview extends WidgetType {
 
   eq(other: CodePreview) {
     return this.block.from === other.block.from && this.block.editAt === other.block.editAt &&
+      this.block.languageRange?.from === other.block.languageRange?.from && this.block.languageRange?.to === other.block.languageRange?.to &&
+      this.block.lineOffsets.every((offset, index) => offset === other.block.lineOffsets[index]) &&
       this.block.code === other.block.code && this.block.language === other.block.language && this.block.quoteDepth === other.block.quoteDepth &&
       this.readOnly === other.readOnly && this.options.wrap === other.options.wrap && this.options.lineNumbers === other.options.lineNumbers
   }
 
   toDOM(view: EditorView) {
-    const { from, editAt, code, language, quoteDepth } = this.block
+    const { from, editAt, code, language, languageRange, lineOffsets, quoteDepth } = this.block
     const figure = document.createElement('figure')
     figure.className = 'md-code-preview'
     figure.dataset.wrap = String(this.options.wrap)
@@ -57,7 +68,59 @@ export class CodePreview extends WidgetType {
     toolbar.className = 'md-code-header'
     const caption = document.createElement('span')
     caption.textContent = language || '纯文本'
-    toolbar.append(caption)
+    const position = () => view.posAtDOM(figure)
+    const startEditing = (offset = editAt - from) => {
+      const start = position()
+      view.dispatch({ selection: { anchor: Math.min(start + Math.max(offset, 1), view.state.doc.length) }, scrollIntoView: true })
+      view.focus()
+    }
+    if (!this.readOnly && languageRange) {
+      const input = document.createElement('input')
+      input.className = 'md-code-language'
+      input.ariaLabel = '代码语言'
+      input.placeholder = '纯文本'
+      input.autocomplete = 'off'
+      input.spellcheck = false
+      const original = languageToken.exec(language)?.[0] ?? ''
+      input.value = original
+      input.title = '搜索或输入代码语言'
+      const suggestions = document.createElement('datalist')
+      suggestions.id = 'code-language-' + ++nextLanguageList
+      input.setAttribute('list', suggestions.id)
+      let committed = false
+      const commit = () => {
+        if (committed || !figure.isConnected) return
+        const query = input.value.trim()
+        const match = languageOptions.find(option => option.name.toLowerCase() === query.toLowerCase())
+        const value = match?.token ?? query
+        if (value === original || value && languageToken.exec(value)?.[0] !== value) { input.value = original; return }
+        const start = languageRange.from
+        const info = view.state.sliceDoc(start, languageRange.to)
+        committed = true
+        view.dispatch({ changes: { from: start, to: start + (languageToken.exec(info)?.[0].length ?? 0),
+          insert: value + (!original && info && value ? ' ' : '') },
+          userEvent: 'input' })
+      }
+      input.addEventListener('focus', () => {
+        if (!suggestions.childElementCount) for (const { token, name } of languageOptions) {
+          const option = document.createElement('option')
+          option.value = token
+          option.label = name
+          suggestions.append(option)
+        }
+        input.select()
+      })
+      input.addEventListener('change', () => queueMicrotask(commit))
+      input.addEventListener('keydown', event => {
+        if (event.isComposing) return
+        if (event.key === 'Enter') { event.preventDefault(); commit(); view.focus() }
+        if (event.key === 'Escape') { event.preventDefault(); input.value = original; view.focus() }
+      })
+      const field = document.createElement('div')
+      field.className = 'md-code-language-field'
+      field.append(input, suggestions)
+      toolbar.append(field)
+    } else toolbar.append(caption)
     function button(label: string, icon: typeof Copy, onClick: (button: HTMLButtonElement) => void) {
       const element = document.createElement('button')
       element.type = 'button'
@@ -68,13 +131,7 @@ export class CodePreview extends WidgetType {
       element.addEventListener('click', () => onClick(element))
       return element
     }
-    if (!this.readOnly) toolbar.append(button('编辑代码块', Code2, () => {
-      // Derive the position from the current widget after edits above it.
-      const position = view.posAtDOM(figure)
-      const next = Math.min(position + editAt - from, view.state.doc.length)
-      view.dispatch({ selection: { anchor: next }, scrollIntoView: true })
-      view.focus()
-    }))
+    if (!this.readOnly) toolbar.append(button('编辑代码块', Code2, () => startEditing()))
     let resetCopy: number | undefined
     const copyIcon = renderToStaticMarkup(createElement(Copy, { size: 15, 'aria-hidden': true }))
     toolbar.append(button('复制代码', Copy, element => {
@@ -93,6 +150,22 @@ export class CodePreview extends WidgetType {
     body.addEventListener('pointerdown', event => {
       if (event.button === 0) body.focus({ preventScroll: true })
     })
+    if (!this.readOnly) {
+      body.addEventListener('click', event => {
+        const selection = document.getSelection()
+        if (selection && !selection.isCollapsed && body.contains(selection.anchorNode)) return
+        const hit = document.caretRangeFromPoint(event.clientX, event.clientY)
+        if (!hit || !content.contains(hit.startContainer)) { startEditing(); return }
+        const prefix = hit.cloneRange()
+        prefix.selectNodeContents(content)
+        prefix.setEnd(hit.startContainer, hit.startOffset)
+        const lines = prefix.toString().split('\n')
+        startEditing((lineOffsets[lines.length - 1] ?? editAt - from) + lines.at(-1)!.length)
+      })
+      body.addEventListener('keydown', event => {
+        if (event.key === 'Enter') { event.preventDefault(); startEditing() }
+      })
+    }
     body.addEventListener('contextmenu', event => {
       event.preventDefault()
       event.stopPropagation()

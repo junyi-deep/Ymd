@@ -78,11 +78,13 @@ export interface DocumentFile extends Entry {
   text: string
   version: string
   modified: number
+  created?: number
 }
 
 export interface SearchHit extends Entry {
   kind: FileKind
   location: string
+  created?: number
   modified?: number
   opened?: number
   snippet?: string
@@ -101,9 +103,15 @@ export interface ContextMenuItem {
 
 export interface Preferences {
   theme: Theme
-  size: 'small' | 'normal' | 'large'
-  solidBackground: boolean
+  size: 'small' | 'normal' | 'large' | 'custom'
+  interfaceFontSize: number
+  interfaceFont: string
+  windowTransparent: boolean
+  windowBlur: boolean
+  libraryCollapsed: boolean
+  localCollapsed: boolean
   windowTransparency: number
+  showFilenameTitle: boolean
   libraryDirectory?: string
   attachmentDirectory?: string
   attachmentDirectories?: string[]
@@ -139,7 +147,8 @@ export interface MarkdownOutlinePreferences {
 }
 
 export const defaultPreferences: Preferences = {
-  theme: 'system', size: 'normal', solidBackground: false, windowTransparency: 80, recentLimit: 50, expandedFolders: [], hiddenLocalEntries: [], animations: true, documentTheme: 'classic',
+  theme: 'system', size: 'normal', interfaceFontSize: 13, interfaceFont: 'system-ui',
+  windowTransparent: true, windowBlur: true, libraryCollapsed: false, localCollapsed: false, windowTransparency: 80, showFilenameTitle: false, recentLimit: 50, expandedFolders: [], hiddenLocalEntries: [], animations: true, documentTheme: 'classic',
   markdownOutline: { position: 'right', numbering: 'none', visible: false },
   markdownPageWidth: 'normal', outlinePageWidth: 'normal', outlineRemainderVisible: true, mapRemainderVisible: true,
   mapOverview: { visible: false, position: 'left' }, mapDefaults: {},
@@ -147,13 +156,13 @@ export const defaultPreferences: Preferences = {
   autoSave: true, remoteImages: false, autoCheckUpdates: true, autoDownloadUpdates: false, searchEngine: 'google', shortcuts: {},
 }
 
+export const interfaceFontSizes = { min: 10, max: 24 }
+export const windowBlurTint = .25
+
 export function windowMaterialFor(preferences: Preferences, platform: string, windowsAcrylic: boolean, macReducesTransparency: boolean) {
-  if (preferences.solidBackground) return 'solid'
-  if (platform === 'darwin') {
-    if (macReducesTransparency) return 'solid'
-    return preferences.windowTransparency === 100 ? 'clear' : 'vibrancy'
-  }
-  return windowsAcrylic ? 'acrylic' : 'solid'
+  if (platform !== 'darwin' && !windowsAcrylic || macReducesTransparency) return 'solid'
+  if (preferences.windowBlur) return platform === 'darwin' ? 'vibrancy' : 'acrylic'
+  return preferences.windowTransparent ? 'clear' : 'solid'
 }
 
 export type Command = AppShortcut | 'close'

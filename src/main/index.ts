@@ -4,7 +4,7 @@ import { mkdir, readdir, readFile, writeFile, rename, open, lstat, realpath, sta
 import { renameSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { defaultPreferences, documentHistoryLimit, mapExportExtensions, markdownImageExtension, markdownImageExtensions, paneWidths, recentFilesLimit, searchEngines, windowMaterialFor } from '../shared/contracts'
+import { defaultPreferences, interfaceFontSizes, documentHistoryLimit, mapExportExtensions, markdownImageExtension, markdownImageExtensions, paneWidths, recentFilesLimit, searchEngines, windowMaterialFor } from '../shared/contracts'
 import type { Command, ContextMenuItem, Desktop, DocumentFile, Entry, FileKind, MapExportKind, MapShotRect, MarkdownImageUpload, Preferences, StorageDirectory, TreeChange, TreeMutation } from '../shared/contracts'
 import { Files, containsPath, fileKind } from './files'
 import { LocalMapLocations } from './localMapLocations'
@@ -43,7 +43,7 @@ const macVibrancy = 'hud'
 let preferenceWrite: Promise<unknown> = Promise.resolve()
 let appBindings = shortcutsFor('app', preferences.shortcuts, process.platform)
 
-function normalizePreferences(value: Partial<Preferences> | null): Preferences {
+function normalizePreferences(value: (Partial<Preferences> & { solidBackground?: boolean }) | null): Preferences {
   const transparency = value?.windowTransparency
   const width = (raw: unknown, { min, max }: { min: number; max: number }) =>
     typeof raw === 'number' && Number.isFinite(raw) ? Math.min(max, Math.max(min, Math.round(raw))) : undefined
@@ -51,10 +51,18 @@ function normalizePreferences(value: Partial<Preferences> | null): Preferences {
   const map = value?.mapDefaults
   return {
     theme: value?.theme === 'dark' || value?.theme === 'light' ? value.theme : 'system',
-    size: value?.size === 'small' || value?.size === 'large' ? value.size : 'normal',
-    solidBackground: value?.solidBackground === true,
+    size: value?.size === 'small' || value?.size === 'large' || value?.size === 'custom' ? value.size : 'normal',
+    interfaceFontSize: width(value?.interfaceFontSize, interfaceFontSizes) ?? defaultPreferences.interfaceFontSize,
+    interfaceFont: typeof value?.interfaceFont === 'string' && value.interfaceFont.trim().length > 0 &&
+      value.interfaceFont.length <= 160 && !/[\u0000-\u001f]/.test(value.interfaceFont) ? value.interfaceFont.trim() : defaultPreferences.interfaceFont,
+    windowTransparent: typeof value?.windowTransparent === 'boolean' ? value.windowTransparent : value?.solidBackground !== true,
+    windowBlur: typeof value?.windowBlur === 'boolean' ? value.windowBlur
+      : value?.solidBackground !== true && (process.platform === 'win32' || transparency !== 100),
+    libraryCollapsed: value?.libraryCollapsed === true,
+    localCollapsed: value?.localCollapsed === true,
     windowTransparency: typeof transparency === 'number' && Number.isFinite(transparency)
-      ? Math.min(100, Math.max(0, Math.round(transparency / 5) * 5)) : defaultPreferences.windowTransparency,
+      ? Math.min(100, Math.max(0, Math.round(transparency))) : defaultPreferences.windowTransparency,
+    showFilenameTitle: value?.showFilenameTitle === true,
     libraryDirectory: directory(value?.libraryDirectory),
     attachmentDirectory: directory(value?.attachmentDirectory),
     attachmentDirectories: Array.isArray(value?.attachmentDirectories) ? [...new Set(value.attachmentDirectories.flatMap(item => directory(item) ?? []))] : [],
@@ -192,7 +200,7 @@ function createWindow(initialFile?: DocumentFile) {
     minHeight: 510,
     title: 'Ymd',
     // A clear background requires an alpha-capable macOS window even when launched in solid mode.
-    transparent: process.platform === 'darwin',
+    transparent: process.platform === 'darwin' || windowsAcrylic,
     backgroundColor: material === 'solid' ? windowColor() : '#00000000',
     // DWM needs the title bar hidden to extend the backdrop through the client area.
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : windowsAcrylic ? 'hidden' : 'default',
@@ -295,22 +303,31 @@ void app.whenReady().then(async () => {
   })
   const data = app.getPath('userData')
   sizeFile = path.join(data, 'window-size.json')
-  try {
-    const size = JSON.parse(await readFile(sizeFile, 'utf8'))
-    if (Number.isInteger(size.width) && size.width >= 660 && Number.isInteger(size.height) && size.height >= 510) windowSize = size
-  } catch {}
-  recovery = new Recovery(path.join(data, 'recovery'))
-  await recovery.load()
-  const releases = new Releases(data, status => broadcast('ymd:updateStatus', status))
-  await releases.network.load()
   const settings = path.join(data, 'preferences.json')
   const recentFile = path.join(data, 'recent.json')
+  const historyFile = path.join(data, 'document-history.json')
+  recovery = new Recovery(path.join(data, 'recovery'))
+  const releases = new Releases(data, status => broadcast('ymd:updateStatus', status))
+  const [sizeText, settingsText, storedRecent, storedHistory] = await Promise.all([
+    readFile(sizeFile, 'utf8').catch(() => ''),
+    readFile(settings, 'utf8').catch(() => ''),
+    readFile(recentFile, 'utf8').catch(error => {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+      return undefined
+    }),
+    readFile(historyFile, 'utf8').catch(() => undefined),
+    recovery.load(), releases.network.load(),
+  ])
+  try {
+    const size = JSON.parse(sizeText)
+    if (Number.isInteger(size.width) && size.width >= 660 && Number.isInteger(size.height) && size.height >= 510) windowSize = size
+  } catch {}
   const defaultLibrary = path.join(app.getPath('home'), '.ymd')
   const defaultStickerDirectory = path.join(data, 'stickers')
   const localMapLocations = new LocalMapLocations(path.join(data, 'map-locations.json'))
   let oldProject: unknown
   try {
-    const value = JSON.parse(await readFile(settings, 'utf8'))
+    const value = JSON.parse(settingsText)
     preferences = normalizePreferences(value)
     oldProject = value?.projectDirectory
   } catch {
@@ -354,10 +371,6 @@ void app.whenReady().then(async () => {
   })
   const oldLibrary = path.join(data, 'Documents')
   await mkdir(data, { recursive: true })
-  const storedRecent = await readFile(recentFile, 'utf8').catch(error => {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
-    return undefined
-  })
   if (storedRecent === undefined) {
     const oldEntries = await readdir(oldLibrary).catch(() => [])
     const paths = [
@@ -372,19 +385,27 @@ void app.whenReady().then(async () => {
   } else {
     let parsed: unknown
     try { parsed = JSON.parse(storedRecent) } catch {}
-    if (Array.isArray(parsed)) for (const saved of parsed.slice(0, recentFilesLimit)) {
-      if (typeof saved?.path !== 'string' || !path.isAbsolute(saved.path)) continue
-      const entry = await (saved.kind === 'directory' ? files.authorizeDirectory(saved.path) : files.authorizeFileEntry(saved.path)).catch(() => null)
-      if (entry && !recent.some(item => item.path === entry.path)) {
-        recent.push({ ...entry, lastOpened: Number.isFinite(saved.lastOpened) ? saved.lastOpened : undefined })
+    if (Array.isArray(parsed)) {
+      const savedEntries = parsed.slice(0, recentFilesLimit)
+      const seen = new Set<string>()
+      // Bound simultaneous lookups so many local or network paths do not starve other work.
+      for (let index = 0; index < savedEntries.length; index += 32) {
+        const opened = await Promise.all(savedEntries.slice(index, index + 32).map(async saved => {
+          if (typeof saved?.path !== 'string' || !path.isAbsolute(saved.path)) return null
+          const entry = await (saved.kind === 'directory' ? files.authorizeDirectory(saved.path) : files.authorizeFileEntry(saved.path)).catch(() => null)
+          return entry && { ...entry, lastOpened: Number.isFinite(saved.lastOpened) ? saved.lastOpened as number : undefined }
+        }))
+        for (const entry of opened) {
+          if (!entry || seen.has(entry.path)) continue
+          recent.push(entry)
+          seen.add(entry.path)
+        }
       }
     }
     recent.sort((left, right) => (right.lastOpened ?? 0) - (left.lastOpened ?? 0))
     files.retainRoots(roots())
   }
 
-  const historyFile = path.join(data, 'document-history.json')
-  const storedHistory = await readFile(historyFile, 'utf8').catch(() => undefined)
   let documentHistory = recent.filter(entry => entry.kind !== 'directory').slice(0, documentHistoryLimit)
   if (storedHistory !== undefined) {
     let parsed: unknown
@@ -664,7 +685,9 @@ void app.whenReady().then(async () => {
         const file = await (entry.kind === 'directory' ? files.authorizedDirectory(entry.path) : files.authorizedFile(entry.path)).catch(() => '')
         return file === entry.path ? entry : undefined
       }))
-      return await searchRoots(binary, authorized.filter(entry => entry !== undefined), query, controller.signal)
+      const opened = new Map(recent.map(entry => [entry.path, entry.lastOpened]))
+      const hits = await searchRoots(binary, authorized.filter(entry => entry !== undefined), query, controller.signal)
+      return hits.map(hit => ({ ...hit, opened: opened.get(hit.path) }))
     } finally {
       if (editor.search === controller) editor.search = undefined
     }
@@ -1039,7 +1062,8 @@ void app.whenReady().then(async () => {
         attachmentDirectory: current.attachmentDirectory, attachmentDirectories: current.attachmentDirectories,
         stickerDirectory: current.stickerDirectory, expandedFolders: current.expandedFolders, hiddenLocalEntries: current.hiddenLocalEntries })
       changedShortcuts = JSON.stringify(current.shortcuts) !== JSON.stringify(next.shortcuts)
-      changedBackground = current.theme !== next.theme || windowMaterial(current) !== windowMaterial(next)
+      changedBackground = current.theme !== next.theme ||
+        windowMaterial(current) !== windowMaterial(next)
       return next
     })
     if (changedShortcuts) installMenu()

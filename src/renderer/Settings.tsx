@@ -1,7 +1,8 @@
-import { useState, type ReactNode } from 'react'
-import { ArrowLeft, HardDrive, Info, Keyboard, Palette, SlidersHorizontal } from 'lucide-react'
-import { markdownPageWidths, recentFilesLimit, searchEngines, type StorageDirectory, type Entry, type Preferences, type SearchEngine, type UpdateProxy, type UpdateProxyInput, type VersionStatus } from '../shared/contracts'
+import { createContext, useContext, useState, type ReactNode } from 'react'
+import { ArrowLeft, HardDrive, Info, Keyboard, Palette, RefreshCw, Search, SlidersHorizontal, X } from 'lucide-react'
+import { interfaceFontSizes, markdownPageWidths, recentFilesLimit, searchEngines, type StorageDirectory, type Entry, type Preferences, type SearchEngine, type UpdateProxy, type UpdateProxyInput, type VersionStatus } from '../shared/contracts'
 import { UpdateProxySettings } from './UpdateProxySettings'
+import { FontPicker } from './FontPicker'
 import { ShortcutSettings } from './ShortcutSettings'
 import { appShortcuts, shortcutLabel, shortcutValue } from '../shared/shortcuts'
 
@@ -10,10 +11,17 @@ const pages = [
   { label: '外观', icon: Palette },
   { label: '快捷键', icon: Keyboard },
   { label: '存储', icon: HardDrive },
+  { label: '应用更新', icon: RefreshCw },
   { label: '关于', icon: Info },
 ] as const
 
+export type SettingsPage = (typeof pages)[number]['label']
+const SettingSearch = createContext({ query: '', page: '' })
+const matches = (query: string, text: string) => query.split(/\s+/).every(word => text.toLocaleLowerCase().includes(word))
+
 function Row({ label, detail, children }: { label: string; detail?: string; children?: ReactNode }) {
+  const { query, page } = useContext(SettingSearch)
+  if (query && !matches(query, [page, label, detail].filter(Boolean).join(' '))) return null
   return <div className="settings-row"><div><span>{label}</span>{detail && <p>{detail}</p>}</div>{children}</div>
 }
 
@@ -30,7 +38,7 @@ export function Settings({ preferences, platform, library, windowsAcrylic, macRe
   preferences: Preferences
   platform: string
   library: Entry
-  initialPage: (typeof pages)[number]['label']
+  initialPage: SettingsPage
   windowsAcrylic: boolean
   macReducesTransparency: boolean
   version: string
@@ -50,12 +58,15 @@ export function Settings({ preferences, platform, library, windowsAcrylic, macRe
   onChange: (preferences: Partial<Preferences>) => void
   onReturn: () => void
 }) {
-  const [page, setPage] = useState(initialPage)
+  const [activePage, setActivePage] = useState(initialPage)
+  const [search, setSearch] = useState('')
+  const query = search.trim().toLocaleLowerCase()
+  const setPage = (page: SettingsPage) => { setActivePage(page); setSearch('') }
   const material = (platform === 'darwin' && !macReducesTransparency) || windowsAcrylic
   const updateProgress = release?.progress
   const downloading = updateProgress?.state === 'downloading'
   const installing = updateProgress?.state === 'installing'
-  const transparent = material && !preferences.solidBackground
+  const transparent = material && preferences.windowTransparent
   const quickNew = (['new-file', 'new-drawing'] as const).flatMap(id => {
     const key = shortcutValue(preferences.shortcuts, id, platform)
     return key ? [appShortcuts[id].label + ' ' + shortcutLabel(key, platform)] : []
@@ -63,33 +74,41 @@ export function Settings({ preferences, platform, library, windowsAcrylic, macRe
   return <>
     <aside className="sidebar settings-nav"><div className="sidebar-scroll">
       <h2>设置</h2>
-      {pages.map(({ label, icon: Icon }) => <button className="tree-row" key={label} data-selected={page === label}
+      <div className="settings-search"><Search size={15} /><input type="search" aria-label="搜索设置" placeholder="搜索设置"
+        value={search} onChange={event => setSearch(event.currentTarget.value)} />
+        {search && <button type="button" className="icon-button" aria-label="清空设置搜索" onClick={() => setSearch('')}><X size={14} /></button>}
+      </div>
+      {pages.map(({ label, icon: Icon }) => <button className="tree-row" key={label} data-selected={!query && activePage === label}
         onClick={() => setPage(label)}><Icon size={18} /><span>{label}</span></button>)}
     </div><button className="tree-row sidebar-footer" onClick={onReturn}><ArrowLeft size={18} /><span>返回</span></button></aside>
     <div className="settings-main">
-      <div className="settings-content">
-        {page === '快捷键' ? <ShortcutSettings platform={platform} overrides={preferences.shortcuts}
-          onChange={shortcuts => onChange({ shortcuts })} /> : <>
+      <div className="settings-content" data-searching={!!query}>
+        {query && <h1>搜索设置</h1>}
+        {(query ? pages.map(item => item.label) : [activePage]).map(page => <SettingSearch.Provider key={page} value={{ query, page }}>
+          <section className="settings-page">
+        {page === '快捷键' ? (query ? <div className="settings-group"><Row label="快捷键设置" detail="搜索或录制应用、Markdown 与思维导图的快捷键。">
+          <button className="tool-button" onClick={() => setPage('快捷键')}>打开快捷键</button>
+        </Row></div> : <ShortcutSettings platform={platform} overrides={preferences.shortcuts}
+          onChange={shortcuts => onChange({ shortcuts })} />) : <>
         <h1>{page}</h1>
         {page === '外观' ? <>
           <h2 className="settings-group-title">公共</h2>
           <div className="settings-group">
             <Row label="外观"><Choices value={preferences.theme} choices={ [['system','跟随系统'], ['light','浅色'], ['dark','深色']] }
               onChange={theme => onChange({ theme })} /></Row>
-            <Row label="透明窗口背景" detail={macReducesTransparency
-              ? 'macOS 已开启「降低透明度」。可在系统设置的「辅助功能 → 显示」中关闭。'
-              : material
-              ? (platform === 'darwin' ? '侧栏和左侧标题栏可使用透明背景。' : '侧栏和左侧标题栏使用 Windows Acrylic。')
-              : '当前系统使用实色背景。Windows Acrylic 需要 Windows 11 22H2 或更新版本。'}>
+            <Row label="透明窗口背景" detail={macReducesTransparency ? '系统已开启降低透明度。'
+              : material ? '调节侧栏与左侧标题栏的背景透明度。' : '当前系统版本使用实色背景。'}>
               <button className="switch" role="switch" aria-label="透明窗口背景" aria-checked={transparent}
-                disabled={!material} onClick={() => onChange({ solidBackground: transparent })} />
+                disabled={!material} onClick={() => onChange({ windowTransparent: !preferences.windowTransparent })} />
             </Row>
-            {transparent && <Row label="背景透明度" detail={platform === 'darwin'
-              ? '100% 时侧栏背景完全透明。降低透明度可恢复毛玻璃。'
-              : '100% 时仅保留 Windows Acrylic 材质。'}>
+            <Row label="高斯模糊" detail="模糊侧栏后方的内容，可独立使用，也可与透明背景组合使用。">
+              <button className="switch" role="switch" aria-label="高斯模糊" aria-checked={material && preferences.windowBlur}
+                disabled={!material} onClick={() => onChange({ windowBlur: !preferences.windowBlur })} />
+            </Row>
+            {transparent && <Row label="背景透明度" detail="100% 移除侧栏底色。开启高斯模糊时继续显示模糊背景。">
               <div className="transparency-control">
                 <input type="range" aria-label="背景透明度" aria-valuetext={preferences.windowTransparency + '%'}
-                  min={0} max={100} step={5} value={preferences.windowTransparency}
+                  min={0} max={100} step={1} value={preferences.windowTransparency}
                   onChange={event => onChange({ windowTransparency: event.currentTarget.valueAsNumber })} />
                 <span aria-hidden="true">{preferences.windowTransparency}%</span>
               </div>
@@ -98,8 +117,27 @@ export function Settings({ preferences, platform, library, windowsAcrylic, macRe
               <Choices value={preferences.animations ? 'full' : 'reduced'} choices={ [['reduced','克制'], ['full','丰富']] }
                 onChange={choice => onChange({ animations: choice === 'full' })} />
             </Row>
-            <Row label="界面字号"><Choices value={preferences.size} choices={ [['small','小'], ['normal','标准'], ['large','大']] }
-              onChange={size => onChange({ size })} /></Row>
+            <Row label="界面字号" detail="选择自定义可调整字号和界面字体。"><Choices value={preferences.size}
+              choices={ [['small','小'], ['normal','标准'], ['large','大'], ['custom','自定义']] } onChange={size => onChange({ size })} /></Row>
+            {preferences.size === 'custom' && <Row label="自定义字号与字体" detail="选择系统已安装的界面字体。">
+              <div className="interface-type">
+                <input className="setting-count" type="number" aria-label="自定义界面字号" min={interfaceFontSizes.min} max={interfaceFontSizes.max}
+                  key={preferences.interfaceFontSize} defaultValue={preferences.interfaceFontSize} onBlur={event => {
+                    const value = event.currentTarget.valueAsNumber
+                    const size = Number.isFinite(value) ? Math.max(interfaceFontSizes.min, Math.min(interfaceFontSizes.max, Math.round(value))) : preferences.interfaceFontSize
+                    event.currentTarget.value = String(size)
+                    if (size !== preferences.interfaceFontSize) onChange({ interfaceFontSize: size })
+                  }} onKeyDown={event => { if (event.key === 'Enter') event.currentTarget.blur() }} />
+                <FontPicker label="界面字体" value={preferences.interfaceFont} inline change={interfaceFont => onChange({ interfaceFont })} />
+              </div>
+            </Row>}
+          </div>
+          <h2 className="settings-group-title">文档</h2>
+          <div className="settings-group">
+            <Row label="将文件名显示为标题" detail="在 Markdown 和大纲正文顶部显示文件名，双击可重命名。">
+              <button className="switch" type="button" role="switch" aria-label="将文件名显示为标题" aria-checked={preferences.showFilenameTitle}
+                onClick={() => onChange({ showFilenameTitle: !preferences.showFilenameTitle })} />
+            </Row>
           </div>
           <h2 className="settings-group-title">Markdown</h2>
           <div className="settings-group">
@@ -145,16 +183,6 @@ export function Settings({ preferences, platform, library, windowsAcrylic, macRe
               <button className="switch" role="switch" aria-label="自动下载网络图片" aria-checked={preferences.remoteImages}
                 onClick={() => onChange({ remoteImages: !preferences.remoteImages })} />
             </Row>
-            <Row label="自动检查更新" detail="启动时和运行期间检查 GitHub 发布版本。">
-              <button className="switch" role="switch" aria-label="自动检查更新" aria-checked={preferences.autoCheckUpdates}
-                onClick={() => onChange({ autoCheckUpdates: !preferences.autoCheckUpdates, ...(preferences.autoCheckUpdates ? { autoDownloadUpdates: false } : {}) })} />
-            </Row>
-            <Row label="自动下载更新" detail="发现新版本后在后台下载，保存文档后可重启安装。">
-              <button className="switch" role="switch" aria-label="自动下载更新" aria-checked={preferences.autoDownloadUpdates}
-                onClick={() => onChange({ autoDownloadUpdates: !preferences.autoDownloadUpdates,
-                  ...(!preferences.autoDownloadUpdates ? { autoCheckUpdates: true } : {}) })} />
-            </Row>
-            <UpdateProxySettings proxy={updateProxy} save={onSaveUpdateProxy} disabled={checking || downloading || installing} />
             <Row label="网页搜索" detail="在 Markdown 中选中文字，右键可在浏览器中搜索。">
               <select aria-label="网页搜索" value={preferences.searchEngine}
                 onChange={event => onChange({ searchEngine: event.target.value as SearchEngine })}>
@@ -194,8 +222,7 @@ export function Settings({ preferences, platform, library, windowsAcrylic, macRe
                 }} onKeyDown={event => { if (event.key === 'Enter') event.currentTarget.blur() }} />
             </Row>
           </>}
-          {page === '关于' && <>
-            <Row label="Ymd" detail={version ? '当前版本 ' + version : '本地 Markdown 与 Excalidraw 编辑器。'} />
+          {page === '应用更新' && <>
             <Row label="软件更新" detail={updateProgress?.state === 'ready' ? release?.update?.version + ' 已下载'
               : installing ? '正在准备安装…' : release?.update ? '可下载 ' + release.update.version
               : release ? '已是当前发布渠道的最新版本。' : undefined}>
@@ -213,11 +240,28 @@ export function Settings({ preferences, platform, library, windowsAcrylic, macRe
               <span>{Math.floor(100 * updateProgress.received / updateProgress.total)}%</span>
             </div>}
             {updateProgress?.state === 'error' && <p className="update-progress" role="alert">{updateProgress.message}</p>}
+            <Row label="自动检查更新" detail="启动时和运行期间检查 GitHub 发布版本。">
+              <button className="switch" role="switch" aria-label="自动检查更新" aria-checked={preferences.autoCheckUpdates}
+                onClick={() => onChange({ autoCheckUpdates: !preferences.autoCheckUpdates, ...(preferences.autoCheckUpdates ? { autoDownloadUpdates: false } : {}) })} />
+            </Row>
+            <Row label="自动下载更新" detail="发现新版本后在后台下载，保存文档后可重启安装。">
+              <button className="switch" role="switch" aria-label="自动下载更新" aria-checked={preferences.autoDownloadUpdates}
+                onClick={() => onChange({ autoDownloadUpdates: !preferences.autoDownloadUpdates,
+                  ...(!preferences.autoDownloadUpdates ? { autoCheckUpdates: true } : {}) })} />
+            </Row>
+            {(!query || matches(query, '应用更新 更新代理 HTTP 网络 代理地址')) &&
+              <UpdateProxySettings proxy={updateProxy} save={onSaveUpdateProxy} disabled={checking || downloading || installing} />}
+          </>}
+          {page === '关于' && <>
+            <Row label="Ymd" detail={version ? '当前版本 ' + version : '本地 Markdown 与 Excalidraw 编辑器。'} />
             <Row label="源代码"><div className="setting-actions">
               <button className="tool-button" onClick={() => onOpenRelease('https://github.com/junyi-deep/Ymd')}>在 GitHub 查看</button>
             </div></Row>
           </>}
         </div>}</>}
+          </section>
+        </SettingSearch.Provider>)}
+        {query && <p className="settings-search-empty" role="status">没有找到匹配的设置。</p>}
       </div>
     </div>
   </>

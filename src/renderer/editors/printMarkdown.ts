@@ -1,10 +1,11 @@
 import DOMPurify from 'dompurify'
+import { renderMermaid } from './renderMermaid'
 import { Marked } from 'marked'
 import type { Tokens } from 'marked'
 import markedFootnote from 'marked-footnote'
 import { markdownBody } from './markdownExtras'
 import { applyImageSizing, isEmbeddedMarkdownImage, isRemoteMarkdownImage, markdownImageLine, readImageSizing } from './markdownImageSyntax'
-import { displayMath, renderMermaid } from './markdownPreviewMedia'
+import { displayMath } from './markdownPreviewMedia'
 
 export async function printMarkdown(file: string, source: string) {
   const parser = new Marked({ gfm: true, breaks: false })

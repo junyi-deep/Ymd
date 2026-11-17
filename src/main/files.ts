@@ -56,6 +56,7 @@ export class Files {
   private roots = new Set<string>()
   private singles = new Set<string>()
   private writes = new Map<string, Promise<unknown>>()
+  private renameSortNames = new Map<string, Map<string, string>>()
   attachmentDirectory?: string
   attachmentDirectories: string[] = []
 
@@ -110,7 +111,14 @@ export class Files {
       const kind = entry.isDirectory() ? 'directory' : entry.isFile() ? fileKind(entry.name) : undefined
       if (kind) entries.push({ kind, path: path.join(root, entry.name), name: entry.name })
     }
-    return entries.sort((a, b) => Number(b.kind === 'directory') - Number(a.kind === 'directory') || a.name.localeCompare(b.name, undefined, { numeric: true }))
+    const aliases = this.renameSortNames.get(root)
+    if (aliases) {
+      const paths = new Set(entries.map(entry => entry.path))
+      for (const file of aliases.keys()) if (!paths.has(file)) aliases.delete(file)
+      if (!aliases.size) this.renameSortNames.delete(root)
+    }
+    return entries.sort((a, b) => Number(b.kind === 'directory') - Number(a.kind === 'directory') ||
+      (aliases?.get(a.path) ?? a.name).localeCompare(aliases?.get(b.path) ?? b.name, undefined, { numeric: true }))
   }
 
   async read(file: string, keepAccess = false): Promise<DocumentFile> {
@@ -125,7 +133,9 @@ export class Files {
       throw new Error('文件不是有效的 UTF-8 文本。')
     }
     if (keepAccess) this.singles.add(canonical)
-    return { path: canonical, name: path.basename(canonical), kind, text, version: versionOf(data), modified: (await stat(canonical)).mtimeMs }
+    const info = await stat(canonical)
+    return { path: canonical, name: path.basename(canonical), kind, text, version: versionOf(data),
+      created: info.birthtimeMs > 0 ? info.birthtimeMs : undefined, modified: info.mtimeMs }
   }
 
   async create(directory: string, kind: FileKind) {
@@ -317,7 +327,16 @@ export class Files {
     const title = validName(name)
     const extension = path.extname(original)
     const target = title.toLowerCase().endsWith(extension.toLowerCase()) ? title : title + extension
-    return this.relocate(original, path.join(path.dirname(original), target), version)
+    const directory = path.dirname(original)
+    const renamed = await this.relocate(original, path.join(directory, target), version)
+    if (renamed.path !== original) {
+      const aliases = this.renameSortNames.get(directory) ?? new Map<string, string>()
+      const sortName = aliases.get(original) ?? path.basename(original)
+      aliases.delete(original)
+      aliases.set(renamed.path, sortName)
+      this.renameSortNames.set(directory, aliases)
+    }
+    return renamed
   }
 
   async copyDirectory(directory: string, into?: string) {
@@ -356,19 +375,24 @@ export class Files {
   private async relocate(original: string, destination: string, version: string) {
     if (original === destination) return this.read(original, true)
     if (versionOf(await readFile(original)) !== version) throw new Error('磁盘上的文件已变化，请重新载入后移动。')
-    try {
-      await link(original, destination)
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code
-      if (code === 'EEXIST') throw new Error('目标目录中已有同名文件。')
-      if (code === 'EXDEV' || code === 'ENOTSUP') throw new Error('该目录位于其他磁盘或卷，无法直接移动。')
-      throw error
-    }
-    try {
-      await unlink(original)
-    } catch (error) {
-      await unlink(destination).catch(() => {})
-      throw error
+    if (original.toLowerCase() === destination.toLowerCase() &&
+      await realpath(destination).catch(() => null) === original) {
+      await rename(original, destination)
+    } else {
+      try {
+        await link(original, destination)
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code
+        if (code === 'EEXIST') throw new Error('目标目录中已有同名文件。')
+        if (code === 'EXDEV' || code === 'ENOTSUP') throw new Error('该目录位于其他磁盘或卷，无法直接移动。')
+        throw error
+      }
+      try {
+        await unlink(original)
+      } catch (error) {
+        await unlink(destination).catch(() => {})
+        throw error
+      }
     }
     this.singles.delete(original)
     return this.read(destination, true)

@@ -1,13 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Camera, ChevronDown, ClipboardList, CornerUpLeft, Crosshair, Download, Focus, FolderInput, GitBranch, GitFork, ImagePlus, ListTree, Map as MapIcon, Maximize, MessageSquare, Mic, Minus, Paperclip, Plus, Presentation, Redo2, Search, SlidersHorizontal, SquareFunction, Square, SquareCheck, Star, Sticker, StickyNote, Tag, Trash2, Undo2, X } from 'lucide-react'
-import DOMPurify from 'dompurify'
 import MindMap from 'simple-mind-map'
 import AssociativeLine from 'simple-mind-map/src/plugins/AssociativeLine.js'
 import Drag from 'simple-mind-map/src/plugins/Drag.js'
 import Export from 'simple-mind-map/src/plugins/Export.js'
 import ExportPDF from 'simple-mind-map/src/plugins/ExportPDF.js'
 import KeyboardNavigation from 'simple-mind-map/src/plugins/KeyboardNavigation.js'
-import MiniMap from 'simple-mind-map/src/plugins/MiniMap.js'
 import NodeImgAdjust from 'simple-mind-map/src/plugins/NodeImgAdjust.js'
 import OuterFrame from 'simple-mind-map/src/plugins/OuterFrame.js'
 import RainbowLines from 'simple-mind-map/src/plugins/RainbowLines.js'
@@ -27,6 +25,8 @@ import { MindMapRecorder } from './MindMapRecorder'
 import { MindMapEquation } from './MindMapEquation'
 import { readEquation } from './mapEquation'
 import { MindMapArt } from './MindMapArt'
+import { installMapOverview } from './mapOverview'
+import { displayMapMarkdown } from './mapMarkdown'
 import { MindMapLink, type LinkSheet } from './MindMapLink'
 import { readLocalMapUrl } from '../../shared/localMapLinks'
 import { readPitchOptions, readPitchTopic, type PitchMode, type PitchTopicOptions } from '../../shared/pitch'
@@ -64,7 +64,7 @@ class MapAssociativeLine extends AssociativeLine {
   }
 }
 
-for (const plugin of [MapAssociativeLine, Drag, Export, ExportPDF, KeyboardNavigation, MiniMap, NodeImgAdjust, OuterFrame, RainbowLines, SearchPlugin, Select]) MindMap.usePlugin(plugin)
+for (const plugin of [MapAssociativeLine, Drag, Export, ExportPDF, KeyboardNavigation, NodeImgAdjust, OuterFrame, RainbowLines, SearchPlugin, Select]) MindMap.usePlugin(plugin)
 MindMap.extendNodeDataNoStylePropList(['ymdMarker', 'ymdFloating', 'ymdTask', 'ymdTodo', 'ymdStructure', 'ymdAudio', 'ymdOriginalImageSize', 'ymdCallouts', 'ymdNumbering', 'ymdPitch', 'ymdEquation'])
 
 type MapNode = NonNullable<MindMap['renderer']['root']>
@@ -356,7 +356,7 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, remoteImage
   const [navigation, setNavigation] = useState<{ key: number; facet?: string }>()
   const previousFind = useRef(find)
   const [overview, setOverview] = useState(overviewPreferences.visible)
-  const [miniMap, setMiniMap] = useState<{ markup: string; viewport: Record<string, string> }>()
+  const overviewElement = useRef<HTMLDivElement>(null)
   const [matches, setMatches] = useState({ total: 0, currentIndex: -1 })
   const [titleMatches, setTitleMatches] = useState<string[]>([])
   const [field, setField] = useState<{ key: TopicField; node: MapNode; value: string }>()
@@ -629,6 +629,10 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, remoteImage
         layout: initialSettings.layout, themeConfig: mapTheme(initialSettings, dark),
         rainbowLinesConfig: { open: initialSettings.colored, colorsList: palettes[initialSettings.palette].colors },
         customHyperlinkJump: openHyperlink,
+        openRealtimeRenderOnNodeTextEdit: true,
+        createNodePrefixContent: node => {
+          if (!node.isRoot || initialSheet || appearance.imported) displayMapMarkdown(node)
+        },
         createNodePostfixContent: node => {
           const note = readAudioNote(node.getData('ymdAudio'))
           if (note) {
@@ -720,6 +724,13 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, remoteImage
       highlightTopics(map, highlighted.current)
     }
     const download = (node: MapNode) => downloadAttachment(node.getData('attachmentUrl'), node.getData('attachmentName'))
+    const textEditor = map.renderer.textEdit
+    textEditor.textNodePaddingX = 0
+    textEditor.textNodePaddingY = 0
+    const fitTopicEditor = () => queueMicrotask(() => {
+      if (engine.current === map && textEditor.isShowTextEdit()) textEditor.emitTextChangeEvent()
+    })
+    map.on('before_show_text_edit', fitTopicEditor)
     map.on('data_change', onData)
     map.on('afterExecCommand', sync)
     map.on('node_active', select)
@@ -757,6 +768,7 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, remoteImage
       branchView.current = undefined
       registerFlush()
       map.off('afterExecCommand', sync)
+      map.off('before_show_text_edit', fitTopicEditor)
       map.off('data_change', onData)
       map.off('node_active', select)
       map.off('node_contextmenu', context)
@@ -909,6 +921,27 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, remoteImage
           !(event.target instanceof Element) || event.target.closest('input, textarea, select, [contenteditable], dialog, .document-menu')) return
       if (event.key === 'Escape') { sequence.reset(); return }
       const onCanvas = event.target === document.body || host.current?.contains(event.target)
+      if (event.code === 'Space' && onCanvas && !current &&
+          !event.target.closest('button, a') && !event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey) {
+        const map = engine.current
+        if (!map || map.renderer.activeNodeList.length !== 1) return
+        const [topic] = map.renderer.activeNodeList
+        event.preventDefault()
+        event.stopPropagation()
+        if (event.repeat) return
+        const editor = map.renderer.textEdit
+        void editor.show({ node: topic, isFromKeyDown: true }).then(() => {
+          if (engine.current !== map || editor.getCurrentEditNode() !== topic || !editor.textEditNode) return
+          const input = editor.textEditNode
+          input.focus({ preventScroll: true })
+          const range = document.createRange()
+          range.selectNodeContents(input)
+          range.collapse(false)
+          document.getSelection()?.removeAllRanges()
+          document.getSelection()?.addRange(range)
+        })
+        return
+      }
       const chord = inputChord({ key: event.key, code: event.code, control: event.ctrlKey, alt: event.altKey, meta: event.metaKey, shift: event.shiftKey }, platform)
       const match = chord && sequence.take(chord, bindings.filter(item => item.id === 'map-shot' || item.id === 'map-pitch' ||
         (item.id === 'map-branch' ? !!branch || focusableBranch && onCanvas : linkable && onCanvas)), event.repeat)
@@ -930,40 +963,10 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, remoteImage
 
   useEffect(() => {
     const map = engine.current
-    if (!overview || !map) return
-    let pending = 0
-    const update = () => {
-      cancelAnimationFrame(pending)
-      pending = requestAnimationFrame(() => {
-        try {
-          const { svgHTML, viewBoxStyle } = map.miniMap.calculationMiniMap(160, 100)
-          const cleaned = DOMPurify.sanitize(svgHTML, {
-            USE_PROFILES: { svg: true },
-            FORBID_TAGS: ['a', 'foreignObject', 'image', 'style'],
-          })
-          const template = document.createElement('template')
-          template.innerHTML = cleaned
-          const svg = template.content.querySelector('svg')
-          const width = Number.parseFloat(svg?.getAttribute('width') ?? '')
-          const height = Number.parseFloat(svg?.getAttribute('height') ?? '')
-          if (!svg || !(width > 0) || !(height > 0)) return
-          svg.setAttribute('viewBox', svg.getAttribute('viewBox') || `0 0 ${width} ${height}`)
-          svg.setAttribute('width', '160')
-          svg.setAttribute('height', '100')
-          svg.setAttribute('preserveAspectRatio', 'xMidYMid meet')
-          setMiniMap({ markup: svg.outerHTML, viewport: viewBoxStyle })
-        } catch {}
-      })
-    }
-    map.on('node_tree_render_end', update)
-    map.on('view_data_change', update)
-    update()
-    return () => {
-      cancelAnimationFrame(pending)
-      map.off('node_tree_render_end', update)
-      map.off('view_data_change', update)
-    }
-  }, [overview])
+    const canvas = host.current
+    const element = overviewElement.current
+    if (overview && map && canvas && element) return installMapOverview(map, canvas, element)
+  }, [overview, path, name, projection, appearance, initialSheet, changeBranch])
 
   if (error) return <div className="editor-empty"><h2>无法加载思维导图</h2><p>{error}</p></div>
 
@@ -1406,16 +1409,8 @@ function MapCanvas({ text, name, path, dark, platform, keyOverrides, remoteImage
           exit={() => toggleZen(false)} />}
         {linking && <div className="map-action-status" role="status">选择关联线的目标主题 <kbd>Esc 取消</kbd></div>}
         {notice && <div className="map-action-status" role="status">{notice}<button className="icon-button" aria-label="关闭提示" onClick={() => setNotice('')}><X size={14} /></button></div>}
-        {overview && miniMap && <div className="map-minimap" data-position={overviewPreferences.position} aria-label="导图概览"
-          onPointerDown={event => {
-            event.currentTarget.setPointerCapture(event.pointerId)
-            engine.current?.miniMap.onViewBoxMousedown(event)
-          }}
-          onPointerMove={event => engine.current?.miniMap.onViewBoxMousemove(event)}
-          onPointerUp={() => engine.current?.miniMap.onMouseup()}
-          onPointerCancel={() => engine.current?.miniMap.onMouseup()}>
-          <div aria-hidden="true" dangerouslySetInnerHTML={{ __html: miniMap.markup }} />
-          <i style={miniMap.viewport} />
+        {overview && <div ref={overviewElement} className="map-minimap" data-position={overviewPreferences.position} aria-label="导图概览">
+          <svg aria-hidden="true" /><i />
         </div>}
         <div className="map-status" role="group" aria-label="画布视图" ref={element => { element?.toggleAttribute('inert', shotOpen) }}>
           {!!backlinks.length && <div className="menu-anchor">

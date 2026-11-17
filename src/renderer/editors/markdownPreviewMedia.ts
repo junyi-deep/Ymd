@@ -1,4 +1,4 @@
-import DOMPurify from 'dompurify'
+import { renderMermaid } from './renderMermaid'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { Scan } from 'lucide-react'
@@ -60,21 +60,53 @@ export function createMarkdownImage(file: string, { label, source, title, sizing
 
 export const displayMath = /^\$\$[ \t]*\n([\s\S]+)\n\$\$[ \t]*$/
 
-export async function renderMermaid(code: string) {
-  const { renderAsync } = await import('pele/lazy')
-  const { svg } = await renderAsync(code, {
-    responsive: true, links: false, images: false, idPrefix: 'ymd-' + crypto.randomUUID().replaceAll('-', ''),
-  })
-  return DOMPurify.sanitize(svg, {
-    USE_PROFILES: { svg: true, svgFilters: true },
-    FORBID_TAGS: ['style', 'foreignObject', 'a', 'image'],
-  })
-}
-
-export async function renderBlockPreview(content: HTMLElement, code: string, kind: 'mermaid' | 'math') {
+async function renderBlockPreview(content: HTMLElement, code: string, kind: 'mermaid' | 'math') {
   if (kind === 'mermaid') content.innerHTML = await renderMermaid(code)
   else {
     const [katex] = await Promise.all([import('katex'), import('katex/dist/katex.min.css')])
     katex.default.render(code, content, { displayMode: true, trust: false, maxExpand: 1000 })
+  }
+}
+
+const observers = new WeakMap<Element, { observer: IntersectionObserver; jobs: Map<Element, () => void> }>()
+
+export function scheduleBlockPreview(content: HTMLElement, code: string, kind: 'mermaid' | 'math', root: Element | null,
+  ready?: () => void, failed?: (error: unknown) => void) {
+  let current = true
+  const run = () => {
+    // Render into a detached element so completed jobs from recycled widgets cannot change the visible document.
+    const output = document.createElement('div')
+    void renderBlockPreview(output, code, kind).then(() => {
+      if (!current || !content.isConnected) return
+      content.replaceChildren(...output.childNodes)
+      ready?.()
+    }, error => { if (current && content.isConnected) failed?.(error) })
+  }
+  if (!root) {
+    queueMicrotask(() => { if (current) run() })
+    return () => { current = false }
+  }
+  let group = observers.get(root)
+  if (!group) {
+    const jobs = new Map<Element, () => void>()
+    const observer = new IntersectionObserver(entries => {
+      for (const entry of entries) {
+        if (!entry.isIntersecting) continue
+        observer.unobserve(entry.target)
+        const render = jobs.get(entry.target)
+        jobs.delete(entry.target)
+        render?.()
+      }
+    }, { root, rootMargin: '240px 0px' })
+    group = { observer, jobs }
+    observers.set(root, group)
+  }
+  group.jobs.set(content, run)
+  group.observer.observe(content)
+  return () => {
+    current = false
+    group.observer.unobserve(content)
+    group.jobs.delete(content)
+    if (group.jobs.size === 0 && observers.get(root) === group) observers.delete(root)
   }
 }

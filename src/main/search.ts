@@ -94,8 +94,8 @@ export async function searchRoots(binary: string, roots: Entry[], query: string,
   if (signal.aborted) return []
   const hits = [...names.values()].map(hit => bodies.get(hit.path) ?? hit)
     .concat([...bodies.values()].filter(hit => !names.has(hit.path))).slice(0, limit)
-  return Promise.all(hits.map(async hit => ({
-    ...hit,
-    modified: await stat(hit.path).then(info => info.mtimeMs, () => undefined),
-  })))
+  return Promise.all(hits.map(async hit => {
+    const info = await stat(hit.path).catch(() => undefined)
+    return { ...hit, created: info && info.birthtimeMs > 0 ? info.birthtimeMs : undefined, modified: info?.mtimeMs }
+  }))
 }

@@ -1,8 +1,9 @@
 import { useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type KeyboardEvent, type MouseEvent } from 'react'
-import { BetweenHorizontalStart, Bold, ChevronRight, Code2, Italic, Plus, Strikethrough, Underline } from 'lucide-react'
+import { BetweenHorizontalStart, ChevronRight, Plus } from 'lucide-react'
 import { createPortal } from 'react-dom'
 import type { DocumentViewPosition } from './viewPosition'
-import { colorSelection, formatSelection, outlineTextColors, renderedSelection } from './outlineTextStyle'
+import { renderedSelection } from './outlineTextStyle'
+import { OutlineSelectionMenu, type OutlineStyle } from './OutlineSelectionMenu'
 import type { Links } from 'marked'
 import { markdownPageWidths, type MarkdownPageWidth } from '../../shared/contracts'
 import { DocumentRemainder } from './DocumentRemainder'
@@ -17,8 +18,9 @@ const typingTypes = new Set(['insertText', 'deleteContentBackward', 'deleteConte
 const blockTitle = (node: Block) => node.text.split('\n')[0].trim() || '空块'
 const cursor = (id: string, start: number, end = start): OutlineCaret => ({ id, start, end })
 
-export function OutlineEditor({ text, name, path, platform, remoteImages, sessions, width, setWidth, remainderVisible, setRemainderVisible, onChange, position }: {
+export function OutlineEditor({ text, name, path, platform, remoteImages, sessions, width, setWidth, remainderVisible, setRemainderVisible, onChange, position, filenameTitle }: {
   position: DocumentViewPosition
+  filenameTitle?: React.ReactNode
   text: string; name: string; path: string; platform: string; remoteImages: boolean; sessions: Map<string, OutlineSession>
   width: MarkdownPageWidth; setWidth: (value: MarkdownPageWidth) => void
   remainderVisible: boolean; setRemainderVisible: (visible: boolean) => void; onChange: (text: string) => void
@@ -32,7 +34,9 @@ export function OutlineEditor({ text, name, path, platform, remoteImages, sessio
   const [drop, setDrop] = useState<OutlineDrop>()
   const [widthMenu, setWidthMenu] = useState(false)
   const [menu, setMenu] = useState<{ id: string; x: number; y: number }>()
-  const [textMenu, setTextMenu] = useState<{ node: Block; start: number; end: number; editing: boolean; x: number; y: number }>()
+  const [textMenu, setTextMenu] = useState<{
+    ranges: OutlineCaret[]; editing?: string; branch?: string; copy: string; x: number; y: number
+  }>()
   const references = useMemo(() => outlineReferences(text), [text])
   const links = useMemo<Links | undefined>(() => references ? JSON.parse(references) : undefined, [references])
   const focus = useRef<OutlineCaret | undefined>(undefined)
@@ -464,20 +468,54 @@ export function OutlineEditor({ text, name, path, platform, remoteImages, sessio
 
   function selectedTextMenu(event: MouseEvent<HTMLElement>, node: Block) {
     const target = event.currentTarget
-    const editing = target instanceof HTMLTextAreaElement
-    const range = editing ? [target.selectionStart, target.selectionEnd] : renderedSelection(node.text, target)
-    if (!range || range[0] === range[1]) return
+    let copied = ''
+    let ranges: OutlineCaret[]
+    let editing: string | undefined
+    let branch: string | undefined
+    if (target instanceof HTMLTextAreaElement) {
+      const { selectionStart, selectionEnd } = target
+      if (selectionStart === selectionEnd) return
+      editing = node.id
+      ranges = [cursor(node.id, selectionStart, selectionEnd)]
+      copied = target.value.slice(selectionStart, selectionEnd)
+    } else if (selectedSet.size > 1 && selectedSet.has(node.id)) {
+      ranges = visible.filter(block => selectedSet.has(block.id)).map(block => cursor(block.id, 0, block.text.length))
+      copied = writeBranches(selectedBranches(blocks, selectedSet))
+      branch = node.id
+    } else {
+      const selection = document.getSelection()
+      if (!selection?.rangeCount || !selection.getRangeAt(0).intersectsNode(target)) return
+      const previews = new Map([...root.current!.querySelectorAll<HTMLElement>('.outline-preview')].map(preview =>
+        [preview.closest<HTMLElement>('[data-outline-block]')?.dataset.outlineBlock, preview]))
+      ranges = visible.flatMap(block => {
+        const preview = previews.get(block.id)
+        const selected = preview && renderedSelection(block.text, preview)
+        return selected ? [cursor(block.id, ...selected)] : []
+      })
+      copied = selection.toString()
+    }
+    if (!ranges.length) return
     event.preventDefault()
-    setTextMenu({ node, start: range[0], end: range[1], editing, x: event.clientX, y: event.clientY })
+    setMenu(undefined)
+    setTextMenu({ ranges, editing, branch, copy: copied, x: event.clientX, y: event.clientY })
   }
 
-  function applyTextStyle(updated: ReturnType<typeof formatSelection>) {
-    if (!textMenu || !updated) return
-    const { node, start, end, editing } = textMenu
-    const next = editBlockText(session.blocks, node.id, updated.text)
-    if (!next) return
+  function applyTextStyle(style: OutlineStyle) {
+    if (!textMenu) return
+    const next = structuredClone(session.blocks)
+    const byId = new Map(flattenBlocks(next).map(block => [block.id, block]))
+    let after: OutlineCaret | undefined
+    for (const [index, { id, start, end }] of textMenu.ranges.entries()) {
+      const block = byId.get(id)
+      if (!block) continue
+      const updated = style(block.text, start, end, index)
+      if (!updated) continue
+      block.text = updated.text
+      if (textMenu.editing === id) after = cursor(id, updated.start, updated.end)
+    }
     document.getSelection()?.removeAllRanges()
-    change(next, { before: cursor(node.id, start, end), after: editing ? cursor(node.id, updated.start, updated.end) : undefined })
+    change(next, { before: textMenu.editing ? textMenu.ranges[0] : undefined, after })
+    if (!after) root.current?.focus({ preventScroll: true })
   }
 
   function render(nodes: Block[]) {
@@ -513,6 +551,7 @@ export function OutlineEditor({ text, name, path, platform, remoteImages, sessio
                 if (event.shiftKey || event.metaKey || event.ctrlKey) select(node.id, event.shiftKey, !event.shiftKey)
                 else setBranch(node.id)
               }} onContextMenu={event => {
+                if (selectedSet.has(node.id) && selectedSet.size > 1) { selectedTextMenu(event, node); return }
                 event.preventDefault()
                 if (!selectedSet.has(node.id)) select(node.id)
                 setMenu({ id: node.id, x: event.clientX, y: event.clientY })
@@ -580,6 +619,7 @@ export function OutlineEditor({ text, name, path, platform, remoteImages, sessio
           }))} />}
         </div>
       </div>
+      {filenameTitle}
       {render(focused ? [focused] : blocks)}
       <button className="tool-button outline-add" onClick={() => addBlock(focused?.id)}><Plus size={17} />新增块</button>
       {remainder && <DocumentRemainder text={remainder} className="outline-surrounding" {...{ path, remoteImages, links }}
@@ -590,17 +630,12 @@ export function OutlineEditor({ text, name, path, platform, remoteImages, sessio
       { label: '新增子块', run: () => addBlock(menu.id) },
       { label: '删除所选块', separator: true, run: () => remove(selected) },
     ]} />, document.body)}
-    {textMenu && createPortal(<MarkdownMenu point={textMenu} nativeStyle close={() => setTextMenu(undefined)} items={[
-      ...([
-        ['加粗', Bold, '**', '**'], ['斜体', Italic, '*', '*'], ['下划线', Underline, '<u>', '</u>'],
-        ['删除线', Strikethrough, '~~', '~~'], ['行内代码', Code2, '`', '`'],
-      ] as const).map(([label, Icon, open, close]) => ({
-        label, icon: <Icon size={15} />, run: () => applyTextStyle(formatSelection(textMenu.node.text, textMenu.start, textMenu.end, open, close)),
-      })),
-      { label: '文字颜色', separator: true, children: outlineTextColors.map(([value, label]) => ({
-        label, icon: <span className={'outline-color-swatch ymd-text-' + value} />,
-        run: () => applyTextStyle(colorSelection(textMenu.node.text, textMenu.start, textMenu.end, value)),
-      })) },
-    ]} />, document.body)}
+    {textMenu && createPortal(<OutlineSelectionMenu point={textMenu} close={() => setTextMenu(undefined)}
+      apply={applyTextStyle} copy={() => { void navigator.clipboard.writeText(textMenu.copy).catch(() => {}) }}
+      blockActions={textMenu.branch ? [
+        { label: '聚焦此分支', run: () => setBranch(textMenu.branch) },
+        { label: '新增子块', run: () => addBlock(textMenu.branch) },
+        { label: '删除所选块', run: () => remove(selected) },
+      ] : undefined} />, document.body)}
   </div>
 }

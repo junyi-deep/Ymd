@@ -1,5 +1,5 @@
 import { GitBranch, LayoutGrid, ListOrdered, Palette as PaletteIcon, SlidersHorizontal, X } from 'lucide-react'
-import { MindMapFontPicker } from './MindMapFontPicker'
+import { FontPicker } from '../FontPicker'
 import type MindMap from 'simple-mind-map'
 import { branchStructure, mapLayouts, mapTheme, palettes, type MapSettings, type Palette, type Structure } from './mapAppearance'
 import { attachedTopic, numberingPatterns, readNumbering, type NumberingEdit, type NumberingPattern } from './mapNumbering'
@@ -68,7 +68,7 @@ export function MindMapFormat({ tab, settings, node, selected, version, dark, br
         {settings.background === 'transparent' && <p className="map-format-note">玻璃效果跟随全局窗口透明度。</p>}
       </section>
       <section><h3><SlidersHorizontal size={15} />样式</h3>
-        <MindMapFontPicker label="全局字体" value={settings.font} change={font => change({ font })} />
+        <FontPicker label="全局字体" value={settings.font} change={font => change({ font })} />
         <label>分支线宽<input type="range" min="1" max="8" value={settings.lineWidth} onChange={event => change({ lineWidth: Number(event.target.value) })} /></label>
         <label>分支线型<select value={settings.lineStyle ?? 'curve'} onChange={event => change({ lineStyle: event.target.value as MapSettings['lineStyle'] })}>
           <option value="curve">曲线</option><option value="straight">折线</option><option value="direct">直线</option></select></label>
@@ -92,7 +92,7 @@ export function MindMapFormat({ tab, settings, node, selected, version, dark, br
           <option value="none">实线</option><option value="6,4">虚线</option><option value="2,3">点线</option></select></label>
       </section>
       <section><h3><SlidersHorizontal size={15} />文字</h3>
-        <MindMapFontPicker label="主题字体" value={String(data.fontFamily ?? topicTheme.fontFamily)} change={value => style('fontFamily', value)} />
+        <FontPicker label="主题字体" value={String(data.fontFamily ?? topicTheme.fontFamily)} change={value => style('fontFamily', value)} />
         <label>字号<input type="number" min="10" max="72" value={Number(data.fontSize ?? topicTheme.fontSize)}
           onChange={event => { const size = event.target.valueAsNumber; if (size >= 10 && size <= 72) style('fontSize', size) }} /></label>
         <label>文字颜色<input type="color" value={colorValue(data.color, topicTheme.color)} onChange={event => style('color', event.target.value)} /></label>

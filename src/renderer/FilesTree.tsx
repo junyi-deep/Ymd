@@ -60,7 +60,7 @@ export function FileTreeRow({ entry, depth, selected, open, onClick, onMenu, onC
     {open ? <ChevronDown className="tree-disclosure" size={17} /> : <ChevronRight className="tree-disclosure" size={17} />}
   </span> : <DocumentIcon kind={entry.kind} />
   return <div className="tree-item" data-selected={selected || checked} data-drop-target={dropTarget}
-    style={{ paddingInlineStart: 5 + depth * 17 }}
+    style={{ paddingInlineStart: `min(${5 + depth * 17}px, max(5px, 100% - 99px))` }}
     onDragOver={event => {
       const place = dropPlace(event)
       setDropTarget(place)

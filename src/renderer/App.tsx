@@ -1,14 +1,11 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState, type CSSProperties, type MouseEvent, type ReactNode } from 'react'
-import { AppWindow, ArrowLeft, Check, ChevronRight, CircleAlert, Copy, FilePlus2, FileText, FolderInput, Home, ListChecks, ListTree, Network, PanelLeft, LocateFixed, Minus, Pencil, Pin, Plus, Save, Search, Settings2, Shapes, Star, Trash2, X } from 'lucide-react'
-import { defaultPreferences, defaultUpdateProxy, windowMaterialFor, type Command, type DocumentFile, type EditorMode, type Entry, type FileKind, type Preferences, type RecoveryEntry, type Scope, type SearchHit, type TreeChange, type TreeMutation, type UpdateProxyInput, type VersionStatus } from '../shared/contracts'
+import { AppWindow, ArrowLeft, Check, ChevronDown, ChevronRight, CircleAlert, Copy, FilePlus2, FileText, FolderInput, Home, ListChecks, ListTree, Network, PanelLeft, LocateFixed, Minus, Pencil, Pin, Plus, Save, Search, Settings2, Shapes, Star, Trash2, X } from 'lucide-react'
+import { defaultPreferences, defaultUpdateProxy, windowBlurTint, windowMaterialFor, type Command, type DocumentFile, type EditorMode, type Entry, type FileKind, type Preferences, type RecoveryEntry, type Scope, type SearchHit, type TreeChange, type TreeMutation, type UpdateProxyInput, type VersionStatus } from '../shared/contracts'
 import { FileTreeRow, FilesTree, type TreeDrag, type TreeRename } from './FilesTree'
-import { SearchDialog } from './SearchDialog'
-import { Settings } from './Settings'
+import type { SettingsPage } from './Settings'
 import { PaneResize } from './PaneResize'
 import { useFileMarks } from './useFileMarks'
 import { useDocuments, type Session } from './documents'
-import { MarkdownEditor } from './editors/Markdown'
-import { OutlineEditor } from './editors/Outline'
 import type { OutlineSession } from './editors/outlineEditing'
 import type { DocumentViewPosition } from './editors/viewPosition'
 import { copyMapAppearance, discardInterruptedMapImports, initializeMapSettings, loadMapAppearance, relocateMapAppearance, saveImportedMap, styledMapPaths } from './editors/mapAppearance'
@@ -18,6 +15,10 @@ import { findTopic, type TopicLink } from './editors/mapTopicLinks'
 import { shortcutLabel, shortcutValue, type AppShortcut } from '../shared/shortcuts'
 import { MarkdownMenu, type MenuItem } from './editors/MarkdownMenu'
 
+const Settings = lazy(() => import('./Settings').then(module => ({ default: module.Settings })))
+const SearchDialog = lazy(() => import('./SearchDialog').then(module => ({ default: module.SearchDialog })))
+const MarkdownEditor = lazy(() => import('./editors/Markdown').then(module => ({ default: module.MarkdownEditor })))
+const OutlineEditor = lazy(() => import('./editors/Outline').then(module => ({ default: module.OutlineEditor })))
 const MindMapEditor = lazy(() => import('./editors/MindMap'))
 const DrawingEditor = lazy(() => import('./editors/Drawing'))
 const modes = [
@@ -65,7 +66,7 @@ export function App() {
   const [checking, setChecking] = useState(false)
   const releaseCheckInFlight = useRef(false)
   const updateInstallInFlight = useRef(false)
-  const [settingsPage, setSettingsPage] = useState<'外观' | '存储' | '快捷键' | '关于'>('外观')
+  const [settingsPage, setSettingsPage] = useState<SettingsPage>('外观')
   const [searchOpen, setSearchOpen] = useState(false)
   const [jump, setJump] = useState<{ path: string; line: number; id: number }>()
   const [mapJump, setMapJump] = useState<{ path: string; target: TopicLink }>()
@@ -80,7 +81,7 @@ export function App() {
   const [busy, setBusy] = useState(false)
   const [importing, setImporting] = useState(false)
   const importPending = useRef(false)
-  const [rename, setRename] = useState<{ session: Session; name: string }>()
+  const [rename, setRename] = useState<{ session: Session; name: string; inDocument?: boolean }>()
   const flushEditor = useRef<(() => void) | undefined>(undefined)
   const outlineSessions = useRef(new Map<string, OutlineSession>())
   const viewPositions = useRef(new Map<string, DocumentViewPosition>())
@@ -199,7 +200,11 @@ export function App() {
     document.documentElement.dataset.theme = dark ? 'dark' : 'light'
     document.documentElement.dataset.size = preferences.size
     document.documentElement.dataset.windowMaterial = windowMaterialFor(preferences, platform, windowsAcrylic, macReducesTransparency)
-    document.documentElement.style.setProperty('--window-transparency', preferences.windowTransparency + '%')
+    const tint = preferences.windowTransparent ? 1 - preferences.windowTransparency / 100 : windowBlurTint
+    document.documentElement.style.setProperty('--window-tint-opacity', String(tint))
+    document.documentElement.style.setProperty('--interface-font-size', preferences.interfaceFontSize + 'px')
+    const family = preferences.interfaceFont
+    document.documentElement.style.setProperty('--interface-font', ['system-ui', 'serif', 'monospace'].includes(family) ? family : JSON.stringify(family))
     document.documentElement.dataset.animation = preferences.animations ? 'full' : 'reduced'
     document.documentElement.dataset.documentTheme = preferences.documentTheme
   }, [dark, platform, preferences, windowsAcrylic, macReducesTransparency])
@@ -580,7 +585,10 @@ export function App() {
           const first = failed[0]
           setNotice((failed.length > 1 ? failed.length + ' 项未完成。' : '') + first.source.name + '，' + first.error)
         } else {
-          if (operation === 'rename') setRenamingEntry(undefined)
+          if (operation === 'rename') {
+            setRenamingEntry(undefined)
+            setRename(undefined)
+          }
           setPrompt(undefined)
           if (metadataFailed) setNotice('文件操作已完成，部分导图信息未能更新。')
         }
@@ -631,11 +639,29 @@ export function App() {
     })
   }
 
-  function renameActive() {
-    if (!rename) return
-    setRename(undefined)
-    relocateFile(rename.session, saved => window.desktop.rename(saved.path, rename.name, saved.version))
+  function documentName(session: Session, inDocument = false) {
+    const basename = session.name.replace(/\.[^.]+$/, '')
+    const editing = rename?.session.path === session.path && !!rename.inDocument === inDocument
+    const start = () => setRename({ session, name: basename, inDocument })
+    if (editing) return <input className="document-rename" aria-label={inDocument ? '文档标题' : '文档名称'}
+      autoFocus readOnly={busy} value={rename.name} onFocus={event => event.currentTarget.select()}
+      onChange={event => setRename({ ...rename, name: event.target.value })}
+      onBlur={() => { if (!busy) setRename(undefined) }} onKeyDown={event => {
+        if (event.nativeEvent.isComposing || busy) return
+        if (event.key === 'Escape') { event.stopPropagation(); setRename(undefined) }
+        if (event.key === 'Enter' && rename.name.trim()) {
+          event.preventDefault()
+          mutateEntries('rename', [rename.session], rename.name)
+        }
+      }} />
+    return <button className="document-name" title={session.path} aria-label={'重命名 ' + (inDocument ? basename : session.name)}
+      onDoubleClick={start} onKeyDown={event => {
+        if (event.key === 'F2' || event.key === 'Enter') { event.preventDefault(); start() }
+      }}>{inDocument ? basename : session.name}</button>
   }
+
+  const filenameTitle = active && preferences.showFilenameTitle
+    ? <h1 className="filename-title">{documentName(active, true)}</h1> : undefined
 
   function tree(entry: Entry, scope: Scope, expanded: boolean) {
     return <FilesTree key={entry.path} directory={entry} active={settings ? undefined : active?.path} {...{ revision, expanded }}
@@ -745,6 +771,11 @@ export function App() {
     setTreeMenu(current => current?.anchor === anchor ? undefined : { kind, target, x: rect.left, y: rect.bottom + 4, anchor })
   }
   const home = () => { flushEditor.current?.(); ++openIntent.current; setSettings(false); sessions.showHome() }
+  const saveStatus = active && <button type="button" className="tool-button save-status" aria-label={dirty ? '保存' : '已保存'}
+    disabled={!dirty && active.mode !== 'map'} onClick={() => commandRef.current('save')}>
+    {dirty ? <Save size={14} /> : <Check size={14} />}{dirty ? '未保存' : '已保存'}
+  </button>
+
   return <div className="window" data-platform={platform} data-sidebar={sidebar || settings}
     style={{ '--sidebar-user-width': preferences.sidebarWidth === undefined ? undefined : preferences.sidebarWidth + 'px' } as CSSProperties}>
     <header className="titlebar flex items-center">
@@ -757,22 +788,7 @@ export function App() {
           {settings ? <span>设置</span> : active
             ? <><span className="source-label">{activeScope === 'library' ? '我的文档' : '本机文件'}</span>
               <ChevronRight size={14} />
-              {rename?.session.path === active.path
-                ? <input className="document-rename" aria-label="文档名称" autoFocus value={rename.name}
-                    onFocus={event => event.currentTarget.select()} onChange={event => setRename({ ...rename, name: event.target.value })}
-                    onBlur={() => setRename(undefined)} onKeyDown={event => {
-                      if (event.nativeEvent.isComposing) return
-                      if (event.key === 'Escape') { event.stopPropagation(); setRename(undefined) }
-                      if (event.key === 'Enter') renameActive()
-                    }} />
-                : <button className="document-name" title={active.path} aria-label={'重命名 ' + active.name}
-                    onDoubleClick={() => setRename({ session: active, name: active.name.replace(/\.[^.]+$/, '') })}
-                    onKeyDown={event => {
-                      if (event.key === 'F2' || event.key === 'Enter') {
-                        event.preventDefault()
-                        setRename({ session: active, name: active.name.replace(/\.[^.]+$/, '') })
-                      }
-                    }}>{active.name}</button>}
+              {documentName(active)}
               {dirty && <span className="unsaved-dot" title="未保存" />}</>
             : <strong>Ymd</strong>}
         </div>
@@ -783,9 +799,6 @@ export function App() {
         </div>}
         <div className="title-actions ml-auto flex items-center gap-1">
           {!settings && <>
-            {active && <IconButton label={dirty ? '保存' : '已保存'} click={() => commandRef.current('save')} disabled={!dirty && active.mode !== 'map'}>
-              {dirty ? <Save size={17} /> : <Check size={17} />}
-            </IconButton>}
             {active && <IconButton label="在文件管理器中显示" click={() => run(() => window.desktop.reveal(active.path))}><LocateFixed size={16} /></IconButton>}
             <IconButton label="搜索文档" click={() => commandRef.current('search')}><Search size={18} /></IconButton>
           </>}
@@ -793,7 +806,7 @@ export function App() {
       </div>
     </header>
     <div className="window-body">
-      {settings ? <Settings initialPage={settingsPage} {...{ preferences, platform, library, windowsAcrylic, macReducesTransparency, version, release, checking }}
+      {settings ? <Suspense fallback={<div className="startup">正在加载设置…</div>}><Settings initialPage={settingsPage} {...{ preferences, platform, library, windowsAcrylic, macReducesTransparency, version, release, checking }}
         defaultStickerDirectory={defaultStickerDirectory}
         onStorageChange={(kind, reset) => run(() => window.desktop.changeStorageDirectory(kind, reset))}
         onOpenStorage={kind => run(() => window.desktop.openStorageDirectory(kind))}
@@ -802,13 +815,15 @@ export function App() {
         onInstallUpdate={() => requestClose(undefined, true)} updateProxy={updateProxy} onSaveUpdateProxy={saveUpdateProxy}
         onOpenRelease={url => run(() => window.desktop.openExternal(url))}
         onOpenDirectory={() => run(() => window.desktop.openLibraryDirectory())}
-        onChange={updatePreferences} /> : <>
+        onChange={updatePreferences} /></Suspense> : <>
         {sidebar && <aside className="sidebar">
           <div className="sidebar-scroll">
             {markedSection('置顶', marks.pinned, Pin)}
             {markedSection('收藏', marks.starred, Star)}
             <section>
-              <div className="section-heading"><h2>我的文档</h2>
+              <div className="section-heading"><h2><button type="button" className="section-toggle" aria-expanded={!preferences.libraryCollapsed} aria-controls="library-section-files"
+                onClick={() => updatePreferences({ libraryCollapsed: !preferences.libraryCollapsed })}>
+                {preferences.libraryCollapsed ? <ChevronRight size={13} /> : <ChevronDown size={13} />}我的文档</button></h2>
                 <div className="section-actions">
                   {batch ? <>
                     <button className="icon-button" type="button" aria-label="全选我的文档" title="全选" onClick={() => run(async () => {
@@ -823,31 +838,33 @@ export function App() {
                   </>}
                 </div>
               </div>
-              {tree(library, 'library', true)}
+              <div id="library-section-files">{!preferences.libraryCollapsed && tree(library, 'library', true)}</div>
             </section>
             <section>
-              <div className="section-heading"><h2>本机文件</h2>
+              <div className="section-heading"><h2><button type="button" className="section-toggle" aria-expanded={!preferences.localCollapsed} aria-controls="local-section-files"
+                onClick={() => updatePreferences({ localCollapsed: !preferences.localCollapsed })}>
+                {preferences.localCollapsed ? <ChevronRight size={13} /> : <ChevronDown size={13} />}本机文件</button></h2>
                 <div className="section-actions">
                 <IconButton label="清空本机文件" click={() => setPrompt({ type: 'clear-recent' })} disabled={!local.length}><Trash2 size={16} /></IconButton>
                 <button className="icon-button" type="button" aria-label="添加本机文件或文件夹" title="打开" aria-haspopup="menu"
                   onClick={event => menuAt(event, 'open')}><Plus size={17} /></button>
                 </div>
               </div>
-              {local.length ? local.map(entry => entry.kind === 'directory' ? tree(entry, 'local', false) :
+              <div id="local-section-files">{!preferences.localCollapsed && (local.length ? local.map(entry => entry.kind === 'directory' ? tree(entry, 'local', false) :
                 <FileTreeRow key={entry.path} entry={entry} depth={0} selected={active?.path === entry.path}
                   rename={treeRename?.path === entry.path ? treeRename : undefined}
                   reorderable drag={!busy ? treeDrag : undefined} onRemove={() => removeLocalEntry(entry)}
                   onDelete={busy ? undefined : () => mutateEntries('trash', [entry])}
                   onClick={() => openPath(entry.path, 'local')}
                   onMenu={(x, y) => setTreeMenu({ kind: 'entry', target: entry, x, y, recent: true })} />)
-                : <button className="tree-row subtle" onClick={event => menuAt(event, 'open')}><FileText size={17} /><span>打开本机文件或文件夹…</span></button>}
+                : <button className="tree-row subtle" onClick={event => menuAt(event, 'open')}><FileText size={17} /><span>打开本机文件或文件夹…</span></button>)}</div>
             </section>
           </div>
           {batch && <div className="tree-batch-actions" aria-label="批量操作">
             <small>{chosen.length} 项</small>
             {batchItems.map(item => <IconButton key={item.label} label={item.label} click={item.run!} disabled={item.disabled || busy}>{item.icon}</IconButton>)}
           </div>}
-          {release?.update && <button className="tree-row" onClick={() => { setSettingsPage('关于'); setSettings(true) }}>
+          {release?.update && <button className="tree-row" onClick={() => { setSettingsPage('应用更新'); setSettings(true) }}>
             <CircleAlert size={16} /><span>可更新至 {release.update.version}</span>
           </button>}
           <button className="tree-row sidebar-footer" onClick={() => commandRef.current('preferences')}><Settings2 size={18} /><span>设置</span></button>
@@ -894,7 +911,7 @@ export function App() {
                 reveal={() => run(() => window.desktop.reveal(active.path))} />
               : active.mode === 'markdown'
                 ? <MarkdownEditor key={active.path + ':' + active.reload} text={active.text} name={active.name} path={active.path} modified={active.modified} platform={platform} remoteImages={preferences.remoteImages} keyOverrides={preferences.shortcuts} position={position!}
-                  outline={preferences.markdownOutline}
+                  outline={preferences.markdownOutline} filenameTitle={filenameTitle} saveStatus={saveStatus}
                   width={preferences.markdownPageWidth} codeBlocks={preferences.codeBlocks} setWidth={markdownPageWidth => updatePreferences({ markdownPageWidth })}
                   updateOutline={patch => updatePreferences({ markdownOutline: { ...lastPreferences.current.markdownOutline, ...patch } })}
                   searchEngine={preferences.searchEngine} registerFlush={registerFlush}
@@ -924,7 +941,7 @@ export function App() {
                   })} />
                 : active.mode === 'outline'
                   ? <OutlineEditor key={active.path + ':' + active.reload} text={active.text} name={active.name} path={active.path} position={position!}
-                    platform={platform} remoteImages={preferences.remoteImages} sessions={outlineSessions.current} onChange={edit}
+                    filenameTitle={filenameTitle} platform={platform} remoteImages={preferences.remoteImages} sessions={outlineSessions.current} onChange={edit}
                     width={preferences.outlinePageWidth} setWidth={outlinePageWidth => updatePreferences({ outlinePageWidth })}
                     remainderVisible={preferences.outlineRemainderVisible} setRemainderVisible={outlineRemainderVisible => updatePreferences({ outlineRemainderVisible })} />
                   : <MindMapEditor key={active.path + ':' + active.reload} text={active.text} name={active.name} path={active.path} dark={dark} onChange={edit} find={find} position={position!}
@@ -939,6 +956,7 @@ export function App() {
                     entryJump={mapJump?.path === active.path ? mapJump.target : undefined}
                     linkDocuments={sessions.documents.filter(document => document.kind === 'markdown' && document.path !== active.path)} />}
           </Suspense>}
+          {active && (active.kind === 'drawing' || active.mode !== 'markdown') && <footer className="document-status">{saveStatus}</footer>}
         </main>
       </>}
     </div>
@@ -951,7 +969,7 @@ export function App() {
       </div>}
     {treeMenu && !settings && <MarkdownMenu key={treeMenu.kind + ':' + (treeMenu.target?.path ?? '')}
       items={treeItems} close={() => setTreeMenu(undefined)} point={treeMenu} anchor={treeMenu.anchor} nativeStyle />}
-    {searchOpen && <SearchDialog documents={sessions.documents} onOpen={openFromSearch} onClose={() => setSearchOpen(false)} />}
+    {searchOpen && <Suspense fallback={null}><SearchDialog documents={sessions.documents} onOpen={openFromSearch} onClose={() => setSearchOpen(false)} /></Suspense>}
     <dialog ref={modal} onCancel={event => { event.preventDefault(); if (!busy) dismissPrompt() }} onClose={() => setNotice('')}>
       {prompt?.type === 'clear-recent' && <div>
         <h2>清空本机文件</h2><p>从侧栏移除列表记录。磁盘文件和仍在窗口中打开的文档及其文件夹会保留。</p>

@@ -1,8 +1,9 @@
 import type { DelimiterType, MarkdownConfig } from '@lezer/markdown'
-import { colorOpening } from './outlineTextStyle'
+import { colorOpening, highlightOpening, numberOpening } from './outlineTextStyle'
 
 const highlight: DelimiterType = { resolve: 'Highlight', mark: 'HighlightMark' }
 const underline: DelimiterType = { resolve: 'Underline', mark: 'UnderlineMark' }
+const highlightColor: DelimiterType = { resolve: 'HighlightColor', mark: 'HighlightColorMark' }
 const textColor: DelimiterType = { resolve: 'TextColor', mark: 'TextColorMark' }
 
 export const footnoteDefinition = /^\[\^([^\]\s]+)\]:[ \t]*/
@@ -17,7 +18,7 @@ export function markdownBody(source: string) {
 }
 
 export const typoraMarkdown: MarkdownConfig = {
-  defineNodes: ['Highlight', 'HighlightMark', 'Underline', 'UnderlineMark', 'TextColor', 'TextColorMark', 'FootnoteReference',
+  defineNodes: ['Highlight', 'HighlightMark', 'Underline', 'UnderlineMark', 'TextColor', 'TextColorMark', 'HighlightColor', 'HighlightColorMark', 'FootnoteReference',
     { name: 'FootnoteDefinition', block: true }],
   parseBlock: [{
     name: 'FootnoteDefinition',
@@ -67,10 +68,13 @@ export const typoraMarkdown: MarkdownConfig = {
     before: 'HTMLTag',
     parse(context, next, pos) {
       if (next !== 60) return -1
-      const tag = context.slice(pos, Math.min(context.end, pos + 34))
-      const open = colorOpening.exec(tag)
-      if (open) return context.addDelimiter(textColor, pos, pos + open[0].length, true, false)
+      const tag = context.slice(pos, Math.min(context.end, pos + 40))
+      const color = colorOpening.exec(tag) ?? numberOpening.exec(tag)
+      if (color) return context.addDelimiter(textColor, pos, pos + color[0].length, true, false)
       if (tag.startsWith('</span>')) return context.addDelimiter(textColor, pos, pos + 7, false, true)
+      const mark = highlightOpening.exec(tag)
+      if (mark) return context.addDelimiter(highlightColor, pos, pos + mark[0].length, true, false)
+      if (tag.startsWith('</mark>')) return context.addDelimiter(highlightColor, pos, pos + 7, false, true)
       return -1
     },
   }],

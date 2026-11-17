@@ -1,5 +1,6 @@
 import { useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
-import { BetweenHorizontalStart, Check, ChevronsLeft, ChevronsRight, Code2, Copy, Eye, FileDown, FileText, FolderInput, Info, Keyboard, ListTree, LocateFixed, MoreHorizontal, Pin, Printer, Search, Star, Trash2 } from 'lucide-react'
+import { createPortal } from 'react-dom'
+import { BetweenHorizontalStart, Check, Code2, Copy, Eye, FileDown, FileText, FolderInput, Info, Keyboard, ListTree, LocateFixed, MoreHorizontal, Pin, Printer, Search, Star, Trash2 } from 'lucide-react'
 import { MarkdownMenu, type MenuItem } from './MarkdownMenu'
 import { contextItems, insertMermaid, tabInList, typographyKeys } from './markdownCommands'
 import { markdownPlainText } from './markdownHtml'
@@ -8,6 +9,7 @@ import { MediaViewer } from './MediaViewer'
 import { mediaPreviewEvent, type MediaPreview } from './mediaPreview'
 import { MarkdownImageSize } from './MarkdownImageSize'
 import { codeBlockPreferences, renderedBlocks } from './renderedBlocks'
+import { TableSizeGrid } from './TableSizeGrid'
 import { insertTable, markdownTable } from './markdownTable'
 import { expandMetadata, FootnoteReference, footnotes, insertFootnote, insertMetadata, markdownNotes, markdownWithMetadata, referenceNote } from './markdownNotes'
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands'
@@ -15,19 +17,25 @@ import { markdownKeymap } from '@codemirror/lang-markdown'
 import { ensureSyntaxTree, indentUnit, syntaxHighlighting, syntaxTree } from '@codemirror/language'
 import { openSearchPanel, search, searchKeymap } from '@codemirror/search'
 import { Compartment, EditorState, Prec, type Range } from '@codemirror/state'
-import { Decoration, drawSelection, EditorView, highlightSpecialChars, keymap, ViewPlugin, WidgetType, type DecorationSet, type ViewUpdate } from '@codemirror/view'
+import { Decoration, EditorView, highlightSpecialChars, keymap, ViewPlugin, WidgetType, type DecorationSet, type ViewUpdate } from '@codemirror/view'
 import { classHighlighter } from '@lezer/highlight'
 import { markdownPageWidths, type CodeBlockPreferences, type ContextMenuItem, type MarkdownOutlinePreferences, type MarkdownPageWidth, type SearchEngine } from '../../shared/contracts'
 import type { DocumentViewPosition } from './viewPosition'
-import { colorOpening } from './outlineTextStyle'
+import { colorOpening, highlightOpening, numberOpening } from './outlineTextStyle'
 import type { ShortcutOverrides } from '../../shared/shortcuts'
 import { PaneResize } from '../PaneResize'
+
+class DocumentTitle extends WidgetType {
+  constructor(readonly element: HTMLElement) { super() }
+  eq(widget: DocumentTitle) { return widget.element === this.element }
+  toDOM() { return this.element }
+}
 
 const inlineStyles: Record<string, string> = {
   StrongEmphasis: 'md-bold', Emphasis: 'md-italic', Strikethrough: 'md-strike',
   InlineCode: 'md-inline-code', Highlight: 'md-highlight', Underline: 'md-underline', Link: 'md-link', Autolink: 'md-link',
 }
-const markers = new Set(['HeaderMark', 'EmphasisMark', 'StrikethroughMark', 'CodeMark', 'QuoteMark', 'HighlightMark', 'UnderlineMark', 'TextColorMark'])
+const markers = new Set(['HeaderMark', 'EmphasisMark', 'StrikethroughMark', 'CodeMark', 'QuoteMark', 'HighlightMark', 'UnderlineMark', 'TextColorMark', 'HighlightColorMark'])
 
 class TaskBox extends WidgetType {
   constructor(readonly position: number, readonly checked: boolean, readonly readOnly: boolean) { super() }
@@ -78,9 +86,12 @@ function liveMarkdown(view: EditorView, path: string, loadRemote: boolean) {
       const heading = /^(?:ATX|Setext)Heading([1-6])$/.exec(name)
       const css = inlineStyles[name]
       if (css) mark(from, to, css)
-      if (name === 'TextColor') {
-        const color = colorOpening.exec(state.sliceDoc(from, Math.min(from + 34, to)))?.[1]
-        if (color) mark(from, to, 'ymd-text-' + color)
+      if (name === 'TextColor' || name === 'HighlightColor') {
+        const highlight = name === 'HighlightColor'
+        const opening = state.sliceDoc(from, Math.min(from + 40, to))
+        const color = (highlight ? highlightOpening : colorOpening).exec(opening)?.[1]
+        if (color) mark(from, to, (highlight ? 'ymd-highlight-' : 'ymd-text-') + color)
+        else if (!highlight && numberOpening.test(opening)) mark(from, to, 'ymd-outline-number')
       }
       if (heading) {
         line(sourceLine.from, 'md-heading md-h' + heading[1])
@@ -125,7 +136,7 @@ function liveMarkdown(view: EditorView, path: string, loadRemote: boolean) {
         }
       }
       if (markers.has(name) && parent && parent.name !== 'FencedCode') {
-        const inline = ['StrongEmphasis', 'Emphasis', 'Strikethrough', 'InlineCode', 'Highlight', 'Underline', 'TextColor'].includes(parent.name)
+        const inline = ['StrongEmphasis', 'Emphasis', 'Strikethrough', 'InlineCode', 'Highlight', 'Underline', 'TextColor', 'HighlightColor'].includes(parent.name)
         if (inline ? visible(parent.from, parent.to) : activeLine(from)) return
         const end = name === 'HeaderMark' || name === 'QuoteMark'
           ? to + (state.sliceDoc(to, Math.min(state.doc.length, to + 1)) === ' ' ? 1 : 0) : to
@@ -174,6 +185,8 @@ interface Props {
   remoteImages: boolean
   searchEngine: SearchEngine
   keyOverrides: ShortcutOverrides
+  filenameTitle?: React.ReactNode
+  saveStatus?: React.ReactNode
   outline: MarkdownOutlinePreferences
   width: MarkdownPageWidth
   codeBlocks: CodeBlockPreferences
@@ -198,8 +211,14 @@ interface Props {
   report: (error: unknown) => void
 }
 
-export function MarkdownEditor({ text, name, path, modified, platform, remoteImages, searchEngine, keyOverrides, outline, updateOutline, width, codeBlocks, setWidth, registerFlush, onChange, find, jump, reveal, saveCopy, duplicate, move, trash, shortcuts, exportPdf, printDocument, pinned, starred, togglePin, toggleStar, report, position }: Props) {
+export function MarkdownEditor({ text, name, path, modified, platform, remoteImages, searchEngine, keyOverrides, outline, filenameTitle, saveStatus, updateOutline, width, codeBlocks, setWidth, registerFlush, onChange, find, jump, reveal, saveCopy, duplicate, move, trash, shortcuts, exportPdf, printDocument, pinned, starred, togglePin, toggleStar, report, position }: Props) {
   const host = useRef<HTMLDivElement>(null)
+  const [titleHost] = useState(() => document.createElement('div'))
+  const titleMode = useRef(new Compartment())
+  const hasTitle = !!filenameTitle
+  const titleExtension = useMemo(() => hasTitle ? EditorView.decorations.of(Decoration.set([
+    Decoration.widget({ widget: new DocumentTitle(titleHost), block: true, side: -1 }).range(0),
+  ])) : [], [hasTitle, titleHost])
   const [media, setMedia] = useState<MediaPreview>()
   useEffect(() => {
     const element = host.current!
@@ -222,10 +241,10 @@ export function MarkdownEditor({ text, name, path, modified, platform, remoteIma
   const [imageResize, setImageResize] = useState<ImageResizeRequest>()
   const infoDialog = useRef<HTMLDialogElement>(null)
   const tableDialog = useRef<HTMLDialogElement>(null)
+  const [tableOpen, setTableOpen] = useState(false)
   const [tableRows, setTableRows] = useState('3')
   const [tableColumns, setTableColumns] = useState('2')
   const [tableHover, setTableHover] = useState<{ rows: number; columns: number }>()
-  const outlineTrigger = useRef<HTMLButtonElement>(null)
   const numberingTrigger = useRef<HTMLButtonElement>(null)
   const [numberingPoint, setNumberingPoint] = useState<{ x: number; y: number }>()
   const readMode = useRef(new Compartment())
@@ -235,6 +254,7 @@ export function MarkdownEditor({ text, name, path, modified, platform, remoteIma
   const showTable = () => {
     setTableHover(undefined)
     tableDialog.current?.showModal()
+    setTableOpen(true)
   }
   const addTable = (rows: number, columns: number) => {
     if (!view.current || !Number.isInteger(rows) || rows < 1 || rows > 100 ||
@@ -260,7 +280,7 @@ export function MarkdownEditor({ text, name, path, modified, platform, remoteIma
         doc,
         selection: sameText ? { anchor: previous.anchor, head: previous.head } : undefined,
         extensions: [
-          highlightSpecialChars(), history(), drawSelection(), keymap.of([...defaultKeymap.filter(binding =>
+          highlightSpecialChars(), history(), keymap.of([...defaultKeymap.filter(binding =>
             !['Mod-i', 'Mod-[', 'Mod-]'].includes(binding.key ?? '') && (platform === 'darwin' || binding.key !== 'Shift-Mod-k')), ...historyKeymap]),
           EditorView.lineWrapping, markdownWithMetadata, syntaxHighlighting(classHighlighter), indentUnit.of('  '), footnotes, keyMode.current.of(writingKeys()),
           search({ top: true }), Prec.high(keymap.of([{ key: 'Enter', run: expandMetadata },
@@ -269,7 +289,7 @@ export function MarkdownEditor({ text, name, path, modified, platform, remoteIma
           EditorView.contentAttributes.of({ 'aria-label': 'Markdown 编辑器', spellcheck: 'false' }),
           markdownImageIntake(path, report),
           renderMode.current.of(sourceMode.current ? [] : [live(path, remoteImages), codeBlockPreferences.of(codeBlocks), renderedBlocks, markdownTable, markdownNotes]),
-          readMode.current.of([]),
+          readMode.current.of([]), titleMode.current.of(titleExtension),
           EditorView.updateListener.of(update => {
             if (update.docChanged) change.current(bom + update.state.doc.toString().replaceAll('\n', newline))
           }),
@@ -286,6 +306,10 @@ export function MarkdownEditor({ text, name, path, modified, platform, remoteIma
       view.current = null
     }
   }, [])
+
+  useLayoutEffect(() => {
+    view.current?.dispatch({ effects: titleMode.current.reconfigure(titleExtension) })
+  }, [titleExtension])
 
   useEffect(() => {
     view.current?.dispatch({ effects: keyMode.current.reconfigure(writingKeys()) })
@@ -324,12 +348,20 @@ export function MarkdownEditor({ text, name, path, modified, platform, remoteIma
   const close = () => setMenu(undefined)
   const toggleMenu = (value: OpenMenu) => setMenu(current => current === value ? undefined : value)
   const statisticsText = useDeferredValue(text)
-  const characters = useMemo(() => markdownPlainText(statisticsText)
-    .replace(/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/gu, ' $& ')
-    .match(/[\p{L}\p{N}]+(?:[.'’_-][\p{L}\p{N}]+)*|[^\u0000-\u007f\s]/gu)?.length ?? 0, [statisticsText])
-  const lineCount = text.split(/\r\n|\n|\r/).length
+  const [characters, setCharacters] = useState<number>()
+  useEffect(() => {
+    if (status !== 'words' && !info) return
+    const idle = window.requestIdleCallback(() => {
+      const words = markdownPlainText(statisticsText)
+        .replace(/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/gu, ' $& ')
+        .match(/[\p{L}\p{N}]+(?:[.'’_-][\p{L}\p{N}]+)*|[^\u0000-\u007f\s]/gu)?.length ?? 0
+      setCharacters(words)
+    }, { timeout: 800 })
+    return () => window.cancelIdleCallback(idle)
+  }, [statisticsText, status, info])
+  const lineCount = view.current?.state.doc.lines ?? 1
   const updateTime = new Intl.DateTimeFormat('zh-CN', { dateStyle: 'short', timeStyle: 'short' }).format(modified)
-  const statusText = status === 'words' ? `${characters} 字` : status === 'lines' ? `${lineCount} 行` : updateTime
+  const statusText = status === 'words' ? `${characters ?? '…'} 字` : status === 'lines' ? `${lineCount} 行` : updateTime
   useEffect(() => {
     const state = view.current?.state
     if (!outline.visible || !state) return
@@ -350,7 +382,7 @@ export function MarkdownEditor({ text, name, path, modified, platform, remoteIma
       } })
       setHeadings(next)
     }
-    update()
+    pending = window.setTimeout(update, 66)
     return () => window.clearTimeout(pending)
   }, [text, outline.visible])
   const numberedHeadings = useMemo(() => {
@@ -422,15 +454,6 @@ export function MarkdownEditor({ text, name, path, modified, platform, remoteIma
   }
 
   return <div className="markdown-editor" data-source={source} data-width={width}>
-    <div className="editor-tools">
-      <button ref={outlineTrigger} className="icon-button" title="文档目录" aria-label="文档目录" aria-controls="markdown-outline"
-        aria-expanded={outline.visible} onClick={() => { close(); updateOutline({ visible: !outline.visible }) }}><ListTree size={17} /></button>
-      <div className="menu-anchor">
-        <button className="icon-button" title="更多操作" aria-label="更多操作" aria-haspopup="menu" aria-expanded={menu === 'more'}
-          onClick={() => toggleMenu('more')}><MoreHorizontal size={20} /></button>
-        {menu === 'more' && <MarkdownMenu items={docItems} close={close} />}
-      </div>
-    </div>
     <div className="document-editing" data-outline={outline.visible ? outline.position : undefined}
       style={{ '--outline-user-width': outline.width === undefined ? undefined : outline.width + 'px' } as CSSProperties}>
       {outline.visible && <aside id="markdown-outline" className="document-outline" aria-label="Markdown 标题目录">
@@ -441,11 +464,6 @@ export function MarkdownEditor({ text, name, path, modified, platform, remoteIma
               setNumberingPoint({ x: rect.left, y: rect.bottom + 4 })
               toggleMenu('outline-numbering')
             }}><Eye size={16} /></button>
-          <button className="icon-button" title="收起目录" aria-label="收起目录" onClick={() => {
-            close()
-            updateOutline({ visible: false })
-            outlineTrigger.current?.focus()
-          }}>{outline.position === 'left' ? <ChevronsLeft size={16} /> : <ChevronsRight size={16} />}</button>
         </div></header>
         {menu === 'outline-numbering' && numberingPoint && <MarkdownMenu items={outlineItems} close={close}
           point={numberingPoint} anchor={numberingTrigger.current ?? undefined} />}
@@ -459,69 +477,77 @@ export function MarkdownEditor({ text, name, path, modified, platform, remoteIma
         {!headings.length && <p>还没有标题</p>}
         <PaneResize pane="outline" side={outline.position} apply={width => updateOutline({ width })} />
       </aside>}
-      <div className="markdown-surface" ref={host} onClick={event => {
-        if (event.defaultPrevented) return
-        if ((!event.metaKey && !event.ctrlKey) || !view.current) return
-        const editor = view.current
-        const pos = editor.posAtCoords({ x: event.clientX, y: event.clientY })
-        if (pos === null) return
-        let node = syntaxTree(editor.state).resolveInner(pos, -1)
-        while (node.parent && !['Link', 'Autolink'].includes(node.name)) node = node.parent
-        const url = node.getChild('URL')
-        if (url) {
+      <div className="markdown-main">
+        <div className="editor-tools">
+          <button className="icon-button" title="文档目录" aria-label="文档目录" aria-controls="markdown-outline"
+            aria-expanded={outline.visible} onClick={() => { close(); updateOutline({ visible: !outline.visible }) }}><ListTree size={17} /></button>
+          <div className="menu-anchor">
+            <button className="icon-button" title="更多操作" aria-label="更多操作" aria-haspopup="menu" aria-expanded={menu === 'more'}
+              onClick={() => toggleMenu('more')}><MoreHorizontal size={20} /></button>
+            {menu === 'more' && <MarkdownMenu items={docItems} close={close} />}
+          </div>
+        </div>
+        {hasTitle && createPortal(filenameTitle, titleHost)}
+        <div className="markdown-surface" ref={host} onClick={event => {
+          if (event.defaultPrevented || event.target instanceof Element && event.target.closest('.filename-title')) return
+          if ((!event.metaKey && !event.ctrlKey) || !view.current) return
+          const editor = view.current
+          const pos = editor.posAtCoords({ x: event.clientX, y: event.clientY })
+          if (pos === null) return
+          let node = syntaxTree(editor.state).resolveInner(pos, -1)
+          while (node.parent && !['Link', 'Autolink'].includes(node.name)) node = node.parent
+          const url = node.getChild('URL')
+          if (url) {
+            event.preventDefault()
+            void window.desktop.openExternal(editor.state.sliceDoc(url.from, url.to).replace(/^<|>$/g, '')).catch(report)
+          }
+        }} onDoubleClick={event => {
+          const editor = view.current
+          if (editor && event.target instanceof Element && editImageReference(editor, event.target)) event.preventDefault()
+        }} onContextMenu={event => {
+          if (event.target instanceof Element && event.target.closest('.filename-title')) return
+          const editor = view.current
+          if (!editor) return
           event.preventDefault()
-          void window.desktop.openExternal(editor.state.sliceDoc(url.from, url.to).replace(/^<|>$/g, '')).catch(report)
-        }
-      }} onDoubleClick={event => {
-        const editor = view.current
-        if (editor && event.target instanceof Element && editImageReference(editor, event.target)) event.preventDefault()
-      }} onContextMenu={event => {
-        const editor = view.current
-        if (!editor) return
-        event.preventDefault()
-        close()
-        const imageItems = event.target instanceof Element ? imageContextItems(editor, event.target, report, setImageResize) : undefined
-        if (imageItems) {
-          openContextMenu(editor, event.clientX, event.clientY, imageItems)
-          return
-        }
-        const pos = editor.posAtCoords({ x: event.clientX, y: event.clientY })
-        const selection = editor.state.selection.main
-        if (pos !== null && (pos < selection.from || pos > selection.to)) editor.dispatch({ selection: { anchor: pos } })
-        const items = contextItems(editor, platform, path, report, reading, searchEngine, keyOverrides, showTable)
-        openContextMenu(editor, event.clientX, event.clientY, items)
-      }} />
+          close()
+          const imageItems = event.target instanceof Element ? imageContextItems(editor, event.target, report, setImageResize) : undefined
+          if (imageItems) {
+            openContextMenu(editor, event.clientX, event.clientY, imageItems)
+            return
+          }
+          const pos = editor.posAtCoords({ x: event.clientX, y: event.clientY })
+          const selection = editor.state.selection.main
+          if (pos !== null && (pos < selection.from || pos > selection.to)) editor.dispatch({ selection: { anchor: pos } })
+          const items = contextItems(editor, platform, path, report, reading, searchEngine, keyOverrides, showTable)
+          openContextMenu(editor, event.clientX, event.clientY, items)
+        }} />
+      </div>
     </div>
     <footer className="document-status">
       <div className="menu-anchor">
         <button className="tool-button" aria-haspopup="menu" aria-expanded={menu === 'status'} title="切换文档统计" onClick={() => toggleMenu('status')}>{statusText}</button>
         {menu === 'status' && <MarkdownMenu items={statusItems} close={close} upward />}
       </div>
+      {saveStatus}
     </footer>
     {media && <MediaViewer request={media} close={() => setMedia(undefined)} />}
     {imageResize && <MarkdownImageSize request={imageResize} close={() => setImageResize(undefined)} />}
-    <dialog ref={tableDialog} aria-label="插入表格">
+    <dialog ref={tableDialog} aria-label="插入表格" onClose={() => setTableOpen(false)}>
       <form onSubmit={event => {
         event.preventDefault()
         addTable(Number(tableRows), Number(tableColumns))
       }}>
         <h2>插入表格</h2>
         <div className="table-dimensions">
-          <label>行数（含表头）<input name="rows" type="number" min="1" max="100" value={tableHover?.rows ?? tableRows} required autoFocus
-            onChange={event => { setTableHover(undefined); setTableRows(event.target.value) }} /></label>
-          <label>列数<input name="columns" type="number" min="1" max="30" value={tableHover?.columns ?? tableColumns} required
-            onChange={event => { setTableHover(undefined); setTableColumns(event.target.value) }} /></label>
+          <span>行 × 列</span>
+          <input name="rows" aria-label="行数（含表头）" type="number" min="1" max="100" value={tableHover?.rows ?? tableRows} required
+            onChange={event => { setTableHover(undefined); setTableRows(event.target.value) }} />
+          <span aria-hidden="true">×</span>
+          <input name="columns" aria-label="列数" type="number" min="1" max="30" value={tableHover?.columns ?? tableColumns} required
+            onChange={event => { setTableHover(undefined); setTableColumns(event.target.value) }} />
         </div>
-        <div className="table-size-grid" aria-label="用鼠标选择表格大小" onPointerLeave={() => setTableHover(undefined)}>
-          {Array.from({ length: 80 }, (_, index) => {
-            const rows = Math.floor(index / 10) + 1
-            const columns = index % 10 + 1
-            const selected = rows <= (tableHover?.rows ?? Number(tableRows)) && columns <= (tableHover?.columns ?? Number(tableColumns))
-            return <button key={index} type="button" tabIndex={-1} aria-label={rows + ' 行 ' + columns + ' 列'}
-              title={rows + ' 行 ' + columns + ' 列'} data-selected={selected}
-              onPointerEnter={() => setTableHover({ rows, columns })} onClick={() => addTable(rows, columns)} />
-          })}
-        </div>
+        {tableOpen && <TableSizeGrid size={{ rows: Number(tableRows), columns: Number(tableColumns) }} selection={tableHover}
+          preview={setTableHover} insert={addTable} />}
         <footer>
           <button type="button" onClick={() => tableDialog.current?.close()}>取消</button>
           <button type="submit" className="primary">插入</button>
@@ -533,7 +559,7 @@ export function MarkdownEditor({ text, name, path, modified, platform, remoteIma
       <dl className="document-info">
         <dt>名称</dt><dd>{name}</dd>
         <dt>位置</dt><dd>{path}</dd>
-        <dt>统计</dt><dd>{characters} 字 · {lineCount} 行</dd>
+        <dt>统计</dt><dd>{characters ?? '…'} 字 · {lineCount} 行</dd>
         <dt>更新</dt><dd>{updateTime}</dd>
       </dl>
       <footer><button type="button" onClick={() => setInfo(false)}><Check size={14} />完成</button></footer>

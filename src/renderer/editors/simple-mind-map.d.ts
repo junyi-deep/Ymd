@@ -4,9 +4,19 @@ declare module 'simple-mind-map' {
     children?: NodeData[]
   }
 
+  interface MapText {
+    node: import('@svgdotjs/svg.js').G
+    width: number
+    height: number
+  }
+
   export interface MapNode {
+    mindMap: MindMap
+    _textData: MapText
+    createTextNode(text?: string): MapText
+    createRichTextNode(html: string): MapText
     opt: { ymdNumberText?: string }
-    style: { text(node: import('@svgdotjs/svg.js').Text): void }
+    style: { text(node: import('@svgdotjs/svg.js').Text): void; merge(property: string): unknown }
     isRoot: boolean
     uid: string
     isGeneralization?: boolean
@@ -56,6 +66,7 @@ declare module 'simple-mind-map' {
   }
 
   type MapEvents = {
+    before_show_text_edit: []
     data_change: [data: NodeData | undefined]
     afterExecCommand: [command: string]
     node_active: [node: MapNode | null, active: MapNode[]]
@@ -88,7 +99,16 @@ declare module 'simple-mind-map' {
       renderTree: NodeData
       layout: MapLayout
       activeNodeList: MapNode[]
-      textEdit: { hideEditTextBox(): void }
+      textEdit: {
+        textEditNode: HTMLElement | null
+        show(options: { node: MapNode; isFromKeyDown?: boolean }): Promise<void>
+        textNodePaddingX: number
+        textNodePaddingY: number
+        getCurrentEditNode(): MapNode | null
+        isShowTextEdit(): boolean
+        emitTextChangeEvent(): void
+        hideEditTextBox(): void
+      }
       findNodeByUid(uid: string): MapNode | undefined
       expandToNodeUid(uid: string, callback: () => void): void
       moveNodeToCenter(node: MapNode, resetScale?: boolean): void
@@ -99,12 +119,6 @@ declare module 'simple-mind-map' {
       enlarge(): void; narrow(): void; fit(): void; reset(): void; translateXY(x: number, y: number): void
       getTransformData(): { transform: Record<string, number>; state: { scale: number; x: number; y: number; sx: number; sy: number } }
       setTransformData(view: ReturnType<MindMap['view']['getTransformData']>): void
-    }
-    miniMap: {
-      calculationMiniMap(width: number, height: number): { svgHTML: string; viewBoxStyle: Record<string, string> }
-      onViewBoxMousedown(event: { clientX: number; clientY: number }): void
-      onViewBoxMousemove(event: { clientX: number; clientY: number }): void
-      onMouseup(): void
     }
     associativeLine: { isCreatingLine: boolean; createLineFromActiveNode(): void; cancelCreateLine(): void }
     search: { mindMap: MindMap; doSearch(): void; search(text: string): void; endSearch(): void; searchNext(): void; jump(index: number): void; replace(text: string, jumpNext?: boolean): void; replaceAll(text: string): void }
@@ -120,6 +134,8 @@ declare module 'simple-mind-map' {
       defaultInsertBelowSecondLevelNodeText?: string
       beforeAssociativeLineConnection?: () => boolean
       customHyperlinkJump?: (link: string) => void
+      openRealtimeRenderOnNodeTextEdit?: boolean
+      createNodePrefixContent?: (node: MapNode) => undefined
       createNodePostfixContent?: (node: MapNode) => { el: HTMLElement; width: number; height: number } | undefined
       customCheckEnableShortcut?: (event: KeyboardEvent) => boolean
       beforeTextEdit?: (node: MapNode) => boolean

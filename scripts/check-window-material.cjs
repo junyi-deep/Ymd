@@ -83,7 +83,8 @@ async function check(window) {
   const waitMaterial = material => waitFor(snapshot, value => value.material === material && value.sidebar && value.page &&
     (!windows || value.overlay) && (window.getBackgroundColor() === '#000000') === (material !== 'solid'), `Expected ${material}`)
   const switcher = 'button[role="switch"][aria-label="透明窗口背景"]'
-  const toggle = () => evaluate(`document.querySelector('${switcher}').click()`)
+  const blur = 'button[role="switch"][aria-label="高斯模糊"]'
+  const toggle = (control = switcher) => evaluate(`document.querySelector('${control}').click()`)
   const glass = windows ? 'acrylic' : 'vibrancy'
   const before = await waitMaterial(glass)
   assert.match(before.sidebar, /^rgba\(/)
@@ -114,42 +115,49 @@ async function check(window) {
     return JSON.parse(saved).windowTransparency
   }
   assert.equal(await evaluate(`document.querySelector('${slider}').value`), '80')
-  await setTransparency(50)
-  await waitFor(snapshot, value => /^rgba\(.*0\.5\)$/.test(value.sidebar), 'Slider changes the sidebar tint')
-  await waitFor(readTransparency, value => value === 50, 'Slider setting saved')
+  const tintAlpha = (sidebar) => /^rgb\(/.test(sidebar) ? 1 : Number(/^rgba\(.+, ([\d.]+)\)$/.exec(sidebar)?.[1])
+  const expectTint = alpha => waitFor(snapshot, value => Math.abs(tintAlpha(value.sidebar) - alpha) < .005,
+    'Expected tint opacity ' + alpha)
+  const expectNative = async blurred => {
+    if (windows) assert.equal(await dwmBackdrop(window), blurred ? 3 : 1)
+    else await waitFor(() => vibrancyCalls.at(-1), value => value === (blurred ? 'hud' : null), 'Expected native blur')
+  }
   await setTransparency(100)
-  const materialAtMaximum = windows ? 'acrylic' : 'clear'
-  await waitMaterial(materialAtMaximum)
-  const maximum = await waitFor(snapshot, value => /^rgba\(.*0\)$/.test(value.sidebar), '100% removes the sidebar tint')
-  assert.match(maximum.page, /^rgb\(/)
-  assert.equal(window.getOpacity(), 1)
-  if (windows) assert.equal(await dwmBackdrop(window), 3)
-  else await waitFor(() => vibrancyCalls.at(-1), value => value === null, '100% removes native Vibrancy')
+  await expectTint(0)
+  await waitMaterial(glass)
+  await expectNative(true)
+  await toggle(blur)
+  await waitMaterial('clear')
+  await expectNative(false)
+  for (const transparency of [0, 20, 50, 80, 91, 99]) {
+    await setTransparency(transparency)
+    await waitFor(readTransparency, value => value === transparency, 'Slider setting saved')
+    await expectTint(1 - transparency / 100)
+  }
   await toggle()
   const solid = await waitMaterial('solid')
   assert.match(solid.sidebar, /^rgb\(/)
-  if (windows) assert.equal(await dwmBackdrop(window), 1)
-  else assert.equal(vibrancyCalls.at(-1), null)
+  await expectNative(false)
+  assert.equal(await evaluate(`document.querySelector('${slider}') === null`), true)
+  await toggle(blur)
+  await waitMaterial(glass)
+  await expectTint(.25)
+  await expectNative(true)
   assert.equal(await evaluate(`document.querySelector('${slider}') === null`), true)
   await toggle()
-  await waitMaterial(materialAtMaximum)
-  assert.equal(await evaluate(`document.querySelector('${slider}').value`), '100')
-  await setTransparency(50)
-  await waitMaterial(glass)
-  if (windows) assert.equal(await dwmBackdrop(window), 3)
-  else {
-    await waitFor(() => vibrancyCalls.at(-1), value => value === 'hud', 'Lowering the slider restores native Vibrancy')
-    assert.equal(await evaluate(`document.querySelector('${slider}').value`), '50')
+  await waitFor(() => evaluate(`document.querySelector('${slider}')?.value`), value => value === '99', 'Restored transparency')
+  await expectTint(.01)
+  assert.equal(window.getOpacity(), 1)
+  if (!windows) {
     emulateTransparencyPreference(true)
     await waitMaterial('solid')
-    assert.equal(vibrancyCalls.at(-1), null)
-    assert.equal(await evaluate(`document.querySelector('${switcher}').disabled && document.querySelector('${slider}') === null`), true)
+    await expectNative(false)
+    assert.equal(await evaluate(`document.querySelector('${switcher}').disabled && document.querySelector('${blur}').disabled`), true)
     emulateTransparencyPreference(false)
     await waitMaterial(glass)
-    assert.equal(vibrancyCalls.at(-1), 'hud')
-    assert.equal(await evaluate(`document.querySelector('${slider}').value`), '50')
+    await expectNative(true)
   }
-  console.log(windows ? 'Windows DWM Acrylic (3 → 1 → 3), tint and caption layout verified.' : 'macOS Vibrancy, clear and solid modes, slider visibility and persistence verified.')
+  console.log('Verified the solid, clear, blur, and combined window states on ' + process.platform)
 }
 
 const timeout = setTimeout(() => { console.error('Window material check timed out.'); app.exit(1) }, 90000)
