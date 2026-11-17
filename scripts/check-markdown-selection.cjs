@@ -3,7 +3,7 @@ const { mkdirSync, mkdtempSync, writeFileSync } = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
 const { setTimeout: delay } = require('node:timers/promises')
-const { app, clipboard } = require('electron')
+const { app } = require('electron')
 
 const profile = mkdtempSync(path.join(os.tmpdir(), 'ymd-markdown-selection-'))
 const documents = path.join(profile, '.ymd', 'documents')
@@ -63,8 +63,8 @@ async function check(window) {
       for (let i = 1; i <= 10; i++) await mouse('mouseMoved', start + (end - start) * i / 10, rect.y, { buttons: 1 })
       await mouse('mouseReleased', end, rect.y, { button: 'left', clickCount: 1 })
       assert.equal(await evaluate('getSelection()?.toString()'), target)
-      await evaluate("document.execCommand('copy')")
-      assert.equal(await clipboard.readText(), target)
+      const copied = await webContents.executeJavaScript("document.execCommand('copy'); navigator.clipboard.readText()", true)
+      assert.equal(copied, target)
     }
   }
   webContents.debugger.detach()
