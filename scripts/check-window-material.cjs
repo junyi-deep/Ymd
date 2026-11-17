@@ -1,11 +1,9 @@
 const assert = require('node:assert/strict')
-const { execFile } = require('node:child_process')
 const { mkdirSync, mkdtempSync, writeFileSync } = require('node:fs')
 const { readFile } = require('node:fs/promises')
 const os = require('node:os')
 const path = require('node:path')
 const { setTimeout: delay } = require('node:timers/promises')
-const { promisify } = require('node:util')
 const { app, BrowserWindow, nativeTheme } = require('electron')
 
 const windows = process.platform === 'win32'
@@ -28,25 +26,14 @@ if (!windows) {
   }
 }
 
-async function dwmBackdrop(window) {
+function dwmAttribute(window, attribute) {
+  const dwm = require('koffi').load('dwmapi.dll')
+  const read = dwm.func('int __stdcall DwmGetWindowAttribute(void *window, int attribute, _Out_ int32_t *value, int size)')
   const hwnd = window.getNativeWindowHandle().readBigUInt64LE()
-  const script = `
-$ErrorActionPreference = 'Stop'
-Add-Type @'
-using System;
-using System.Runtime.InteropServices;
-public static class Backdrop {
-  [DllImport("dwmapi.dll")]
-  public static extern int DwmGetWindowAttribute(IntPtr hwnd, int attribute, out int value, int size);
-}
-'@
-$value = 0
-$result = [Backdrop]::DwmGetWindowAttribute([IntPtr]([long]'${hwnd}'), 38, [ref]$value, 4)
-if ($result -ne 0) { throw ('DwmGetWindowAttribute failed: ' + $result) }
-Write-Output $value
-`
-  const { stdout } = await promisify(execFile)('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { timeout: 20000 })
-  return Number(stdout.trim())
+  const value = new Int32Array(1)
+  const result = read(hwnd, attribute, value, value.byteLength)
+  if (result !== 0) throw new Error(`DwmGetWindowAttribute(${attribute}) failed: ${(result >>> 0).toString(16)}`)
+  return value[0]
 }
 
 async function waitFor(read, matches, label) {
@@ -64,6 +51,8 @@ function roundedRegion(window) {
   const user = koffi.load('user32.dll')
   const gdi = koffi.load('gdi32.dll')
   const read = user.func('int __stdcall GetWindowRgn(void *window, void *region)')
+  const getRect = user.func('int __stdcall GetWindowRect(void *window, _Out_ int32_t *rect)')
+  const frameRect = koffi.load('dwmapi.dll').func('int __stdcall DwmGetWindowAttribute(void *window, int attribute, _Out_ int32_t *rect, int size)')
   const create = gdi.func('void * __stdcall CreateRectRgn(int, int, int, int)')
   const contains = gdi.func('int __stdcall PtInRegion(void *region, int x, int y)')
   const dispose = gdi.func('int __stdcall DeleteObject(void *region)')
@@ -72,8 +61,29 @@ function roundedRegion(window) {
     const region = create(0, 0, 0, 0)
     try {
       if (!read(handle, region)) return 'none'
-      return !contains(region, 0, 0) && contains(region, 16, 16) ? 'rounded' : 'square'
+      const rect = new Int32Array(4)
+      const frame = new Int32Array(4)
+      if (!getRect(handle, rect) || frameRect(handle, 9, frame, frame.byteLength) !== 0) return 'unknown'
+      const x = frame[0] - rect[0], y = frame[1] - rect[1]
+      const right = frame[2] - rect[0] - 1, bottom = frame[3] - rect[1] - 1
+      if (!contains(region, (x + right) >> 1, (y + bottom) >> 1)) return 'empty'
+      return [[x, y], [right, y], [x, bottom], [right, bottom]].map(([x, y]) => contains(region, x, y) ? 'square' : 'round').join(' ')
     } finally { dispose(region) }
+  }
+}
+
+function windowShadow(window) {
+  const user = require('koffi').load('user32.dll')
+  const find = user.func('void * __stdcall FindWindowExW(void *parent, void *after, str16 windowClass, str16 title)')
+  const owner = user.func('uintptr_t __stdcall GetWindow(void *window, int command)')
+  const visible = user.func('int __stdcall IsWindowVisible(void *window)')
+  const handle = window.getNativeWindowHandle().readBigUInt64LE()
+  return () => {
+    let shadow = null
+    while ((shadow = find(null, shadow, 'Static', 'Ymd window shadow'))) {
+      if (BigInt(owner(shadow, 4)) === handle) return !!visible(shadow) // GW_OWNER
+    }
+    return false
   }
 }
 
@@ -108,9 +118,12 @@ async function check(window) {
   assert.match(before.sidebar, /^rgba\(/)
   assert.match(before.page, /^rgb\(/)
   const region = windows ? roundedRegion(window) : undefined
+  const shadow = windows ? windowShadow(window) : undefined
+  const allRounded = value => value === 'round round round round'
   if (windows) {
-    assert.equal(await dwmBackdrop(window), 3)
-    await waitFor(region, value => value === 'rounded', 'First window is rounded at its startup size')
+    assert.notEqual(dwmAttribute(window, 38), 3, 'Acrylic uses its own clipped visual, with no rectangular DWM backdrop')
+    await waitFor(region, allRounded, 'All four visible corners are rounded at startup')
+    await waitFor(shadow, Boolean, 'First window has a visible shadow surface')
   } else assert.equal(vibrancyCalls.at(-1), 'hud')
 
   const sample = 'button.tree-row[title="Window check.md"]'
@@ -121,11 +134,17 @@ async function check(window) {
   if (windows) {
     await waitFor(snapshot, value => value.captionStart > 0 && value.captionStart < 680 && value.toolsEnd <= value.captionStart + 1,
       'Window tools stay clear of the caption buttons')
-    await waitFor(region, value => value === 'rounded', 'Restored window has physically rounded corners')
+    await waitFor(region, allRounded, 'Resized window retains four rounded corners')
+    window.minimize()
+    await waitFor(shadow, value => !value, 'Minimized window hides its shadow')
+    window.restore()
+    await waitFor(shadow, Boolean, 'Restoring from minimized reapplies the shadow')
     window.maximize()
     await waitFor(region, value => value === 'none', 'Maximized window is unclipped')
+    await waitFor(shadow, value => !value, 'Maximized window hides the shadow')
     window.unmaximize()
-    await waitFor(region, value => value === 'rounded', 'Restoring the window reapplies rounded corners')
+    await waitFor(region, allRounded, 'Restoring the window reapplies all four rounded corners')
+    await waitFor(shadow, Boolean, 'Restoring from maximized reapplies the shadow')
   }
   await evaluate(`document.querySelector('.sidebar-footer').click()`)
   await waitFor(() => evaluate(`!!document.querySelector('${switcher}')`), Boolean, 'Appearance settings visible')
@@ -145,7 +164,7 @@ async function check(window) {
   const expectTint = alpha => waitFor(snapshot, value => Math.abs(tintAlpha(value.sidebar) - alpha) < .005,
     'Expected tint opacity ' + alpha)
   const expectNative = async blurred => {
-    if (windows) assert.equal(await dwmBackdrop(window), blurred ? 3 : 1)
+    if (windows) assert.notEqual(dwmAttribute(window, 38), 3, 'Switching materials keeps the rectangular DWM backdrop disabled')
     else await waitFor(() => vibrancyCalls.at(-1), value => value === (blurred ? 'hud' : null), 'Expected native blur')
   }
   await setTransparency(100)

@@ -1,6 +1,6 @@
 {
   "name": "ymd",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "private": true,
   "description": "本地 Markdown 与 Excalidraw 编辑器",
   "author": "Ymd",
@@ -8,7 +8,7 @@
   "scripts": {
     "dev": "npm run build:main && concurrently -k -n vite,electron \"vite --host 127.0.0.1 --port 5173 --strictPort\" \"wait-on http-get://127.0.0.1:5173 && electron . --dev\"",
     "check": "tsc -p tsconfig.json && tsc -p tsconfig.main.json --noEmit",
-    "build:main": "tsc -p tsconfig.main.json",
+    "build:main": "tsc -p tsconfig.main.json && node scripts/build-window-backdrop.cjs",
     "build": "npm run check && npm run build:main && vite build",
     "dist:mac": "npm run build && electron-builder --mac --arm64",
     "dist:win": "npm run build && electron-builder --win --x64"

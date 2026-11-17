@@ -60,52 +60,13 @@ jobs:
       - name: Verify Windows update installer
         if: matrix.platform == 'win'
         shell: pwsh
-        run: |
-          $installer = Resolve-Path "release/Ymd-$env:YMD_VERSION-win-x64.exe"
-          $process = Start-Process -FilePath $installer -ArgumentList '/S','--updated','--force-run' -PassThru
-          if (-not $process.WaitForExit(90000) -or $process.ExitCode -ne 0) { throw "NSIS update did not finish successfully." }
-          $installed = Join-Path $env:LOCALAPPDATA 'Programs/Ymd/Ymd.exe'
-          if (-not (Test-Path $installed)) { throw "Ymd was not installed." }
-          $running = $null
-          for ($attempt = 0; $attempt -lt 20 -and -not $running; $attempt++) {
-            $running = Get-Process -Name Ymd -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $installed } | Select-Object -First 1
-            if (-not $running) { Start-Sleep -Seconds 1 }
-          }
-          if (-not $running) { throw "NSIS did not restart the installed Ymd." }
-          Get-Process -Name Ymd -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $installed } | Stop-Process
-          $profile = Join-Path $env:RUNNER_TEMP "ymd-installed-window"
-          $nativeError = Join-Path $env:RUNNER_TEMP "ymd-installed-window.stderr"
-          $env:ELECTRON_ENABLE_LOGGING = '1'
-          $main = Start-Process -FilePath $installed -ArgumentList "--user-data-dir=`"$profile`"" -RedirectStandardError $nativeError -PassThru
-          Add-Type @'
-          using System;
-          using System.Runtime.InteropServices;
-          public static class WindowShape {
-            [DllImport("user32.dll")] static extern int GetWindowRgn(IntPtr window, IntPtr region);
-            [DllImport("gdi32.dll")] static extern IntPtr CreateRectRgn(int l, int t, int r, int b);
-            [DllImport("gdi32.dll")] static extern bool PtInRegion(IntPtr region, int x, int y);
-            [DllImport("gdi32.dll")] static extern bool DeleteObject(IntPtr region);
-            public static bool IsRounded(IntPtr window) {
-              if (window == IntPtr.Zero) return false;
-              IntPtr region = CreateRectRgn(0, 0, 0, 0);
-              try { return GetWindowRgn(window, region) > 0 && !PtInRegion(region, 0, 0) && PtInRegion(region, 16, 16); }
-              finally { DeleteObject(region); }
-            }
-          }
-          '@
-          $rounded = $false
-          for ($attempt = 0; $attempt -lt 20 -and -not $rounded; $attempt++) {
-            $main.Refresh()
-            if ($main.HasExited) { break }
-            $rounded = [WindowShape]::IsRounded($main.MainWindowHandle)
-            if (-not $rounded) { Start-Sleep -Seconds 1 }
-          }
-          if (-not $rounded) {
-            Write-Output "Installed main PID: $($main.Id). Window handle: $($main.MainWindowHandle)."
-            if (Test-Path $nativeError) { Get-Content $nativeError -Tail 30 }
-            throw "The installed Windows app did not apply its rounded window region."
-          }
-          Get-Process -Name Ymd -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $installed } | Stop-Process
+        run: ./scripts/check-windows-installer.ps1 -Version $env:YMD_VERSION
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        if: failure() && matrix.platform == 'win'
+        with:
+          name: failed-windows-window-capture
+          path: ${{ runner.temp }}/ymd-windows-window.png
+          if-no-files-found: ignore
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: ${{ matrix.target }}

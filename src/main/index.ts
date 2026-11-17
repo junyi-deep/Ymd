@@ -6,7 +6,7 @@ import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { defaultPreferences, interfaceFontSizes, documentHistoryLimit, mapExportExtensions, markdownImageExtension, markdownImageExtensions, paneWidths, recentFilesLimit, searchEngines, windowMaterialFor } from '../shared/contracts'
 import type { Command, ContextMenuItem, Desktop, DocumentFile, Entry, FileKind, MapExportKind, MapShotRect, MarkdownImageUpload, Preferences, StorageDirectory, TreeChange, TreeMutation } from '../shared/contracts'
-import { installWindowCorners } from './windowCorners'
+import { installWindowFrame } from './windowCorners'
 import { Files, containsPath, fileKind } from './files'
 import { LocalMapLocations } from './localMapLocations'
 import { searchRoots } from './search'
@@ -27,6 +27,7 @@ type EditorWindow = {
   window: BrowserWindow; initialFile?: DocumentFile; closing: boolean; search?: AbortController
   recording: boolean; keys: ShortcutSequence; documents: Set<string>; watchRevision: number
   draftRevisions: Map<string, symbol>
+  frame?: ReturnType<typeof installWindowFrame>
   resolveClose?: (closed: boolean) => void
 }
 const editors = new Map<number, EditorWindow>()
@@ -132,7 +133,9 @@ function applyBackground(target?: BrowserWindow) {
   for (const window of target ? [target] : [...editors.values()].map(editor => editor.window)) {
     if (process.platform === 'darwin') window.setVibrancy(material === 'vibrancy' ? macVibrancy : null)
     if (windowsAcrylic) {
-      window.setBackgroundMaterial(material === 'acrylic' ? 'acrylic' : 'none')
+      const frame = editors.get(window.id)?.frame
+      if (frame) frame.setAcrylic(material === 'acrylic', !nativeTheme.shouldUseDarkColors)
+      else window.setBackgroundMaterial(material === 'acrylic' ? 'acrylic' : 'none')
       window.setTitleBarOverlay(overlayColors())
     }
     window.setBackgroundColor(material === 'solid' ? windowColor() : '#00000000')
@@ -210,7 +213,6 @@ function createWindow(initialFile?: DocumentFile) {
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : windowsAcrylic ? 'hidden' : 'default',
     titleBarOverlay: windowsAcrylic ? { ...overlayColors(), height: 49 } : undefined,
     autoHideMenuBar: windowsAcrylic,
-    backgroundMaterial: material === 'acrylic' ? 'acrylic' : undefined,
     vibrancy: material === 'vibrancy' ? macVibrancy : undefined,
     visualEffectState: process.platform === 'darwin' ? 'active' : undefined,
     webPreferences: { preload: path.join(__dirname, '../preload/index.js'), contextIsolation: true, sandbox: true, nodeIntegration: false },
@@ -219,11 +221,11 @@ function createWindow(initialFile?: DocumentFile) {
     keys: new ShortcutSequence(), documents: new Set(initialFile ? [initialFile.path] : []), watchRevision: 0, draftRevisions: new Map() }
   editors.set(window.id, editor)
   lastEditor = editor
-  applyBackground(window)
   if (process.platform === 'win32') {
-    try { installWindowCorners(window) }
-    catch (error) { console.warn('无法应用 Windows 窗口圆角。', error) }
+    try { editor.frame = installWindowFrame(window, windowsAcrylic) }
+    catch (error) { console.warn('无法应用 Windows 窗口边框。', error) }
   }
+  applyBackground(window)
   window.on('focus', () => { lastEditor = editor })
   window.on('blur', () => editor.keys.reset())
   window.on('resize', () => {

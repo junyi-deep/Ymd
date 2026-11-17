@@ -1,5 +1,6 @@
 appId: com.ymd.editor
 productName: Ymd
+beforePack: scripts/build-window-backdrop.cjs
 directories:
   output: release
 files:
@@ -23,6 +24,7 @@ toolsets:
 win:
   asarUnpack:
     - "**/node_modules/@koromix/koffi-win32-x64/**"
+    - dist/main/window-backdrop.dll
   icon: build/icon.ico
   extraResources:
     - from: node_modules/@vscode/ripgrep-universal/bin/win32-x64/rg.exe
