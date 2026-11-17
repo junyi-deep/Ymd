@@ -21,6 +21,8 @@ mac:
 toolsets:
   nsis: "1.2.1"
 win:
+  asarUnpack:
+    - "**/node_modules/@koromix/koffi-win32-x64/**"
   icon: build/icon.ico
   extraResources:
     - from: node_modules/@vscode/ripgrep-universal/bin/win32-x64/rg.exe
