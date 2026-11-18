@@ -4,7 +4,7 @@ import { mkdir, readdir, readFile, writeFile, rename, open, lstat, realpath, sta
 import { renameSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { attachmentFolderName, defaultPreferences, interfaceFontSizes, journalCleanupChoices, documentHistoryLimit, mapExportExtensions, markdownImageExtension, markdownImageExtensions, paneWidths, recentFilesLimit, searchEngines, windowMaterialFor, windowShadowPresets } from '../shared/contracts'
+import { attachmentFolderName, defaultPreferences, documentFontSizes, interfaceFontSizes, journalCleanupChoices, documentHistoryLimit, mapExportExtensions, markdownImageExtension, markdownImageExtensions, paneWidths, recentFilesLimit, searchEngines, windowMaterialFor, windowShadowPresets } from '../shared/contracts'
 import type { Command, ContextMenuItem, Desktop, DocumentFile, Entry, FileKind, MapExportKind, MapShotRect, MarkdownImageUpload, Preferences, StorageDirectory, TreeChange, TreeMutation } from '../shared/contracts'
 import { Journals, journalDate } from './journals'
 import { initializeStorage, migrateStickers } from './storage'
@@ -61,6 +61,7 @@ function normalizePreferences(value: (Partial<Preferences> & { solidBackground?:
     theme: value?.theme === 'dark' || value?.theme === 'light' ? value.theme : 'system',
     size: value?.size === 'small' || value?.size === 'large' || value?.size === 'custom' ? value.size : 'normal',
     interfaceFontSize: width(value?.interfaceFontSize, interfaceFontSizes) ?? defaultPreferences.interfaceFontSize,
+    documentFontSize: width(value?.documentFontSize, documentFontSizes) ?? defaultPreferences.documentFontSize,
     interfaceFont: typeof value?.interfaceFont === 'string' && value.interfaceFont.trim().length > 0 &&
       value.interfaceFont.length <= 160 && !/[\u0000-\u001f]/.test(value.interfaceFont) ? value.interfaceFont.trim() : defaultPreferences.interfaceFont,
     windowTransparent: typeof value?.windowTransparent === 'boolean' ? value.windowTransparent : value?.solidBackground !== true,

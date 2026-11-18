@@ -251,6 +251,7 @@ interface Props {
   name: string
   path: string
   modified: number
+  fontSize: number
   platform: string
   remoteImages: boolean
   searchEngine: SearchEngine
@@ -282,7 +283,7 @@ interface Props {
   report: (error: unknown) => void
 }
 
-export function MarkdownEditor({ text, name, path, modified, platform, remoteImages, searchEngine, keyOverrides, outline, filenameTitle, saveStatus, updateOutline, width, codeBlocks, setWidth, registerFlush, onChange, find, jump, reveal, saveCopy, duplicate, move, trash, shortcuts, exportPdf, printDocument, pinned, starred, togglePin, toggleStar, followLink, report, position }: Props) {
+export function MarkdownEditor({ text, name, path, modified, platform, remoteImages, searchEngine, keyOverrides, outline, filenameTitle, saveStatus, updateOutline, width, codeBlocks, setWidth, registerFlush, onChange, find, jump, reveal, saveCopy, duplicate, move, trash, shortcuts, exportPdf, printDocument, pinned, starred, togglePin, toggleStar, followLink, report, position, fontSize }: Props) {
   const host = useRef<HTMLDivElement>(null)
   const [titleHost] = useState(() => document.createElement('div'))
   const titleMode = useRef(new Compartment())
@@ -390,6 +391,8 @@ export function MarkdownEditor({ text, name, path, modified, platform, remoteIma
   useLayoutEffect(() => {
     view.current?.dispatch({ effects: titleMode.current.reconfigure(titleExtension) })
   }, [titleExtension])
+
+  useEffect(() => { view.current?.requestMeasure() }, [fontSize])
 
   useEffect(() => {
     view.current?.dispatch({ effects: keyMode.current.reconfigure(writingKeys()) })

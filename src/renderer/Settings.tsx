@@ -1,6 +1,6 @@
 import { createContext, useContext, useState, type ReactNode } from 'react'
 import { ArrowLeft, HardDrive, Info, Keyboard, Palette, RefreshCw, Search, SlidersHorizontal, X } from 'lucide-react'
-import { attachmentFolderName, interfaceFontSizes, journalCleanupChoices, windowShadowColors, windowShadowPresets, markdownPageWidths, recentFilesLimit, searchEngines, type StorageDirectory, type Entry, type Preferences, type SearchEngine, type UpdateProxy, type UpdateProxyInput, type VersionStatus } from '../shared/contracts'
+import { attachmentFolderName, documentFontSizes, interfaceFontSizes, journalCleanupChoices, windowShadowColors, windowShadowPresets, markdownPageWidths, recentFilesLimit, searchEngines, type StorageDirectory, type Entry, type Preferences, type SearchEngine, type UpdateProxy, type UpdateProxyInput, type VersionStatus } from '../shared/contracts'
 import { UpdateProxySettings } from './UpdateProxySettings'
 import { FontPicker } from './FontPicker'
 import { ShortcutSettings } from './ShortcutSettings'
@@ -157,6 +157,15 @@ export function Settings({ preferences, platform, library, windowsAcrylic, macRe
           </div>
           <h2 className="settings-group-title">文档</h2>
           <div className="settings-group">
+            <Row label="正文字号" detail="10–40 px，适用于 Markdown、侧边目录、大纲和每日小记。Ctrl＋滚轮可调整字号。">
+              <input className="setting-count" type="number" aria-label="正文字号" min={documentFontSizes.min} max={documentFontSizes.max} step={1}
+                key={preferences.documentFontSize} defaultValue={preferences.documentFontSize} onBlur={event => {
+                  const value = event.currentTarget.valueAsNumber
+                  const size = Number.isFinite(value) ? Math.max(documentFontSizes.min, Math.min(documentFontSizes.max, Math.round(value))) : preferences.documentFontSize
+                  event.currentTarget.value = String(size)
+                  if (size !== preferences.documentFontSize) onChange({ documentFontSize: size })
+                }} onKeyDown={event => { if (event.key === 'Enter') event.currentTarget.blur() }} />
+            </Row>
             <Row label="显示附件目录" detail="在文件树中显示文档附件文件夹。">
               <button className="switch" type="button" role="switch" aria-label="显示附件目录" aria-checked={preferences.showAttachmentDirectories}
                 onClick={() => onChange({ showAttachmentDirectories: !preferences.showAttachmentDirectories })} />

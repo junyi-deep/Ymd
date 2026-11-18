@@ -111,6 +111,7 @@ export interface Preferences {
   size: 'small' | 'normal' | 'large' | 'custom'
   interfaceFontSize: number
   interfaceFont: string
+  documentFontSize: number
   windowTransparent: boolean
   windowBlur: boolean
   windowShadow: WindowShadowPreferences
@@ -169,7 +170,7 @@ export const windowShadowColors = [
 export type WindowShadowPreferences = { enabled: boolean; preset: keyof typeof windowShadowPresets; color: string }
 
 export const defaultPreferences: Preferences = {
-  theme: 'system', journalCleanup: 'off', size: 'normal', interfaceFontSize: 13, interfaceFont: 'system-ui',
+  theme: 'system', journalCleanup: 'off', size: 'normal', interfaceFontSize: 13, interfaceFont: 'system-ui', documentFontSize: 16,
   windowTransparent: true, windowBlur: true, libraryCollapsed: false, localCollapsed: false, windowTransparency: 80, showFilenameTitle: false, recentLimit: 50, expandedFolders: [], hiddenLocalEntries: [], animations: true, documentTheme: 'classic',
   windowShadow: { enabled: true, preset: 'normal', color: windowShadowColors[0][0] },
   attachmentMode: 'relative', attachmentFolder: 'assets', showAttachmentDirectories: false,
@@ -187,6 +188,7 @@ export function attachmentFolderName(input: unknown) {
 }
 
 export const interfaceFontSizes = { min: 10, max: 24 }
+export const documentFontSizes = { min: 10, max: 40 }
 export const windowBlurTint = .25
 
 export function windowMaterialFor(preferences: Preferences, platform: string, windowsAcrylic: boolean, macReducesTransparency: boolean) {

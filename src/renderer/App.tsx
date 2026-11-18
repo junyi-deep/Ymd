@@ -1,6 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState, type CSSProperties, type MouseEvent, type ReactNode } from 'react'
 import { AppWindow, ArrowLeft, CalendarDays, Check, ChevronDown, ChevronRight, CircleAlert, Copy, FilePlus2, FileText, FolderInput, Home, ListChecks, ListTree, Network, PanelLeft, LocateFixed, Minus, Pencil, Pin, Plus, Save, Search, Settings2, Shapes, Star, Trash2, X } from 'lucide-react'
-import { defaultPreferences, defaultUpdateProxy, windowBlurTint, windowMaterialFor, type Command, type DocumentFile, type EditorMode, type Entry, type FileKind, type JournalDay, type JournalList, type Preferences, type RecoveryEntry, type Scope, type SearchHit, type TreeChange, type TreeMutation, type UpdateProxyInput, type VersionStatus } from '../shared/contracts'
+import { defaultPreferences, defaultUpdateProxy, documentFontSizes, windowBlurTint, windowMaterialFor, type Command, type DocumentFile, type EditorMode, type Entry, type FileKind, type JournalDay, type JournalList, type Preferences, type RecoveryEntry, type Scope, type SearchHit, type TreeChange, type TreeMutation, type UpdateProxyInput, type VersionStatus } from '../shared/contracts'
 import { documentLinkPath } from './documentLinks'
 import { documentModePaths, moveDocumentMode } from './documentModes'
 import { RenameInput } from './RenameInput'
@@ -215,11 +215,37 @@ export function App() {
     const tint = preferences.windowTransparent ? 1 - preferences.windowTransparency / 100 : windowBlurTint
     document.documentElement.style.setProperty('--window-tint-opacity', String(tint))
     document.documentElement.style.setProperty('--interface-font-size', preferences.interfaceFontSize + 'px')
+    document.documentElement.style.setProperty('--document-font-size', preferences.documentFontSize + 'px')
     const family = preferences.interfaceFont
     document.documentElement.style.setProperty('--interface-font', ['system-ui', 'serif', 'monospace'].includes(family) ? family : JSON.stringify(family))
     document.documentElement.dataset.animation = preferences.animations ? 'full' : 'reduced'
     document.documentElement.dataset.documentTheme = preferences.documentTheme
   }, [dark, platform, preferences, windowsAcrylic, macReducesTransparency])
+
+  useEffect(() => {
+    if (settings || prompt || searchOpen || active?.kind !== 'markdown' || active.mode === 'map') return
+    let distance = 0
+    let previousTime = 0
+    const resizeText = (event: WheelEvent) => {
+      if (!event.ctrlKey || event.altKey || event.metaKey || !event.deltaY ||
+          !(event.target instanceof Element) ||
+          !event.target.closest('.markdown-surface, .document-outline nav, .outline-content, .journal-preview')) return
+      event.preventDefault()
+      event.stopPropagation()
+      const delta = event.deltaY * (event.deltaMode === WheelEvent.DOM_DELTA_LINE ? 40 : event.deltaMode === WheelEvent.DOM_DELTA_PAGE ? 800 : 1)
+      if (event.timeStamp - previousTime > 200 || Math.sign(delta) !== Math.sign(distance)) distance = 0
+      previousTime = event.timeStamp
+      distance += delta
+      const steps = Math.trunc(distance / 100)
+      if (!steps) return
+      distance -= steps * 100
+      const current = lastPreferences.current.documentFontSize
+      const size = Math.max(documentFontSizes.min, Math.min(documentFontSizes.max, current - steps))
+      if (size !== current) updatePreferences({ documentFontSize: size })
+    }
+    window.addEventListener('wheel', resizeText, { capture: true, passive: false })
+    return () => window.removeEventListener('wheel', resizeText, true)
+  }, [active?.kind, active?.mode, settings, prompt, searchOpen])
 
   useEffect(() => {
     if (!settings || prompt || searchOpen) return
@@ -914,6 +940,7 @@ export function App() {
           reveal={() => run(() => window.desktop.reveal(active.path))} />
         : active.mode === 'markdown'
           ? <MarkdownEditor key={active.path + ':' + active.reload} text={active.text} name={active.name} path={active.path} modified={active.modified} platform={platform} remoteImages={preferences.remoteImages} keyOverrides={preferences.shortcuts} position={position!}
+            fontSize={preferences.documentFontSize}
             outline={preferences.markdownOutline} filenameTitle={filenameTitle} saveStatus={saveStatus}
             width={preferences.markdownPageWidth} codeBlocks={preferences.codeBlocks} setWidth={markdownPageWidth => updatePreferences({ markdownPageWidth })}
             updateOutline={patch => updatePreferences({ markdownOutline: { ...lastPreferences.current.markdownOutline, ...patch } })}
