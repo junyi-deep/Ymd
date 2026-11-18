@@ -8,6 +8,7 @@ import { Scan } from 'lucide-react'
 import { diagramPreview, openMediaPreview } from './mediaPreview'
 import { CodePreview } from './markdownCodePreview'
 import { MarkdownHtmlPreview } from './markdownHtmlPreview'
+import { markdownBlockFrame } from './markdownBlockFrame'
 import { displayMath, scheduleBlockPreview } from './markdownPreviewMedia'
 
 class RenderedBlock extends WidgetType {
@@ -58,7 +59,7 @@ class RenderedBlock extends WidgetType {
       content.textContent = (diagram ? 'Mermaid 无法渲染。' : '公式无法渲染。') + (error instanceof Error ? error.message : '')
       view.requestMeasure()
     })
-    return figure
+    return markdownBlockFrame(figure)
   }
 }
 

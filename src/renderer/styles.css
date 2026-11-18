@@ -259,6 +259,7 @@ kbd { color: var(--muted); font-family: inherit; font-size: .9em; white-space: n
 }
 .markdown-surface .cm-focused { outline: none; }
 .markdown-surface .cm-line { padding: 0; }
+.markdown-surface .md-block-frame { display: flow-root; }
 .markdown-surface .cm-panels { background: var(--soft); color: var(--text); }
 .markdown-surface .cm-textfield, .markdown-surface .cm-button { background: var(--page); color: var(--text); border: 1px solid var(--line); border-radius: 4px; }
 .markdown-surface .cm-cursor { border-left-color: var(--text); }

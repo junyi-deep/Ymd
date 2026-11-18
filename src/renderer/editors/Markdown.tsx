@@ -29,6 +29,7 @@ import { PaneResize } from '../PaneResize'
 import { mountMarkdownScrollbar } from './markdownScrollbar'
 import { markdownFindPanel } from './markdownFind'
 import { inlineHtmlEnd, MarkdownHtmlPreview } from './markdownHtmlPreview'
+import { markdownBlockFrame } from './markdownBlockFrame'
 
 class DocumentTitle extends WidgetType {
   constructor(readonly element: HTMLElement) { super() }
@@ -298,7 +299,7 @@ interface Props {
 
 export function MarkdownEditor({ text, name, path, modified, platform, remoteImages, searchEngine, keyOverrides, outline, filenameTitle, saveStatus, updateOutline, width, codeBlocks, setWidth, registerFlush, onChange, find, jump, reveal, saveCopy, duplicate, move, trash, shortcuts, exportPdf, printDocument, pinned, starred, togglePin, toggleStar, followLink, report, position, fontSize, reload }: Props) {
   const host = useRef<HTMLDivElement>(null)
-  const [titleHost] = useState(() => document.createElement('div'))
+  const [titleHost] = useState(() => markdownBlockFrame())
   const titleMode = useRef(new Compartment())
   const hasTitle = !!filenameTitle
   const titleExtension = useMemo(() => hasTitle ? EditorView.decorations.of(Decoration.set([

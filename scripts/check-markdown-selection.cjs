@@ -17,6 +17,10 @@ const table = '| 字段名 | 字段类型 |\n|---|---|\n| title | string |'
 for (const [name, text] of [['Link', '[' + label + '](https://example.com/)'], ['Bold', '**' + label + '**']]) {
   writeFileSync(path.join(documents, name + '.md'), '表变更说明：' + text + '\n\n' + table + '\n')
 }
+const chart = '```mermaid\nflowchart LR\nA --> B\n```'
+writeFileSync(path.join(documents, 'After diagrams.md'), [
+  '# 记录', chart, chart, '**表变更说明：**' + label, '> 这是下方的引用，内容应与正文选区区分。', table,
+].join('\n\n'))
 
 async function waitFor(read) {
   for (let i = 0; i < 120; i++) {
@@ -32,20 +36,25 @@ async function check(window) {
   const evaluate = source => webContents.executeJavaScript(source)
   webContents.debugger.attach()
   const mouse = (type, x, y, options = {}) => webContents.debugger.sendCommand('Input.dispatchMouseEvent', { type, x, y, ...options })
-  for (const name of ['Link', 'Bold']) {
+  for (const name of ['Link', 'Bold', 'After diagrams']) {
     const button = "document.querySelector('button.tree-row[title=\"" + name + ".md\"]')"
     await waitFor(() => evaluate('Boolean(' + button + ')'))
     await evaluate(button + '.click()')
     await waitFor(() => evaluate(`document.querySelector('.document-name')?.textContent === '${name}.md' &&
       Boolean(document.querySelector('.markdown-table-widget'))`))
+    if (name === 'After diagrams') {
+      await waitFor(() => evaluate("document.querySelectorAll('.mermaid-content svg').length === 2"))
+    }
     for (const backward of [false, true]) {
       const rect = await evaluate(`(() => {
         const content = document.querySelector('.markdown-surface .cm-content')
         const view = content.cmTile.root.view
         view.focus()
         view.dispatch({ selection: { anchor: view.state.doc.line(2).from } })
-        const nodes = document.createTreeWalker(content.querySelector('.cm-line'), NodeFilter.SHOW_TEXT)
         const target = ${JSON.stringify(target)}
+        const line = [...content.querySelectorAll('.cm-line')].find(line => line.textContent.includes(target))
+        if (!line) return
+        const nodes = document.createTreeWalker(line, NodeFilter.SHOW_TEXT)
         for (let node = nodes.nextNode(); node; node = nodes.nextNode()) {
           const index = node.data.indexOf(target)
           if (index < 0) continue
@@ -62,7 +71,7 @@ async function check(window) {
       await mouse('mousePressed', start, rect.y, { button: 'left', buttons: 1, clickCount: 1 })
       for (let i = 1; i <= 10; i++) await mouse('mouseMoved', start + (end - start) * i / 10, rect.y, { buttons: 1 })
       await mouse('mouseReleased', end, rect.y, { button: 'left', clickCount: 1 })
-      assert.equal(await evaluate('getSelection()?.toString()'), target)
+      assert.equal(await evaluate('getSelection()?.toString()'), target, name)
       const copied = await webContents.executeJavaScript("document.execCommand('copy'); navigator.clipboard.readText()", true)
       assert.equal(copied, target)
     }

@@ -10,6 +10,7 @@ import { GFM } from '@lezer/markdown'
 import { footnoteDefinition, metadataClosing as closing, metadataOpening as opening, typoraMarkdown } from './markdownExtras'
 import { markdownInlineHtml } from './markdownHtml'
 import { markdownImageTags } from './markdownImageSyntax'
+import { markdownBlockFrame } from './markdownBlockFrame'
 
 const markdownLanguage = markdown({ extensions: [GFM, typoraMarkdown, markdownImageTags], addKeymap: false, codeLanguages: languages })
 const mixedLanguage = yamlFrontmatter({ content: markdownLanguage })
@@ -164,7 +165,7 @@ class MetadataBlock extends WidgetType {
     const code = document.createElement('pre')
     code.textContent = this.source
     block.append(heading, code)
-    return block
+    return markdownBlockFrame(block)
   }
 }
 
