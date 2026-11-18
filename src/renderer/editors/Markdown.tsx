@@ -26,6 +26,7 @@ import { colorOpening, highlightOpening, numberOpening } from './outlineTextStyl
 import type { ShortcutOverrides } from '../../shared/shortcuts'
 import { getOutlineDepth, maxOutlineDepth, setOutlineDepth } from './markdownOutlineDepth'
 import { PaneResize } from '../PaneResize'
+import { mountMarkdownScrollbar } from './markdownScrollbar'
 
 class DocumentTitle extends WidgetType {
   constructor(readonly element: HTMLElement) { super() }
@@ -387,12 +388,14 @@ export function MarkdownEditor({ text, name, path, modified, platform, remoteIma
       state,
     })
     view.current = editor
+    const unmountScrollbar = mountMarkdownScrollbar(editor, host.current!)
     return () => {
       const { anchor, head } = editor.state.selection.main
       const { bom, newline } = serialization.current
       position.markdown = { anchor, head, source: sourceMode.current, scroll: editor.scrollSnapshot(),
         top: editor.lineBlockAtHeight(editor.scrollDOM.scrollTop).from,
         text: bom + editor.state.doc.toString().replaceAll('\n', newline) }
+      unmountScrollbar()
       editor.destroy()
       view.current = null
     }
@@ -717,7 +720,7 @@ export function MarkdownEditor({ text, name, path, modified, platform, remoteIma
           const editor = view.current
           if (editor && event.target instanceof Element && editImageReference(editor, event.target)) event.preventDefault()
         }} onContextMenu={event => {
-          if (event.target instanceof Element && event.target.closest('.filename-title')) return
+          if (event.target instanceof Element && event.target.closest('.filename-title, .markdown-scrollbar')) return
           const editor = view.current
           if (!editor) return
           event.preventDefault()

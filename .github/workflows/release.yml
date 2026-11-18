@@ -54,8 +54,7 @@ jobs:
         run: node node_modules/electron/cli.js scripts/check-window-material.cjs
       - name: Check Markdown drag selection
         run: node node_modules/electron/cli.js scripts/check-markdown-selection.cjs
-      - name: Check Windows external-refresh scrolling
-        if: matrix.platform == 'win'
+      - name: Check Markdown scrolling
         run: node node_modules/electron/cli.js scripts/check-markdown-scroll.cjs
       - name: Package
         run: npm exec -- electron-builder --${{ matrix.platform }} --${{ matrix.arch }} --publish never

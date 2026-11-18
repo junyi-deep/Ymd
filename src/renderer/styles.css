@@ -240,9 +240,16 @@ kbd { color: var(--muted); font-family: inherit; font-size: .9em; white-space: n
 .map-tools { position: absolute; inset: 8px 10px auto auto; padding: 0; }
 .tool-button { display: inline-flex; align-items: center; gap: 6px; padding: 4px 8px; border-radius: 6px; background: var(--page); color: var(--muted); white-space: nowrap; }
 .tool-button[aria-pressed="true"] { background: var(--selected); }
-.markdown-surface { flex: 1; min-width: 0; min-height: 0; container-type: inline-size; }
+.markdown-surface { position: relative; flex: 1; min-width: 0; min-height: 0; padding-inline-end: 12px; container-type: inline-size; }
 .markdown-surface > .cm-editor { height: 100%; }
-.markdown-surface .cm-scroller { overflow-anchor: none; scrollbar-gutter: stable; font: var(--document-font-size, 16px)/1.68 system-ui, "PingFang SC", "Microsoft YaHei", sans-serif; }
+.markdown-surface .cm-scroller { overflow-anchor: none; scrollbar-color: auto; font: var(--document-font-size, 16px)/1.68 system-ui, "PingFang SC", "Microsoft YaHei", sans-serif; }
+.markdown-surface .cm-scroller::-webkit-scrollbar { background: transparent; }
+.markdown-surface .cm-scroller::-webkit-scrollbar:vertical { width: 0; }
+.markdown-surface .cm-scroller::-webkit-scrollbar:horizontal { height: 12px; }
+.markdown-surface .cm-scroller::-webkit-scrollbar-thumb:horizontal { border: 2px solid transparent; border-radius: 5px; background: var(--selected) padding-box; }
+.markdown-scrollbar { position: absolute; inset-inline-end: 0; width: 12px; touch-action: none; user-select: none; }
+.markdown-scrollbar-thumb { position: absolute; inset: 0 2px auto; border-radius: 5px; background: var(--selected); }
+.markdown-scrollbar:is(:hover, :focus-visible, [data-dragging]) .markdown-scrollbar-thumb { background: color-mix(in srgb, var(--faint) 65%, var(--selected)); }
 .markdown-surface .cm-content {
   max-width: 860px;
   min-height: 100%;
@@ -438,6 +445,8 @@ dialog button.primary { background: var(--accent); color: var(--accent-ink); }
   html, body, #root, .window, .window-body, .workspace, .markdown-editor, .document-editing, .markdown-surface, .cm-editor { height: auto !important; overflow: visible !important; }
   .titlebar, .sidebar, .editor-tools, .document-status, .document-outline, .mermaid-edit { display: none !important; }
   .markdown-surface .cm-scroller { overflow: visible; }
+  .markdown-surface { padding-inline-end: 0; }
+  .markdown-scrollbar { display: none; }
 }
 
 .outline-editor:focus { outline: none; }
