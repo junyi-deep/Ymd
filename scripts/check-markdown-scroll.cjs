@@ -16,6 +16,7 @@ writeFileSync(file, text)
 const diagrams = Array.from({ length: 150 }, (_, i) =>
   '## Diagram ' + i + '\n\n```mermaid\nflowchart TD\nA --> B --> C --> D --> E --> F --> G --> H\n```\n\n').join('')
 writeFileSync(path.join(documents, 'Drag.md'), diagrams + '# End of document\n')
+writeFileSync(path.join(documents, 'Fast.md'), diagrams + '# End of document\n')
 app.setPath('userData', profile)
 app.setPath('home', profile)
 
@@ -31,18 +32,25 @@ async function waitFor(read, label) {
 async function checkDrag(window) {
   const { webContents } = window
   const evaluate = source => webContents.executeJavaScript(source)
-  const button = "document.querySelector('button.tree-row[title=\"Drag.md\"]')"
-  await waitFor(() => evaluate('Boolean(' + button + ')'), 'Drag sample listed')
-  await evaluate(button + '.click()')
-  await waitFor(() => evaluate("Boolean(document.querySelector('.mermaid-content svg'))"), 'First diagram rendered')
+  async function open(name) {
+    const button = "document.querySelector('button.tree-row[title=\"" + name + ".md\"]')"
+    await waitFor(() => evaluate('Boolean(' + button + ')'), 'Drag sample listed')
+    await evaluate(button + '.click()')
+    await waitFor(() => evaluate(`document.querySelector('.document-name')?.textContent === '${name}.md' &&
+      Boolean(document.querySelector('.mermaid-content svg'))`), 'First diagram rendered')
+  }
+  await open('Drag')
   const geometry = () => evaluate(`(() => {
     const scroller = document.querySelector('.markdown-surface .cm-scroller')
     const track = document.querySelector('.markdown-scrollbar').getBoundingClientRect()
     const thumb = document.querySelector('.markdown-scrollbar-thumb').getBoundingClientRect()
     return { x: track.left + track.width / 2, top: track.top, bottom: track.bottom, center: thumb.top + thumb.height / 2,
-      height: scroller.scrollHeight, remaining: scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop }
+      height: scroller.scrollHeight, offset: scroller.scrollTop, remaining: scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop }
   })()`)
   const start = await geometry()
+  assert.ok(start.bottom > start.top && start.center > start.top, 'Scrollbar track and thumb are visible')
+  assert.equal(await evaluate(`document.elementFromPoint(${start.x}, ${start.center})?.className`),
+    'markdown-scrollbar-thumb', 'Initial mouse hit is on the thumb')
   const mouse = (type, y, options = {}) => webContents.debugger.sendCommand('Input.dispatchMouseEvent', { type, x: start.x, y, ...options })
   await mouse('mouseMoved', start.center)
   await mouse('mousePressed', start.center, { button: 'left', buttons: 1, clickCount: 1 })
@@ -50,7 +58,12 @@ async function checkDrag(window) {
   for (const fraction of [.1, .2, .3, .4, .5, .6, .7, .8]) {
     const y = start.top + (start.bottom - start.top) * fraction
     await mouse('mouseMoved', y, { buttons: 1 })
-    await waitFor(async () => Math.abs((await geometry()).center - y) <= 2, 'Thumb follows the mouse')
+    try {
+      await waitFor(async () => Math.abs((await geometry()).center - y) <= 2, 'Thumb follows the mouse')
+    } catch (error) {
+      console.log({ start, y, actual: await geometry(), dragging: await evaluate("document.querySelector('.markdown-scrollbar').dataset.dragging") })
+      throw error
+    }
     await delay(75)
     heightChanged ||= Math.abs((await geometry()).height - start.height) > 200
   }
@@ -60,6 +73,15 @@ async function checkDrag(window) {
   await mouse('mouseReleased', start.bottom - 1, { button: 'left', clickCount: 1 })
   await delay(250)
   assert.ok(Math.abs((await geometry()).remaining) <= 1, 'Releasing the thumb keeps the viewport at the bottom')
+  await open('Fast')
+  const top = await geometry()
+  assert.ok(top.offset < 100, JSON.stringify({ start, top }))
+  await mouse('mouseMoved', top.center)
+  await mouse('mousePressed', top.center, { button: 'left', buttons: 1, clickCount: 1 })
+  await mouse('mouseMoved', top.bottom - 1, { buttons: 1 })
+  await mouse('mouseReleased', top.bottom - 1, { button: 'left', clickCount: 1 })
+  await delay(750)
+  assert.ok(Math.abs((await geometry()).remaining) <= 1, 'Fast drag and release reaches the bottom after late layout')
   console.log('Verified scrollbar dragging with late-rendered diagrams on ' + process.platform)
 }
 

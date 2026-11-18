@@ -20,6 +20,7 @@ export function mountMarkdownScrollbar(view: EditorView, host: HTMLElement) {
 
   let frame: number | undefined
   let drag: { id: number; y: number; grab: number } | undefined
+  let holdEnd: number | undefined
 
   function measure() {
     const { clientHeight, scrollHeight } = scrollDOM
@@ -33,7 +34,7 @@ export function mountMarkdownScrollbar(view: EditorView, host: HTMLElement) {
   function sync() {
     const { height, limit, thumbSize } = measure()
     track.hidden = !height || limit <= 1
-    if (track.hidden) return
+    if (track.hidden) return false
     const travel = height - thumbSize
     track.style.top = scrollDOM.offsetTop + 'px'
     track.style.height = height + 'px'
@@ -43,12 +44,16 @@ export function mountMarkdownScrollbar(view: EditorView, host: HTMLElement) {
       // Keep the same point on the thumb under the pointer while the range changes.
       const y = drag.y - track.getBoundingClientRect().top
       position = clamp(y - drag.grab * thumbSize, travel)
+    }
+    if (!drag && holdEnd !== undefined) position = travel
+    if ((drag || holdEnd !== undefined) && travel > 0) {
       const target = position / travel * limit
       if (Math.abs(scrollDOM.scrollTop - target) > .5) scrollDOM.scrollTop = target
     }
     thumb.style.height = thumbSize + 'px'
     thumb.style.transform = 'translateY(' + position + 'px)'
     track.setAttribute('aria-valuenow', String(Math.round(travel > 0 ? position / travel * 100 : 0)))
+    return travel > 0 && position >= travel - .5
   }
 
   function schedule() {
@@ -61,6 +66,13 @@ export function mountMarkdownScrollbar(view: EditorView, host: HTMLElement) {
 
   const events = new AbortController()
   const options = { signal: events.signal }
+  function releaseEnd() {
+    window.clearTimeout(holdEnd)
+    holdEnd = undefined
+  }
+  for (const type of ['pointerdown', 'wheel', 'keydown']) {
+    window.addEventListener(type, releaseEnd, { ...options, capture: true, passive: true })
+  }
   track.addEventListener('pointerdown', event => {
     if (!event.isPrimary || event.button !== 0 || drag) return
     event.preventDefault()
@@ -79,9 +91,16 @@ export function mountMarkdownScrollbar(view: EditorView, host: HTMLElement) {
   track.addEventListener('pointerup', event => {
     if (drag?.id !== event.pointerId) return
     drag.y = event.clientY
-    sync()
+    if (sync()) {
+      // A fast release can precede measurement of the last visible cards.
+      holdEnd = window.setTimeout(releaseEnd, 1000)
+    }
+    drag = undefined
+    delete track.dataset.dragging
+    schedule()
   }, options)
   track.addEventListener('lostpointercapture', () => {
+    if (!drag) return
     drag = undefined
     delete track.dataset.dragging
     schedule()
@@ -112,6 +131,7 @@ export function mountMarkdownScrollbar(view: EditorView, host: HTMLElement) {
   return () => {
     observer.disconnect()
     events.abort()
+    releaseEnd()
     if (frame !== undefined) cancelAnimationFrame(frame)
     track.remove()
   }
