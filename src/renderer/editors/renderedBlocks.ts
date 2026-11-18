@@ -7,6 +7,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { Scan } from 'lucide-react'
 import { diagramPreview, openMediaPreview } from './mediaPreview'
 import { CodePreview } from './markdownCodePreview'
+import { MarkdownHtmlPreview } from './markdownHtmlPreview'
 import { displayMath, scheduleBlockPreview } from './markdownPreviewMedia'
 
 class RenderedBlock extends WidgetType {
@@ -68,6 +69,16 @@ export const codeBlockPreferences = Facet.define<CodeBlockPreferences, CodeBlock
 function previews(state: EditorState): DecorationSet {
   const ranges: Range<Decoration>[] = []
   syntaxTree(state).iterate({ enter(node) {
+    if (node.name === 'HTMLBlock') {
+      const start = state.doc.lineAt(node.from).from
+      const to = state.doc.lineAt(node.to).to
+      const source = state.sliceDoc(node.from, node.to)
+      const editing = !state.readOnly && state.selection.ranges.some(range => range.from < to && range.to > start)
+      if (!editing && /^ {0,3}$/.test(state.sliceDoc(start, node.from))) {
+        ranges.push(Decoration.replace({ block: true, widget: new MarkdownHtmlPreview(source, true, state.readOnly) }).range(start, to))
+      }
+      return false
+    }
     if (node.name === 'Paragraph') {
       const raw = state.sliceDoc(node.from, node.to)
       const math = displayMath.exec(raw)

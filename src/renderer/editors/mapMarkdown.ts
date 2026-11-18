@@ -1,5 +1,5 @@
 import type { MapNode } from 'simple-mind-map'
-import DOMPurify from 'dompurify'
+import { sanitizeMarkdownHtml } from './markdownHtml'
 import { marked } from 'marked'
 
 const installed = new WeakSet<MapNode>()
@@ -12,10 +12,10 @@ function topicHtml(source: string) {
     const content = marked.parseInline(title?.[1] ?? line, { gfm: true, async: false })
     return title ? '<strong>' + content + '</strong>' : content
   }).join('<br>')
-  return DOMPurify.sanitize(html, {
-    ALLOWED_TAGS: ['b', 'strong', 'i', 'em', 's', 'del', 'code', 'mark', 'span', 'a', 'u', 'br'],
-    ALLOWED_ATTR: [],
-  })
+  const rendered = document.createElement('template')
+  rendered.innerHTML = sanitizeMarkdownHtml(html, true)
+  for (const link of rendered.content.querySelectorAll('a')) link.removeAttribute('href')
+  return rendered.innerHTML
 }
 
 export function displayMapMarkdown(node: MapNode) {

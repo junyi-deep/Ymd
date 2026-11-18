@@ -27,6 +27,8 @@ import type { ShortcutOverrides } from '../../shared/shortcuts'
 import { getOutlineDepth, maxOutlineDepth, setOutlineDepth } from './markdownOutlineDepth'
 import { PaneResize } from '../PaneResize'
 import { mountMarkdownScrollbar } from './markdownScrollbar'
+import { markdownFindPanel } from './markdownFind'
+import { inlineHtmlEnd, MarkdownHtmlPreview } from './markdownHtmlPreview'
 
 class DocumentTitle extends WidgetType {
   constructor(readonly element: HTMLElement) { super() }
@@ -80,9 +82,18 @@ function liveMarkdown(view: EditorView, path: string, loadRemote: boolean,
   const tree = syntaxTree(state)
 
   for (const viewport of view.visibleRanges) {
+    let coveredUntil = -1
     tree.iterate({ from: viewport.from, to: viewport.to, enter(node) {
       const { name, from, to } = node
-      if (name === 'Frontmatter') return false
+      if (from < coveredUntil && to <= coveredUntil || name === 'Frontmatter' || name === 'HTMLBlock') return false
+      if (name === 'HTMLTag') {
+        const end = inlineHtmlEnd(state, node.node)
+        if (end !== undefined && !(preview.focused && visible(from, end))) {
+          ranges.push(Decoration.replace({ widget: new MarkdownHtmlPreview(state.sliceDoc(from, end), false, state.readOnly) }).range(from, end))
+          coveredUntil = end
+        }
+        return false
+      }
       if (name === 'FootnoteReference' && !visible(from, to)) {
         const note = referenceNote(state, from, to)
         if (note) ranges.push(Decoration.replace({ widget: new FootnoteReference(note) }).range(from, to))
@@ -361,7 +372,7 @@ export function MarkdownEditor({ text, name, path, modified, platform, remoteIma
         highlightSpecialChars(), history(), keymap.of([...defaultKeymap.filter(binding =>
           !['Mod-i', 'Mod-[', 'Mod-]'].includes(binding.key ?? '') && (platform === 'darwin' || binding.key !== 'Shift-Mod-k')), ...historyKeymap]),
         EditorView.lineWrapping, markdownWithMetadata, syntaxHighlighting(classHighlighter), indentUnit.of('  '), footnotes, keyMode.current.of(writingKeys()),
-        search({ top: true }), Prec.high(keymap.of([{ key: 'Enter', run: expandMetadata },
+        search({ createPanel: markdownFindPanel, scrollToMatch: match => EditorView.scrollIntoView(match, { y: 'center' }) }), Prec.high(keymap.of([{ key: 'Enter', run: expandMetadata },
           { key: 'Tab', run: tabInList(), shift: tabInList(true) },
           ...markdownKeymap, ...searchKeymap.filter(binding => binding.key !== 'Mod-f')])),
         EditorView.contentAttributes.of({ 'aria-label': 'Markdown 编辑器', spellcheck: 'false' }),

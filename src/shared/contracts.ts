@@ -219,6 +219,8 @@ export function markdownImageExtension(name: string, type = '') {
 }
 
 export interface Desktop {
+  windowAction(action: 'minimize' | 'maximize' | 'close'): Promise<void>
+  onWindowMaximized(callback: (maximized: boolean) => void): () => void
   initialize(): Promise<{ library: Entry; journalRoot: Entry; recent: Entry[]; preferences: Preferences; platform: string; windowsAcrylic: boolean; macReducesTransparency: boolean; version: string; updateProxy: UpdateProxy; release: VersionStatus;
     initialFile?: DocumentFile; recoveries: RecoveryEntry[]; documentHistory: Entry[]; defaultStickerDirectory: string }>
   list(path: string): Promise<Entry[]>

@@ -5,6 +5,7 @@ import type { Tokens } from 'marked'
 import markedFootnote from 'marked-footnote'
 import { markdownBody } from './markdownExtras'
 import { applyImageSizing, isEmbeddedMarkdownImage, isRemoteMarkdownImage, markdownImageLine, readImageSizing } from './markdownImageSyntax'
+import { cleanMarkdownStyles } from './markdownHtml'
 import { displayMath } from './markdownPreviewMedia'
 
 export async function printMarkdown(file: string, source: string) {
@@ -50,6 +51,7 @@ export async function printMarkdown(file: string, source: string) {
   // Keeping the images inside a template prevents their sources from loading in the editor.
   const output = document.createElement('template')
   output.innerHTML = sanitized
+  cleanMarkdownStyles(output.content)
   const images = [...output.content.querySelectorAll('img')]
   await Promise.all(images.map(async image => {
     const sizing = readImageSizing(name => image.getAttribute(name) ?? undefined)

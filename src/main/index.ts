@@ -132,7 +132,6 @@ function normalizePreferences(value: (Partial<Preferences> & { solidBackground?:
 const macReducesTransparency = () => process.platform === 'darwin' && nativeTheme.prefersReducedTransparency
 const windowMaterial = (value = preferences) => windowMaterialFor(value, process.platform, windowsAcrylic, macReducesTransparency())
 const windowColor = () => nativeTheme.shouldUseDarkColors ? '#222323' : '#fdfdfd'
-const overlayColors = () => ({ color: windowColor(), symbolColor: nativeTheme.shouldUseDarkColors ? '#ededee' : '#222528' })
 
 function editorFor(contents?: WebContents | null) {
   if (!contents) return
@@ -161,7 +160,6 @@ function applyBackground(target?: BrowserWindow) {
       const frame = editor?.frame
       if (frame) frame.setAcrylic(material === 'acrylic', !nativeTheme.shouldUseDarkColors)
       else window.setBackgroundMaterial(material === 'acrylic' ? 'acrylic' : 'none')
-      window.setTitleBarOverlay(overlayColors())
     }
     window.setBackgroundColor(material === 'solid' ? windowColor() : '#00000000')
     if (process.platform === 'darwin') window.webContents.send('ymd:reducedTransparency', macReducesTransparency())
@@ -234,10 +232,8 @@ function createWindow(initialFile?: DocumentFile) {
     // A clear background requires an alpha-capable macOS window even when launched in solid mode.
     transparent: process.platform === 'darwin' || windowsAcrylic,
     backgroundColor: material === 'solid' ? windowColor() : '#00000000',
-    // DWM needs the title bar hidden to extend the backdrop through the client area.
-    titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : windowsAcrylic ? 'hidden' : 'default',
-    titleBarOverlay: windowsAcrylic ? { ...overlayColors(), height: 49 } : undefined,
-    autoHideMenuBar: windowsAcrylic,
+    titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : process.platform === 'win32' ? 'hidden' : 'default',
+    autoHideMenuBar: process.platform === 'win32',
     vibrancy: material === 'vibrancy' ? macVibrancy : undefined,
     visualEffectState: process.platform === 'darwin' ? 'active' : undefined,
     webPreferences: { preload: path.join(__dirname, '../preload/index.js'), contextIsolation: true, sandbox: true, nodeIntegration: false },
@@ -256,6 +252,8 @@ function createWindow(initialFile?: DocumentFile) {
   }
   applyBackground(window)
   window.on('focus', () => { lastEditor = editor })
+  window.on('maximize', () => window.webContents.send('ymd:windowMaximized', true))
+  window.on('unmaximize', () => window.webContents.send('ymd:windowMaximized', false))
   window.on('blur', () => editor.keys.reset())
   window.on('resize', () => {
     if (window.isMaximized() || window.isFullScreen() || window.isMinimized()) return
@@ -612,6 +610,15 @@ void app.whenReady().then(async () => {
     return { library, journalRoot, recent, preferences, platform: process.platform, windowsAcrylic, initialFile,
       recoveries: recovery.list(), documentHistory, defaultStickerDirectory, macReducesTransparency: macReducesTransparency(), version: app.getVersion(),
       updateProxy: releases.network.publicProxy(), release: releases.status }
+  })
+  handleEditor('windowAction', ({ window }, action: Parameters<Desktop['windowAction']>[0]) => {
+    if (process.platform !== 'win32') return
+    if (action === 'minimize') window.minimize()
+    else if (action === 'close') window.close()
+    else if (action === 'maximize') {
+      if (window.isMaximized()) window.unmaximize()
+      else window.maximize()
+    }
   })
   handle('newWindow', async (file?: string) => {
     if (quitPending) return

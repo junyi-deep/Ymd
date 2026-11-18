@@ -3,6 +3,12 @@ import type { Command, Desktop, Entry, JournalList, Preferences, RecoveryEntry, 
 import type { PitchDesktop } from '../shared/pitch'
 
 const desktop: Desktop = {
+  windowAction: action => ipcRenderer.invoke('ymd:windowAction', action),
+  onWindowMaximized: callback => {
+    const listener = (_: unknown, maximized: boolean) => callback(maximized)
+    ipcRenderer.on('ymd:windowMaximized', listener)
+    return () => ipcRenderer.removeListener('ymd:windowMaximized', listener)
+  },
   initialize: () => ipcRenderer.invoke('ymd:initialize'),
   list: path => ipcRenderer.invoke('ymd:list', path),
   chooseLibraryDirectory: () => ipcRenderer.invoke('ymd:chooseLibraryDirectory'),

@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState, type CSSProperties, type MouseEvent, type ReactNode } from 'react'
-import { AppWindow, ArrowLeft, CalendarDays, Check, ChevronDown, ChevronRight, CircleAlert, Copy, FilePlus2, FileText, FolderInput, Home, ListChecks, ListTree, Network, PanelLeft, LocateFixed, Minus, Pencil, Pin, Plus, Save, Search, Settings2, Shapes, Star, Trash2, X } from 'lucide-react'
+import { AppWindow, ArrowLeft, CalendarDays, Check, ChevronDown, ChevronRight, CircleAlert, Copy, FilePlus2, FileText, FolderInput, Home, ListChecks, ListTree, Network, PanelLeft, LocateFixed, Minus, Pencil, Pin, Plus, Save, Search, Settings2, Shapes, Square, Star, Trash2, X } from 'lucide-react'
 import { defaultPreferences, defaultUpdateProxy, documentFontSizes, windowBlurTint, windowMaterialFor, type Command, type DocumentFile, type EditorMode, type Entry, type FileKind, type JournalDay, type JournalList, type Preferences, type RecoveryEntry, type Scope, type SearchHit, type TreeChange, type TreeMutation, type UpdateProxyInput, type VersionStatus } from '../shared/contracts'
 import { documentLinkPath } from './documentLinks'
 import { documentModePaths, moveDocumentMode } from './documentModes'
@@ -62,6 +62,7 @@ export function App() {
   const draggingEntry = useRef<{ entry: Entry; reorderable: boolean }>(undefined)
   const [windowsAcrylic, setWindowsAcrylic] = useState(false)
   const [platform, setPlatform] = useState('')
+  const [maximized, setMaximized] = useState(false)
   const [preferences, setPreferences] = useState(defaultPreferences)
   const lastPreferences = useRef(preferences)
   const [systemDark, setSystemDark] = useState(() => matchMedia('(prefers-color-scheme: dark)').matches)
@@ -95,6 +96,7 @@ export function App() {
   const outlineSessions = useRef(new Map<string, OutlineSession>())
   const viewPositions = useRef(new Map<string, DocumentViewPosition>())
   const registerFlush = useCallback((flush?: () => void) => { flushEditor.current = flush }, [])
+  useEffect(() => window.desktop.onWindowMaximized(setMaximized), [])
   const modal = useRef<HTMLDialogElement>(null)
   const commandRef = useRef<(command: Command) => void>(() => {})
   const openIntent = useRef(0)
@@ -1013,9 +1015,16 @@ export function App() {
         </div>}
         <div className="title-actions ml-auto flex items-center gap-1">
           {!settings && <>
-            {active && <IconButton label="在文件管理器中显示" click={() => run(() => window.desktop.reveal(active.path))}><LocateFixed size={16} /></IconButton>}
+            {active && <IconButton label="在文件管理器中显示" click={() => run(() => window.desktop.reveal(active.path))}><LocateFixed size={18} /></IconButton>}
             <IconButton label="搜索文档" click={() => commandRef.current('search')}><Search size={18} /></IconButton>
           </>}
+          {platform === 'win32' && <div className="window-caption" role="group" aria-label="窗口操作">
+            <IconButton label="最小化窗口" click={() => run(() => window.desktop.windowAction('minimize'))}><Minus size={18} /></IconButton>
+            <IconButton label={maximized ? '还原窗口' : '最大化窗口'} click={() => run(() => window.desktop.windowAction('maximize'))}>
+              {maximized ? <Copy size={18} /> : <Square size={18} />}
+            </IconButton>
+            <IconButton label="关闭窗口" click={() => run(() => window.desktop.windowAction('close'))}><X size={18} /></IconButton>
+          </div>}
         </div>
       </div>
     </header>

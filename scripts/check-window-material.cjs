@@ -94,22 +94,22 @@ async function check(window) {
     nativeTheme.emit('updated')
   }
   const snapshot = () => evaluate(`(() => {
-    const overlay = navigator.windowControlsOverlay
-    const rect = overlay?.getTitlebarAreaRect()
     const actions = document.querySelector('.title-actions')
+    const buttons = [...(actions?.querySelectorAll('button') ?? [])]
+    const sizes = buttons.map(button => button.getBoundingClientRect().width)
     const sidebar = document.querySelector('.sidebar')
     const page = document.querySelector('.workspace, .settings-main')
     return {
       material: document.documentElement.dataset.windowMaterial,
-      overlay: overlay?.visible === true,
-      captionStart: rect ? rect.x + rect.width : 0,
+      captionButtons: actions?.querySelectorAll('.window-caption button').length,
+      sameSize: sizes.every(size => size === sizes[0]),
       toolsEnd: actions?.getBoundingClientRect().right,
       sidebar: sidebar && getComputedStyle(sidebar).backgroundColor,
       page: page && getComputedStyle(page).backgroundColor,
     }
   })()`)
   const waitMaterial = material => waitFor(snapshot, value => value.material === material && value.sidebar && value.page &&
-    (!windows || value.overlay) && (window.getBackgroundColor() === '#000000') === (material !== 'solid'), `Expected ${material}`)
+    (!windows || value.captionButtons === 3) && (window.getBackgroundColor() === '#000000') === (material !== 'solid'), `Expected ${material}`)
   const switcher = 'button[role="switch"][aria-label="透明窗口背景"]'
   const blur = 'button[role="switch"][aria-label="高斯模糊"]'
   const toggle = (control = switcher) => evaluate(`document.querySelector('${control}').click()`)
@@ -132,17 +132,22 @@ async function check(window) {
   await waitFor(() => evaluate(`!!document.querySelector('[aria-label="重命名 Window check.md"]')`), Boolean, 'Sample document visible')
   window.setSize(680, 595)
   if (windows) {
-    await waitFor(snapshot, value => value.captionStart > 0 && value.captionStart < 680 && value.toolsEnd <= value.captionStart + 1,
-      'Window tools stay clear of the caption buttons')
+    await waitFor(snapshot, value => value.captionButtons === 3 && value.sameSize && value.toolsEnd <= 680,
+      'Window controls and document actions have the same size and fit at narrow width')
+    const caption = label => evaluate(`document.querySelector('.window-caption [aria-label="${label}"]').click()`)
     await waitFor(region, allRounded, 'Resized window retains four rounded corners')
-    window.minimize()
+    await caption('最小化窗口')
+    await waitFor(() => window.isMinimized(), Boolean, 'Caption button minimized the window')
     await waitFor(shadow, value => !value, 'Minimized window hides its shadow')
     window.restore()
     await waitFor(shadow, Boolean, 'Restoring from minimized reapplies the shadow')
-    window.maximize()
+    await caption('最大化窗口')
+    await waitFor(() => window.isMaximized(), Boolean, 'Caption button maximized the window')
     await waitFor(region, value => value === 'none', 'Maximized window is unclipped')
     await waitFor(shadow, value => !value, 'Maximized window hides the shadow')
-    window.unmaximize()
+    await waitFor(() => evaluate("Boolean(document.querySelector('.window-caption [aria-label=\"还原窗口\"]'))"), Boolean, 'Restore button is visible')
+    await caption('还原窗口')
+    await waitFor(() => window.isMaximized(), value => !value, 'Caption button restored the window')
     await waitFor(region, allRounded, 'Restoring the window reapplies all four rounded corners')
     await waitFor(shadow, Boolean, 'Restoring from maximized reapplies the shadow')
   }

@@ -56,6 +56,8 @@ jobs:
         run: node node_modules/electron/cli.js scripts/check-markdown-selection.cjs
       - name: Check Markdown scrolling
         run: node node_modules/electron/cli.js scripts/check-markdown-scroll.cjs
+      - name: Check Markdown HTML and find panel
+        run: node node_modules/electron/cli.js scripts/check-markdown-html-find.cjs
       - name: Package
         run: npm exec -- electron-builder --${{ matrix.platform }} --${{ matrix.arch }} --publish never
       - name: Verify macOS update bundle
