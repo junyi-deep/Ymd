@@ -83,28 +83,33 @@ export function mountMarkdownScrollbar(view: EditorView, host: HTMLElement) {
     track.dataset.dragging = 'true'
     schedule()
   }, options)
-  track.addEventListener('pointermove', event => {
+  function finishDrag() {
+    if (!drag) return
+    drag = undefined
+    delete track.dataset.dragging
+    schedule()
+  }
+  const capture = { ...options, capture: true }
+  window.addEventListener('pointermove', event => {
     if (drag?.id !== event.pointerId) return
+    if (!(event.buttons & 1)) { finishDrag(); return }
     drag.y = event.clientY
     schedule()
-  }, options)
-  track.addEventListener('pointerup', event => {
+  }, capture)
+  window.addEventListener('pointerup', event => {
     if (drag?.id !== event.pointerId) return
+    if (event.button !== 0) return
     drag.y = event.clientY
     if (sync()) {
       // A fast release can precede measurement of the last visible cards.
       holdEnd = window.setTimeout(releaseEnd, 1000)
     }
-    drag = undefined
-    delete track.dataset.dragging
-    schedule()
-  }, options)
-  track.addEventListener('lostpointercapture', () => {
-    if (!drag) return
-    drag = undefined
-    delete track.dataset.dragging
-    schedule()
-  }, options)
+    finishDrag()
+  }, capture)
+  window.addEventListener('pointercancel', event => {
+    if (drag?.id === event.pointerId) finishDrag()
+  }, capture)
+  window.addEventListener('blur', finishDrag, options)
   track.addEventListener('keydown', event => {
     if (event.ctrlKey || event.altKey || event.metaKey || event.shiftKey) return
     const { clientHeight, scrollHeight } = scrollDOM

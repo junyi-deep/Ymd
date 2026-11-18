@@ -38,6 +38,7 @@ async function checkDrag(window) {
     await evaluate(button + '.click()')
     await waitFor(() => evaluate(`document.querySelector('.document-name')?.textContent === '${name}.md' &&
       Boolean(document.querySelector('.mermaid-content svg'))`), 'First diagram rendered')
+    await evaluate("document.querySelector('.markdown-scrollbar').focus({ preventScroll: true })")
   }
   await open('Drag')
   const geometry = () => evaluate(`(() => {
@@ -52,8 +53,22 @@ async function checkDrag(window) {
   assert.equal(await evaluate(`document.elementFromPoint(${start.x}, ${start.center})?.className`),
     'markdown-scrollbar-thumb', 'Initial mouse hit is on the thumb')
   const mouse = (type, y, options = {}) => webContents.debugger.sendCommand('Input.dispatchMouseEvent', { type, x: start.x, y, ...options })
-  await mouse('mouseMoved', start.center)
-  await mouse('mousePressed', start.center, { button: 'left', buttons: 1, clickCount: 1 })
+  const pressed = () => evaluate("document.querySelector('.markdown-scrollbar').dataset.dragging === 'true'")
+  async function grab(y) {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await mouse('mouseMoved', y)
+      await mouse('mousePressed', y, { button: 'left', buttons: 1, clickCount: 1 })
+      await delay(75)
+      if (await pressed()) return
+      await mouse('mouseReleased', y, { button: 'left', clickCount: 1 })
+    }
+    throw new Error('Test mouse did not grab the scrollbar')
+  }
+  await evaluate(`(() => {
+    const track = document.querySelector('.markdown-scrollbar')
+    track.addEventListener('gotpointercapture', event => track.releasePointerCapture(event.pointerId), { once: true })
+  })()`)
+  await grab(start.center)
   let heightChanged = false
   for (const fraction of [.1, .2, .3, .4, .5, .6, .7, .8]) {
     const y = start.top + (start.bottom - start.top) * fraction
@@ -76,8 +91,7 @@ async function checkDrag(window) {
   await open('Fast')
   const top = await geometry()
   assert.ok(top.offset < 100, JSON.stringify({ start, top }))
-  await mouse('mouseMoved', top.center)
-  await mouse('mousePressed', top.center, { button: 'left', buttons: 1, clickCount: 1 })
+  await grab(top.center)
   await mouse('mouseMoved', top.bottom - 1, { buttons: 1 })
   await mouse('mouseReleased', top.bottom - 1, { button: 'left', clickCount: 1 })
   await delay(750)
@@ -136,7 +150,9 @@ async function checkExternalRefresh(window) {
 
 async function check(window) {
   window.webContents.debugger.attach()
+  await window.webContents.debugger.sendCommand('Emulation.setFocusEmulationEnabled', { enabled: true })
   await checkDrag(window)
+  await window.webContents.debugger.sendCommand('Emulation.setFocusEmulationEnabled', { enabled: false })
   if (process.platform === 'win32') await checkExternalRefresh(window)
   window.webContents.debugger.detach()
 }
