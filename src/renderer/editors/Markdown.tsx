@@ -17,7 +17,7 @@ import { defaultKeymap, history, historyKeymap } from '@codemirror/commands'
 import { markdownKeymap } from '@codemirror/lang-markdown'
 import { ensureSyntaxTree, indentUnit, syntaxHighlighting, syntaxTree } from '@codemirror/language'
 import { openSearchPanel, search, searchKeymap } from '@codemirror/search'
-import { Compartment, EditorState, Prec, StateEffect, type EditorSelection, type Range } from '@codemirror/state'
+import { ChangeSet, Compartment, EditorState, Prec, StateEffect, type EditorSelection, type Range } from '@codemirror/state'
 import { Decoration, EditorView, highlightSpecialChars, keymap, ViewPlugin, WidgetType, type DecorationSet, type ViewUpdate } from '@codemirror/view'
 import { classHighlighter } from '@lezer/highlight'
 import { markdownPageWidths, type CodeBlockPreferences, type ContextMenuItem, type MarkdownOutlinePreferences, type MarkdownPageWidth, type SearchEngine } from '../../shared/contracts'
@@ -252,6 +252,7 @@ interface Props {
   path: string
   modified: number
   fontSize: number
+  reload: number
   platform: string
   remoteImages: boolean
   searchEngine: SearchEngine
@@ -283,7 +284,7 @@ interface Props {
   report: (error: unknown) => void
 }
 
-export function MarkdownEditor({ text, name, path, modified, platform, remoteImages, searchEngine, keyOverrides, outline, filenameTitle, saveStatus, updateOutline, width, codeBlocks, setWidth, registerFlush, onChange, find, jump, reveal, saveCopy, duplicate, move, trash, shortcuts, exportPdf, printDocument, pinned, starred, togglePin, toggleStar, followLink, report, position, fontSize }: Props) {
+export function MarkdownEditor({ text, name, path, modified, platform, remoteImages, searchEngine, keyOverrides, outline, filenameTitle, saveStatus, updateOutline, width, codeBlocks, setWidth, registerFlush, onChange, find, jump, reveal, saveCopy, duplicate, move, trash, shortcuts, exportPdf, printDocument, pinned, starred, togglePin, toggleStar, followLink, report, position, fontSize, reload }: Props) {
   const host = useRef<HTMLDivElement>(null)
   const [titleHost] = useState(() => document.createElement('div'))
   const titleMode = useRef(new Compartment())
@@ -301,6 +302,8 @@ export function MarkdownEditor({ text, name, path, modified, platform, remoteIma
   const view = useRef<EditorView>(null)
   const change = useRef(onChange)
   const initial = useRef(text)
+  const appliedReload = useRef(reload)
+  const serialization = useRef({ bom: '', newline: '\n' })
   const previousFind = useRef(find)
   const [source, setSource] = useState(position.markdown?.source ?? false)
   const sourceMode = useRef(source)
@@ -346,40 +349,47 @@ export function MarkdownEditor({ text, name, path, modified, platform, remoteIma
   }
   const writingKeys = () => typographyKeys(keyOverrides, platform, showTable, editor => chooseMarkdownImages(editor, path, report))
 
-  useLayoutEffect(() => {
-    const raw = initial.current
+  function createState(raw: string) {
     const bom = raw.startsWith('\uFEFF') ? '\uFEFF' : ''
     const newline = raw.match(/\r\n|\n|\r/)?.[0] ?? '\n'
     const doc = raw.slice(bom.length).replace(/\r\n|\r/g, '\n')
+    serialization.current = { bom, newline }
+    return EditorState.create({
+      doc,
+      extensions: [
+        highlightSpecialChars(), history(), keymap.of([...defaultKeymap.filter(binding =>
+          !['Mod-i', 'Mod-[', 'Mod-]'].includes(binding.key ?? '') && (platform === 'darwin' || binding.key !== 'Shift-Mod-k')), ...historyKeymap]),
+        EditorView.lineWrapping, markdownWithMetadata, syntaxHighlighting(classHighlighter), indentUnit.of('  '), footnotes, keyMode.current.of(writingKeys()),
+        search({ top: true }), Prec.high(keymap.of([{ key: 'Enter', run: expandMetadata },
+          { key: 'Tab', run: tabInList(), shift: tabInList(true) },
+          ...markdownKeymap, ...searchKeymap.filter(binding => binding.key !== 'Mod-f')])),
+        EditorView.contentAttributes.of({ 'aria-label': 'Markdown 编辑器', spellcheck: 'false' }),
+        markdownImageIntake(path, report),
+        renderMode.current.of(sourceMode.current ? [] : [livePreview, codeBlockPreferences.of(codeBlocks), renderedBlocks, markdownTable, markdownNotes]),
+        readMode.current.of([EditorState.readOnly.of(reading), EditorView.editable.of(!reading)]), titleMode.current.of(titleExtension),
+        EditorView.updateListener.of(update => {
+          const { bom, newline } = serialization.current
+          if (update.docChanged) change.current(bom + update.state.doc.toString().replaceAll('\n', newline))
+          if (update.geometryChanged || update.viewportChanged) refreshHeading.current?.()
+        }),
+      ],
+    })
+  }
+
+  useLayoutEffect(() => {
+    let state = createState(initial.current)
     const previous = position.markdown
-    const sameText = previous?.text === raw
+    const sameText = previous?.text === initial.current
+    if (sameText) state = state.update({ selection: { anchor: previous.anchor, head: previous.head } }).state
     const editor = new EditorView({
       parent: host.current!,
-      scrollTo: previous && (sameText ? previous.scroll : EditorView.scrollIntoView(Math.min(doc.length, previous.top), { y: 'start' })),
-      state: EditorState.create({
-        doc,
-        selection: sameText ? { anchor: previous.anchor, head: previous.head } : undefined,
-        extensions: [
-          highlightSpecialChars(), history(), keymap.of([...defaultKeymap.filter(binding =>
-            !['Mod-i', 'Mod-[', 'Mod-]'].includes(binding.key ?? '') && (platform === 'darwin' || binding.key !== 'Shift-Mod-k')), ...historyKeymap]),
-          EditorView.lineWrapping, markdownWithMetadata, syntaxHighlighting(classHighlighter), indentUnit.of('  '), footnotes, keyMode.current.of(writingKeys()),
-          search({ top: true }), Prec.high(keymap.of([{ key: 'Enter', run: expandMetadata },
-            { key: 'Tab', run: tabInList(), shift: tabInList(true) },
-            ...markdownKeymap, ...searchKeymap.filter(binding => binding.key !== 'Mod-f')])),
-          EditorView.contentAttributes.of({ 'aria-label': 'Markdown 编辑器', spellcheck: 'false' }),
-          markdownImageIntake(path, report),
-          renderMode.current.of(sourceMode.current ? [] : [livePreview, codeBlockPreferences.of(codeBlocks), renderedBlocks, markdownTable, markdownNotes]),
-          readMode.current.of([]), titleMode.current.of(titleExtension),
-          EditorView.updateListener.of(update => {
-            if (update.docChanged) change.current(bom + update.state.doc.toString().replaceAll('\n', newline))
-            if (update.geometryChanged || update.viewportChanged) refreshHeading.current?.()
-          }),
-        ],
-      }),
+      scrollTo: previous && (sameText ? previous.scroll : EditorView.scrollIntoView(Math.min(state.doc.length, previous.top), { y: 'start' })),
+      state,
     })
     view.current = editor
     return () => {
       const { anchor, head } = editor.state.selection.main
+      const { bom, newline } = serialization.current
       position.markdown = { anchor, head, source: sourceMode.current, scroll: editor.scrollSnapshot(),
         top: editor.lineBlockAtHeight(editor.scrollDOM.scrollTop).from,
         text: bom + editor.state.doc.toString().replaceAll('\n', newline) }
@@ -387,6 +397,29 @@ export function MarkdownEditor({ text, name, path, modified, platform, remoteIma
       view.current = null
     }
   }, [])
+
+  useLayoutEffect(() => {
+    const editor = view.current
+    if (!editor || appliedReload.current === reload) return
+    appliedReload.current = reload
+    let state = createState(text)
+    const before = editor.state.doc.toString()
+    const after = state.doc.toString()
+    let from = 0
+    let oldEnd = before.length
+    let newEnd = after.length
+    while (from < oldEnd && from < newEnd && before.charCodeAt(from) === after.charCodeAt(from)) from++
+    while (oldEnd > from && newEnd > from && before.charCodeAt(oldEnd - 1) === after.charCodeAt(newEnd - 1)) {
+      oldEnd--
+      newEnd--
+    }
+    const changes = ChangeSet.of({ from, to: oldEnd, insert: after.slice(from, newEnd) }, before.length)
+    state = state.update({ selection: editor.state.selection.map(changes) }).state
+    const scroll = editor.scrollSnapshot().map(changes)
+    // Retain the scroll container while replacing external content and clearing its undo history.
+    editor.setState(state)
+    if (scroll) editor.dispatch({ effects: scroll })
+  }, [reload])
 
   useLayoutEffect(() => {
     view.current?.dispatch({ effects: titleMode.current.reconfigure(titleExtension) })
