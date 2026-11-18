@@ -18,7 +18,7 @@ import { markdownKeymap } from '@codemirror/lang-markdown'
 import { ensureSyntaxTree, indentUnit, syntaxHighlighting, syntaxTree } from '@codemirror/language'
 import { openSearchPanel, search, searchKeymap } from '@codemirror/search'
 import { ChangeSet, Compartment, EditorState, Prec, StateEffect, type EditorSelection, type Range } from '@codemirror/state'
-import { Decoration, EditorView, highlightSpecialChars, keymap, ViewPlugin, WidgetType, type DecorationSet, type ViewUpdate } from '@codemirror/view'
+import { Decoration, EditorView, highlightSpecialChars, keymap, panels, ViewPlugin, WidgetType, type DecorationSet, type ViewUpdate } from '@codemirror/view'
 import { classHighlighter } from '@lezer/highlight'
 import { markdownPageWidths, type CodeBlockPreferences, type ContextMenuItem, type MarkdownOutlinePreferences, type MarkdownPageWidth, type SearchEngine } from '../../shared/contracts'
 import type { DocumentViewPosition } from './viewPosition'
@@ -27,7 +27,7 @@ import type { ShortcutOverrides } from '../../shared/shortcuts'
 import { getOutlineDepth, maxOutlineDepth, setOutlineDepth } from './markdownOutlineDepth'
 import { PaneResize } from '../PaneResize'
 import { mountMarkdownScrollbar } from './markdownScrollbar'
-import { markdownFindPanel } from './markdownFind'
+import { markdownFindPanel } from './documentFind'
 import { inlineHtmlEnd, MarkdownHtmlPreview } from './markdownHtmlPreview'
 import { markdownBlockFrame } from './markdownBlockFrame'
 
@@ -280,6 +280,7 @@ interface Props {
   registerFlush: (flush?: () => void) => void
   onChange: (text: string) => void
   find: number
+  findHost: React.RefObject<HTMLDivElement | null>
   jump?: { line: number; id: number }
   reveal: () => void
   saveCopy: () => void
@@ -297,7 +298,7 @@ interface Props {
   report: (error: unknown) => void
 }
 
-export function MarkdownEditor({ text, name, path, modified, platform, remoteImages, searchEngine, keyOverrides, outline, filenameTitle, saveStatus, updateOutline, width, codeBlocks, setWidth, registerFlush, onChange, find, jump, reveal, saveCopy, duplicate, move, trash, shortcuts, exportPdf, printDocument, pinned, starred, togglePin, toggleStar, followLink, report, position, fontSize, reload }: Props) {
+export function MarkdownEditor({ text, name, path, modified, platform, remoteImages, searchEngine, keyOverrides, outline, filenameTitle, saveStatus, updateOutline, width, codeBlocks, setWidth, registerFlush, onChange, find, findHost, jump, reveal, saveCopy, duplicate, move, trash, shortcuts, exportPdf, printDocument, pinned, starred, togglePin, toggleStar, followLink, report, position, fontSize, reload }: Props) {
   const host = useRef<HTMLDivElement>(null)
   const [titleHost] = useState(() => markdownBlockFrame())
   const titleMode = useRef(new Compartment())
@@ -373,6 +374,7 @@ export function MarkdownEditor({ text, name, path, modified, platform, remoteIma
         highlightSpecialChars(), history(), keymap.of([...defaultKeymap.filter(binding =>
           !['Mod-i', 'Mod-[', 'Mod-]'].includes(binding.key ?? '') && (platform === 'darwin' || binding.key !== 'Shift-Mod-k')), ...historyKeymap]),
         EditorView.lineWrapping, markdownWithMetadata, syntaxHighlighting(classHighlighter), indentUnit.of('  '), footnotes, keyMode.current.of(writingKeys()),
+        panels({ topContainer: findHost.current! }),
         search({ createPanel: markdownFindPanel, scrollToMatch: match => EditorView.scrollIntoView(match, { y: 'center' }) }), Prec.high(keymap.of([{ key: 'Enter', run: expandMetadata },
           { key: 'Tab', run: tabInList(), shift: tabInList(true) },
           ...markdownKeymap, ...searchKeymap.filter(binding => binding.key !== 'Mod-f')])),

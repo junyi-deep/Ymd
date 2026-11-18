@@ -1,7 +1,7 @@
 import { locateBlock, newBlock, projectList, writeList, type Block, type Projection } from './listProjection'
 
 export type OutlineCaret = { id: string; start: number; end: number }
-export type OutlineFrame = { blocks: Block[]; caret?: OutlineCaret; selected: string[]; scope?: string }
+export type OutlineFrame = { blocks: Block[]; projection: Projection; caret?: OutlineCaret; selected: string[]; scope?: string }
 export type OutlineSession = {
   projection: Projection
   text: string

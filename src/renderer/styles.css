@@ -74,7 +74,7 @@ kbd { color: var(--muted); font-family: inherit; font-size: .9em; white-space: n
 .titlebar { min-width: 0; -webkit-app-region: drag; gap: clamp(5px, 1vw, 12px); }
 .window[data-platform="win32"] { --workspace-min-width: 440px; }
 .titlebar button, .titlebar .segments { -webkit-app-region: no-drag; }
-.titlebar-content { display: flex; align-items: center; gap: inherit; flex: 1; min-width: 0; height: 100%; container: titlebar / inline-size; }
+.titlebar-content { --title-path-inset: 7px; position: relative; display: flex; align-items: center; gap: inherit; flex: 1; min-width: 0; height: 100%; container: titlebar / inline-size; }
 .window-controls { padding: 0 12px; flex: 0 0 auto; height: 100%; }
 [data-platform="darwin"] .window-controls { padding-left: 92px; }
 [data-sidebar="true"] .window-controls { width: var(--sidebar-width); }
@@ -83,7 +83,7 @@ kbd { color: var(--muted); font-family: inherit; font-size: .9em; white-space: n
 :root[data-window-material]:not([data-window-material="solid"]) .sidebar { background: var(--sidebar-glass); }
 .titlebar { background: linear-gradient(90deg, transparent var(--sidebar-width), var(--page) var(--sidebar-width)); }
 [data-sidebar="false"] .titlebar { background: var(--page); }
-.title-path { white-space: nowrap; max-width: 44%; padding-left: 7px; }
+.title-path { white-space: nowrap; max-width: 44%; padding-left: var(--title-path-inset); }
 .title-path strong, .source-label { overflow: hidden; text-overflow: ellipsis; }
 .title-path strong { font-weight: 650; }
 .document-name { overflow: hidden; text-overflow: ellipsis; font-weight: 650; border-radius: 5px; text-align: left; }
@@ -970,27 +970,31 @@ dialog footer .conflict-overwrite { background: #9b3438; color: #fff; }
 .journal-day[data-width="narrow"] .journal-editor .outline-content { width: min(100%, 570px); }
 .journal-editor:has(> .outline-editor) { min-height: 0; }
 
-.markdown-surface .cm-panels-top:has(> .markdown-find) {
-  position: absolute; inset: 5px 6px auto auto; max-width: calc(100% - 12px);
-  border: 0; background: transparent;
+.document-find-anchor {
+  position: absolute; z-index: 8; inset: calc(100% + 5px) 12px auto var(--title-path-inset);
+  pointer-events: none; -webkit-app-region: no-drag;
 }
-.markdown-find {
+.document-find-host .cm-panels { position: static; border: 0; background: transparent; }
+.document-find {
   display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 4px 5px; align-items: start;
-  width: min(410px, calc(100cqw - 24px)); padding: 6px; border-radius: 8px;
+  width: min(410px, 100%); padding: 6px; border-radius: 8px; pointer-events: auto;
   border: 1px solid var(--line); background: var(--page); color: var(--text); box-shadow: var(--shadow);
 }
-.markdown-find-row { grid-column: 2; display: flex; align-items: center; gap: 2px; min-width: 0; }
-.markdown-find > button { grid-column: 1; grid-row: 1; }
-.markdown-find [hidden] { display: none; }
-.markdown-find input {
+.document-find-row { grid-column: 2; display: flex; align-items: center; gap: 2px; min-width: 0; }
+.document-find > button { grid-column: 1; grid-row: 1; }
+.document-find [hidden] { display: none; }
+.document-find input {
   flex: 1; min-width: 0; height: 28px; padding: 3px 7px; border: 1px solid var(--line);
   background: var(--soft); border-radius: 5px; color: inherit;
 }
-.markdown-find input[aria-invalid="true"] { border-color: #bf464a; }
-.markdown-find .icon-button { width: 28px; height: 28px; }
-.markdown-find .icon-button[aria-pressed="true"] { background: var(--selected); color: var(--link); }
-.markdown-find .icon-button:disabled { opacity: .45; }
-@media print { .markdown-find { display: none; } }
+.document-find input[aria-invalid="true"] { border-color: #bf464a; }
+.document-find .icon-button { width: 28px; height: 28px; }
+.document-find .icon-button[aria-pressed="true"] { background: var(--selected); color: var(--link); }
+.document-find .icon-button:disabled { opacity: .45; }
+.outline-find-source { white-space: pre-wrap; overflow-wrap: anywhere; }
+.outline-find-source mark { color: inherit; background: var(--selected); }
+.outline-find-source mark:empty { border-inline-start: 2px solid var(--accent); }
+@media print { .document-find { display: none; } }
 
 .md-html-inline, .md-html-block { overflow-wrap: anywhere; }
 .md-html-block { padding-block: 4px; }

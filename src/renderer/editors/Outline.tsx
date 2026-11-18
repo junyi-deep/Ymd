@@ -14,7 +14,8 @@ import { MarkdownMenu } from './MarkdownMenu'
 import { OutlineCodeCard } from './OutlineCodeCard'
 import { completeCodeFence, outlineCode } from './outlineCode'
 import { OutlineMarkdown, outlineReferences } from './OutlineMarkdown'
-import { locateBlock, newBlock, projectionRemainder, writeList, type Block } from './listProjection'
+import { locateBlock, newBlock, projectionRemainder, writeList, type Block, type Projection } from './listProjection'
+import { OutlineFindSource, useOutlineFind } from './outlineFind'
 import { blockPath, editBlockText, flattenBlocks, moveBranches, openOutline, readBranches, removeBranches, selectedBranches, writeBranches,
   type OutlineCaret, type OutlineDrop, type OutlineFrame, type OutlineSession } from './outlineEditing'
 
@@ -23,8 +24,10 @@ const typingTypes = new Set(['insertText', 'deleteContentBackward', 'deleteConte
 const blockTitle = (node: Block) => node.text.split('\n')[0].trim() || '空块'
 const cursor = (id: string, start: number, end = start): OutlineCaret => ({ id, start, end })
 
-export function OutlineEditor({ text, name, path, platform, remoteImages, sessions, width, setWidth, remainderVisible, setRemainderVisible, followLink, onChange, position, filenameTitle, codeLineNumbers, embedded = false }: {
+export function OutlineEditor({ text, name, path, platform, remoteImages, sessions, width, setWidth, remainderVisible, setRemainderVisible, followLink, onChange, position, filenameTitle, find, findHost, codeLineNumbers, embedded = false }: {
   position: DocumentViewPosition
+  find: number
+  findHost: React.RefObject<HTMLDivElement | null>
   codeLineNumbers: boolean
   embedded?: boolean
   filenameTitle?: React.ReactNode
@@ -104,6 +107,21 @@ export function OutlineEditor({ text, name, path, platform, remoteImages, sessio
   const focused = breadcrumb.at(-1)
   const visible = useMemo(() => flattenBlocks(focused ? [focused] : blocks, collapsed), [focused, blocks, collapsed])
   const selectedSet = new Set(selected)
+  const fileSearch = useOutlineFind({
+    find, host: findHost, root, platform, blocks, projection: session.projection,
+    reveal(key) {
+      setEditing(undefined)
+      setSelected([])
+      const parents = blockPath(session.blocks, key).slice(0, -1)
+      if (scope && key !== scope && !parents.some(parent => parent.id === scope)) setBranch(undefined, false)
+      if (parents.some(parent => collapsed.has(parent.id))) {
+        const next = new Set(collapsed)
+        for (const parent of parents) next.delete(parent.id)
+        syncCollapsed(next)
+      }
+    },
+    apply: (next, projection) => { change(next, { projection }) },
+  })
 
   function caret() {
     if (!editing) return
@@ -113,7 +131,7 @@ export function OutlineEditor({ text, name, path, platform, remoteImages, sessio
   }
 
   function frame(at = caret()): OutlineFrame {
-    return { blocks: session!.blocks, caret: at, selected, scope }
+    return { blocks: session!.blocks, projection: session!.projection, caret: at, selected, scope }
   }
 
   function cursorTo(next: OutlineCaret) {
@@ -135,11 +153,12 @@ export function OutlineEditor({ text, name, path, platform, remoteImages, sessio
   }
 
   function change(update: Block[] | ((next: Block[]) => boolean), options?: {
-    before?: OutlineCaret; after?: OutlineCaret; coalesce?: boolean; selection?: string[]; keepGroup?: boolean
+    before?: OutlineCaret; after?: OutlineCaret; coalesce?: boolean; selection?: string[]; keepGroup?: boolean; projection?: Projection
   }) {
     const next = typeof update === 'function' ? structuredClone(session!.blocks) : update
     if (typeof update === 'function' && !update(next)) return false
-    const text = writeList(session!.projection, next)
+    const projection = options?.projection ?? session!.projection
+    const text = writeList(projection, next)
     if (text === session!.text) return false
     if (!options?.coalesce) {
       session!.undo.push(frame(options?.before))
@@ -151,6 +170,8 @@ export function OutlineEditor({ text, name, path, platform, remoteImages, sessio
     if (options?.after) cursorTo(options.after)
     else if (editing && !locateBlock(next, editing)) setEditing(undefined)
     if (scope && !locateBlock(next, scope)) setBranch(undefined)
+    if (!options?.projection) fileSearch.clearMatch()
+    session!.projection = projection
     reflect(next, text)
     return true
   }
@@ -161,6 +182,7 @@ export function OutlineEditor({ text, name, path, platform, remoteImages, sessio
     const saved = source.pop()
     if (!saved) return
     destination.push(frame())
+    fileSearch.clearMatch()
     typing.current = undefined
     composition.current = undefined
     setBranch(saved.scope, false)
@@ -176,6 +198,7 @@ export function OutlineEditor({ text, name, path, platform, remoteImages, sessio
       rangeEnd.current = saved.selected.at(-1)
       root.current?.focus({ preventScroll: true })
     }
+    session!.projection = saved.projection
     reflect(saved.blocks)
   }
 
@@ -540,6 +563,7 @@ export function OutlineEditor({ text, name, path, platform, remoteImages, sessio
     return <ul>{nodes.map(node => {
       const closed = collapsed.has(node.id)
       const code = outlineCode(node.text)
+      const match = fileSearch.match?.key === node.id ? fileSearch.match : undefined
       return <li key={node.id} data-outline-block={node.id}>
         <div className="outline-row" data-selected={selectedSet.has(node.id)}
           data-drop={drop?.id === node.id ? drop.position : undefined}
@@ -582,7 +606,7 @@ export function OutlineEditor({ text, name, path, platform, remoteImages, sessio
                 event.dataTransfer.effectAllowed = 'move'
               }} onDragEnd={() => { drag.current = undefined; setDrop(undefined) }}><span /></button>
           </span>
-          {code ? <OutlineCodeCard fence={code} raw={node.text} editing={editing === node.id} showNumbers={codeLineNumbers}
+          {code && !match ? <OutlineCodeCard fence={code} raw={node.text} editing={editing === node.id} showNumbers={codeLineNumbers}
             request={focus.current?.id === node.id ? focus.current : undefined}
             clearRequest={() => { if (focus.current?.id === node.id) focus.current = undefined }}
             start={offset => cursorTo(cursor(node.id, offset))}
@@ -624,7 +648,8 @@ export function OutlineEditor({ text, name, path, platform, remoteImages, sessio
                     event.preventDefault()
                     cursorTo(cursor(node.id, 0))
                   }
-                }}><OutlineMarkdown block text={node.text} {...{ path, remoteImages, links }} /></div>}
+                }}>{match ? <OutlineFindSource source={node.text} match={match} />
+                  : <OutlineMarkdown block text={node.text} {...{ path, remoteImages, links }} />}</div>}
         </div>
         {node.children.length > 0 && !closed && <div className="outline-children">
           <button className="outline-guide" tabIndex={-1} aria-label="折叠此分支" onClick={() => collapse(node.id, true)} />
@@ -635,7 +660,9 @@ export function OutlineEditor({ text, name, path, platform, remoteImages, sessio
   }
 
   const remainder = !focused && projectionRemainder(session.projection)
+  const remainderMatch = fileSearch.match?.key === 'before' || fileSearch.match?.key === 'after' ? fileSearch.match : undefined
   return <div ref={root} className="outline-editor" data-width={width} tabIndex={-1} onKeyDown={handleKeys}
+    onKeyDownCapture={event => { if (fileSearch.keydown(event.nativeEvent)) { event.preventDefault(); event.stopPropagation() } }}
     onCopy={event => copy(event, false)} onCut={event => copy(event, true)} onPaste={paste}
     onClick={event => {
       const anchor = event.target instanceof Element && event.target.closest<HTMLAnchorElement>('a[href]')
@@ -675,6 +702,7 @@ export function OutlineEditor({ text, name, path, platform, remoteImages, sessio
       {filenameTitle}
       {render(focused ? [focused] : blocks)}
       <button className="tool-button outline-add" onClick={() => addBlock(focused?.id)}><Plus size={17} />新增块</button>
+      {remainderMatch && <OutlineFindSource source={session.projection[remainderMatch.key === 'before' ? 'before' : 'after']} match={remainderMatch} excerpt />}
       {remainder && <DocumentRemainder text={remainder} className="outline-surrounding" {...{ path, remoteImages, links }}
         visible={remainderVisible} onToggle={setRemainderVisible} />}
     </div>

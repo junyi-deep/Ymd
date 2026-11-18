@@ -82,6 +82,7 @@ export function App() {
   const [mapJump, setMapJump] = useState<{ path: string; target: TopicLink }>()
   const [revision, setRevision] = useState(0)
   const [find, setFind] = useState(0)
+  const findHost = useRef<HTMLDivElement>(null)
   const [prompt, setPrompt] = useState<Prompt>()
   const [recoveries, setRecoveries] = useState<RecoveryEntry[]>([])
   const deferredConflicts = useRef(new Map<string, Session['disk']>())
@@ -586,7 +587,7 @@ export function App() {
     if (command === 'preferences') { flushEditor.current?.(); setSettingsPage('外观'); setSettings(value => !value) }
     if (command === 'save' && active) { flushEditor.current?.(); run(() => sessions.save(active.path)) }
     if (command === 'find') {
-      if (!settings && active?.kind === 'markdown' && (active.mode === 'markdown' || active.mode === 'map')) setFind(value => value + 1)
+      if (!settings && active?.kind === 'markdown') setFind(value => value + 1)
       else setSearchOpen(true)
     }
   }
@@ -947,7 +948,7 @@ export function App() {
             width={preferences.markdownPageWidth} codeBlocks={preferences.codeBlocks} setWidth={markdownPageWidth => updatePreferences({ markdownPageWidth })}
             updateOutline={patch => updatePreferences({ markdownOutline: { ...lastPreferences.current.markdownOutline, ...patch } })}
             searchEngine={preferences.searchEngine} registerFlush={registerFlush}
-            find={find} jump={jump?.path === active.path ? jump : undefined} onChange={edit}
+            find={find} findHost={findHost} jump={jump?.path === active.path ? jump : undefined} onChange={edit}
             report={error => setNotice(message(error))}
             followLink={href => followDocumentLink(active.path, href)}
             pinned={marks.pinned.includes(active.path)} starred={marks.starred.includes(active.path)}
@@ -975,6 +976,7 @@ export function App() {
             })} />
           : active.mode === 'outline'
             ? <OutlineEditor key={active.path + ':' + active.reload} text={active.text} name={active.name} path={active.path} position={position!}
+              find={find} findHost={findHost}
               filenameTitle={filenameTitle} platform={platform} followLink={href => followDocumentLink(active.path, href)} remoteImages={preferences.remoteImages} sessions={outlineSessions.current} onChange={edit}
               width={preferences.outlinePageWidth} embedded={viewingJournal} codeLineNumbers={preferences.outlineCodeLineNumbers} setWidth={outlinePageWidth => updatePreferences({ outlinePageWidth })}
               remainderVisible={preferences.outlineRemainderVisible} setRemainderVisible={outlineRemainderVisible => updatePreferences({ outlineRemainderVisible })} />
@@ -1008,6 +1010,7 @@ export function App() {
               {dirty && <span className="unsaved-dot" title="未保存" />}</>
             : <strong>Ymd</strong>}
         </div>
+        <div className="document-find-anchor"><div className="document-find-host" ref={findHost} /></div>
         {!settings && active?.kind === 'markdown' && <div className="segments mode-switch" aria-label="编辑模式">
           {modes.filter(item => !viewingJournal || item.value !== 'map').map(({ value, label, icon: Icon }) => <button key={value} type="button" title={label} aria-label={label}
             aria-pressed={active.mode === value} onClick={() => { flushEditor.current?.(); sessions.setMode(active.path, value as EditorMode) }}>
