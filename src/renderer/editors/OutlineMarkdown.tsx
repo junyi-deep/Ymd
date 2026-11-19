@@ -3,7 +3,8 @@ import { Marked, marked, type Links } from 'marked'
 import { markdownBody } from './markdownExtras'
 import { sanitizeMarkdownHtml } from './markdownHtml'
 import { decodeImageAttribute, markdownImageLine, readHtmlImage } from './markdownImageSyntax'
-import { createMarkdownImage, displayMath, scheduleBlockPreview, type PreviewImage } from './markdownPreviewMedia'
+import { createMarkdownImage, displayMath, mountBlockPreview, type PreviewImage } from './markdownPreviewMedia'
+import { diagramKind, type PreviewBlockKind } from './renderDiagram'
 
 const previews = new WeakMap<HTMLElement, { observer: IntersectionObserver; pending: Map<Element, () => void> }>()
 
@@ -46,20 +47,21 @@ export const OutlineMarkdown = memo(function OutlineMarkdown({ text, path, remot
 
   useLayoutEffect(() => {
     const view = root.current!
-    const scroll = block ? view.closest<HTMLElement>('.outline-editor') : null
+    const outline = view.closest<HTMLElement>('.outline-editor')
+    const scroll = block ? outline : null
     const cancelDiagrams: (() => void)[] = []
     const populate = () => {
       const markdown = text.replace(/^\uFEFF/, '')
       const source = block && /^\[[ xX]\]\s/.test(markdown) ? '- ' + markdown : markdown
       const images = new Map<string, PreviewImage>()
-      const diagrams = new Map<string, { code: string; kind: 'mermaid' | 'math' }>()
+      const diagrams = new Map<string, { code: string; kind: PreviewBlockKind }>()
       const prefix = crypto.randomUUID() + '-'
       const imagePlaceholder = (image: PreviewImage) => {
         const id = prefix + images.size
         images.set(id, image)
         return `<span data-preview-image="${id}"></span>`
       }
-      const blockPlaceholder = (code: string, kind: 'mermaid' | 'math') => {
+      const blockPlaceholder = (code: string, kind: PreviewBlockKind) => {
         const id = prefix + diagrams.size
         diagrams.set(id, { code, kind })
         return `<figure data-preview-block="${id}"></figure>`
@@ -82,8 +84,8 @@ export const OutlineMarkdown = memo(function OutlineMarkdown({ text, path, remot
             return image ? imagePlaceholder(image) : false
           },
           code(token) {
-            if (token.text.trim() && token.lang?.trim().toLowerCase() === 'mermaid') return blockPlaceholder(token.text, 'mermaid')
-            return false
+            const kind = diagramKind(token.lang)
+            return kind && token.text.trim() ? blockPlaceholder(token.text, kind) : false
           },
           paragraph(token) {
             const math = displayMath.exec(token.text)
@@ -107,27 +109,14 @@ export const OutlineMarkdown = memo(function OutlineMarkdown({ text, path, remot
         if (!image) continue
         const parent = placeholder.parentElement
         const standalone = !parent || parent.localName === 'p' && parent.childElementCount === 1 && !parent.textContent?.trim()
-        placeholder.replaceWith(createMarkdownImage(path, image, remoteImages, standalone, undefined, !!view.closest('.outline-editor')))
+        placeholder.replaceWith(createMarkdownImage(path, image, remoteImages, standalone, undefined, !!outline))
       }
       for (const figure of output.querySelectorAll<HTMLElement>('figure[data-preview-block]')) {
         const preview = diagrams.get(figure.dataset.previewBlock ?? '')
         if (!preview) continue
         delete figure.dataset.previewBlock
-        const diagram = preview.kind === 'mermaid'
-        figure.className = 'mermaid-preview'
-        figure.setAttribute('aria-label', diagram ? 'Mermaid 图' : '公式块')
-        const content = document.createElement('div')
-        content.className = 'mermaid-content'
-        content.textContent = diagram ? '正在绘制 Mermaid 图…' : '正在渲染公式…'
-        figure.append(content)
-        cancelDiagrams.push(scheduleBlockPreview(content, preview.code, preview.kind,
-          scroll ?? view.closest('.outline-editor, .map-remainder .document-remainder-body'), undefined, () => {
-          content.classList.add('mermaid-error')
-          content.textContent = diagram ? 'Mermaid 无法渲染。' : '公式无法渲染。'
-          const raw = document.createElement('pre')
-          raw.textContent = preview.code
-          figure.append(raw)
-        }))
+        cancelDiagrams.push(mountBlockPreview(figure, preview.code, preview.kind,
+          outline ?? view.closest('.map-remainder .document-remainder-body'), { showSourceOnError: true, viewer: !!outline }))
       }
       view.replaceChildren(output)
     }

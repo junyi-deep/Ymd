@@ -6,7 +6,8 @@ import { EditorView, keymap, lineNumbers } from '@codemirror/view'
 import { syntaxHighlighting } from '@codemirror/language'
 import { classHighlighter } from '@lezer/highlight'
 import { createCodeLanguagePicker, findCodeLanguage, paintCode } from './codeCard'
-import { scheduleBlockPreview } from './markdownPreviewMedia'
+import { mountBlockPreview } from './markdownPreviewMedia'
+import { diagramKind } from './renderDiagram'
 import type { OutlineCaret } from './outlineEditing'
 import type { OutlineCode } from './outlineCode'
 
@@ -24,7 +25,7 @@ export function OutlineCodeCard({ fence, raw, editing, showNumbers, request, sta
   const [copied, setCopied] = useState(false)
   const language = useRef<HTMLDivElement>(null)
   const preview = useRef<HTMLElement>(null)
-  const diagramHost = useRef<HTMLDivElement>(null)
+  const diagramHost = useRef<HTMLElement>(null)
   const host = useRef<HTMLDivElement>(null)
   const editor = useRef<EditorView | null>(null)
   const langExtension = useRef(new Compartment())
@@ -32,7 +33,7 @@ export function OutlineCodeCard({ fence, raw, editing, showNumbers, request, sta
   const current = useRef({ fence, change, rememberCaret })
   current.current = { fence, change, rememberCaret }
   const live = editing && !source
-  const mermaid = fence.info.trim().toLowerCase() === 'mermaid' && !!fence.code.trim()
+  const diagram = fence.code.trim() ? diagramKind(fence.info) : undefined
 
   useLayoutEffect(() => {
     const parent = language.current!
@@ -48,7 +49,8 @@ export function OutlineCodeCard({ fence, raw, editing, showNumbers, request, sta
 
   useEffect(() => {
     const content = preview.current
-    if (!content || source || live) return
+    if (!content || live) return
+    if (source) return paintCode(content, raw, fence.info, showNumbers)
     let dispose: (() => void) | undefined
     const root = content.closest('.outline-editor')
     const observer = new IntersectionObserver(entries => {
@@ -58,17 +60,13 @@ export function OutlineCodeCard({ fence, raw, editing, showNumbers, request, sta
     }, { root, rootMargin: '350px 0px' })
     observer.observe(content)
     return () => { observer.disconnect(); dispose?.() }
-  }, [fence.code, fence.info, showNumbers, source, live])
+  }, [fence.code, fence.info, raw, showNumbers, source, live])
 
   useEffect(() => {
     const content = diagramHost.current
-    if (!content) return
-    content.textContent = '正在绘制 Mermaid 图…'
-    return scheduleBlockPreview(content, fence.code, 'mermaid', content.closest('.outline-editor'), undefined, () => {
-      content.textContent = fence.code
-      content.classList.add('mermaid-error')
-    })
-  }, [fence.code, mermaid, source, live])
+    if (!content || !diagram) return
+    return mountBlockPreview(content, fence.code, diagram, content.closest('.outline-editor'), { showSourceOnError: true })
+  }, [fence.code, diagram, source, live])
 
   useLayoutEffect(() => {
     if (!live || !host.current) return
@@ -136,7 +134,7 @@ export function OutlineCodeCard({ fence, raw, editing, showNumbers, request, sta
   }}>
     <div className="md-code-header">
       <div ref={language} className="md-code-language-field" />
-      {mermaid && !live && !source && <button type="button" className="icon-button" aria-label="编辑代码块" title="编辑代码块"
+      {diagram && !live && !source && <button type="button" className="icon-button" aria-label="编辑代码块" title="编辑代码块"
         onClick={() => start(fence.offset + fence.code.length)}><Pencil size={15} /></button>}
       <button type="button" className="icon-button" aria-label={source ? '返回代码卡片' : '查看源码'}
         title={source ? '返回代码卡片' : '查看源码'} aria-pressed={source} onClick={() => setSource(!source)}><Code2 size={15} /></button>
@@ -145,7 +143,7 @@ export function OutlineCodeCard({ fence, raw, editing, showNumbers, request, sta
         {copied ? <Check size={15} /> : <Copy size={15} />}
       </button>
     </div>
-    {source ? <pre className="md-code-body" aria-label="代码块源码"><code>{raw}</code></pre>
+    {source ? <pre className="md-code-body" aria-label="代码块源码"><code ref={preview} /></pre>
       : live ? <div className="md-code-body outline-code-edit" data-code-editor ref={host} onKeyDown={event => {
           if (event.key === 'Escape' && !event.nativeEvent.isComposing) {
             event.preventDefault()
@@ -153,7 +151,7 @@ export function OutlineCodeCard({ fence, raw, editing, showNumbers, request, sta
             stop()
           }
         }} />
-      : mermaid ? <div className="md-code-body"><div className="mermaid-preview"><div ref={diagramHost} className="mermaid-content" /></div></div>
+      : diagram ? <div className="md-code-body"><figure ref={diagramHost} /></div>
       : <pre className="md-code-body" aria-label="编辑代码块" tabIndex={0}
           style={{ minHeight: Math.min(200, 40 + (fence.code.match(/\n/g)?.length ?? 0) * 20) }}
           onClick={event => {

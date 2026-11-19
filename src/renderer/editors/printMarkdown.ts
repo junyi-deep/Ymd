@@ -1,5 +1,5 @@
 import DOMPurify from 'dompurify'
-import { renderMermaid } from './renderMermaid'
+import { diagramKind, renderDiagram } from './renderDiagram'
 import { Marked } from 'marked'
 import type { Tokens } from 'marked'
 import markedFootnote from 'marked-footnote'
@@ -24,9 +24,10 @@ export async function printMarkdown(file: string, source: string) {
     walkTokens: async token => {
       if (token.type === 'code') {
         const code = token as Tokens.Code
-        if (code.lang?.trim().toLowerCase() !== 'mermaid') return
+        const kind = diagramKind(code.lang)
+        if (!kind) return
         try {
-          const svg = await renderMermaid(code.text)
+          const svg = await renderDiagram(kind, code.text)
           Object.assign(token, { type: 'html', text: '<figure>' + svg + '</figure>' })
         } catch {}
       }

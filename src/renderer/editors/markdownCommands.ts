@@ -166,11 +166,13 @@ const paragraphs: EditCommand[] = [
   { id: 'paragraph', command: paragraph('') },
 ]
 export const insertMermaid = insertBlock('```mermaid\nflowchart LR\n  A[开始] --> B[结束]\n```', 'flowchart LR\n  A[开始] --> B[结束]')
+export const insertPlantUml = insertBlock('```plantuml\n@startuml\nAlice -> Bob : 你好\n@enduml\n```', 'Alice -> Bob : 你好')
 const inserts: EditCommand[] = [
   { id: 'code-block', command: insertBlock('```text\n代码\n```', '代码') },
   { id: 'formula', command: insertBlock('$$\n公式\n$$', '公式') },
   { id: 'rule', command: insertBlock('---') },
   { id: 'mermaid', command: insertMermaid },
+  { id: 'plantuml', command: insertPlantUml },
   { id: 'footnote', command: insertFootnote },
   { id: 'metadata', command: insertMetadata },
   { id: 'paragraph-before', command: insertParagraph(true) },

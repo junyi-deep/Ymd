@@ -1,6 +1,6 @@
 import { LanguageDescription } from '@codemirror/language'
-import { languages } from '@codemirror/language-data'
 import { classHighlighter, highlightTree } from '@lezer/highlight'
+import { codeLanguages, codeLanguageToken } from './codeLanguages'
 
 function fillCode(content: HTMLElement, code: string, colors: { from: number; to: number; classes: string }[]) {
   let end = 0
@@ -24,25 +24,24 @@ function fillCode(content: HTMLElement, code: string, colors: { from: number; to
 }
 
 let nextLanguageList = 0
-const languageToken = /^[^\s`{},]+/
-const languageOptions = languages.map(item => ({
+const languageOptions = codeLanguages.map(item => ({
   name: item.name,
   token: [item.name, ...item.alias].find(alias => !/\s/.test(alias))?.toLowerCase() ?? item.name.toLowerCase().replace(/ /g, '-'),
 }))
 
 export function findCodeLanguage(info: string) {
-  return LanguageDescription.matchLanguageName(languages, languageToken.exec(info.trimStart())?.[0] ?? '', false)
+  return LanguageDescription.matchLanguageName(codeLanguages, codeLanguageToken.exec(info.trimStart())?.[0] ?? '', false)
 }
 
 export function replaceCodeLanguage(info: string, value: string) {
   const leading = info.length - info.trimStart().length
   const rest = info.slice(leading)
-  const first = languageToken.exec(rest)?.[0]
+  const first = codeLanguageToken.exec(rest)?.[0]
   return info.slice(0, leading) + value + (!first && rest && value ? ' ' : '') + rest.slice(first?.length ?? 0)
 }
 
 export function createCodeLanguagePicker(info: string, update: (value: string) => void, finish?: () => void) {
-  const original = languageToken.exec(info.trimStart())?.[0] ?? ''
+  const original = codeLanguageToken.exec(info.trimStart())?.[0] ?? ''
   const input = document.createElement('input')
   input.className = 'md-code-language'
   input.ariaLabel = '代码语言'
@@ -60,7 +59,7 @@ export function createCodeLanguagePicker(info: string, update: (value: string) =
     const query = input.value.trim()
     const match = languageOptions.find(option => option.name.toLowerCase() === query.toLowerCase())
     const value = match?.token ?? query
-    if (value && languageToken.exec(value)?.[0] !== value) { input.value = committed; return }
+    if (value && codeLanguageToken.exec(value)?.[0] !== value) { input.value = committed; return }
     input.value = value
     if (committed === value) return
     committed = value

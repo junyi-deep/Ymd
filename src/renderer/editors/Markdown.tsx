@@ -2,7 +2,7 @@ import { useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState
 import { createPortal } from 'react-dom'
 import { BetweenHorizontalStart, Check, ChevronRight, Code2, Copy, Eye, FileDown, FileText, FolderInput, Info, Keyboard, ListTree, LocateFixed, MoreHorizontal, Pin, Printer, Search, Star, Layers, Trash2 } from 'lucide-react'
 import { MarkdownMenu, type MenuItem } from './MarkdownMenu'
-import { contextItems, insertMermaid, tabInList, typographyKeys } from './markdownCommands'
+import { contextItems, insertMermaid, insertPlantUml, tabInList, typographyKeys } from './markdownCommands'
 import { markdownDestination, safeMarkdownHref } from './markdownLinks'
 import { markdownPlainText } from './markdownHtml'
 import { chooseMarkdownImages, editImageReference, imageContextItems, isImageNode, MarkdownImage, markdownImageIntake, readImageReference, type ImageResizeRequest } from './markdownImages'
@@ -623,6 +623,7 @@ export function MarkdownEditor({ text, name, path, modified, platform, remoteIma
     { label: '更多', icon: <MoreHorizontal size={16} />, children: [
       { label: reading ? '编辑模式' : '阅读模式', icon: <Eye size={16} />, run: () => setReading(!reading) },
       { label: '插入 Mermaid 图', icon: <ListTree size={16} />, disabled: reading, run: () => { if (view.current) { insertMermaid(view.current); view.current.focus() } } },
+      { label: '插入 PlantUML 图', icon: <ListTree size={16} />, disabled: reading, run: () => { if (view.current) { insertPlantUml(view.current); view.current.focus() } } },
       { label: '插入脚注', disabled: reading, run: () => { if (view.current) { insertFootnote(view.current); view.current.focus() } } },
       { label: '插入 YAML 元数据', disabled: reading, run: () => { if (view.current) { insertMetadata(view.current); view.current.focus() } } },
       { label: '在文件管理器中显示', icon: <LocateFixed size={16} />, run: reveal },

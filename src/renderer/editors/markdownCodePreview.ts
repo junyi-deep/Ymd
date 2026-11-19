@@ -15,6 +15,32 @@ interface CodeBlock {
   quoteDepth: number
 }
 
+function codeButton(label: string, icon: typeof Copy, onClick: (button: HTMLButtonElement) => void) {
+  const element = document.createElement('button')
+  element.type = 'button'
+  element.className = 'icon-button'
+  element.title = element.ariaLabel = label
+  element.innerHTML = renderToStaticMarkup(createElement(icon, { size: 15, 'aria-hidden': true }))
+  element.addEventListener('click', () => onClick(element))
+  return element
+}
+
+export function copyCodeButton(read: () => string | undefined) {
+  let reset: number | undefined
+  return codeButton('复制代码', Copy, element => {
+    const code = read()
+    if (code === undefined) return
+    void navigator.clipboard.writeText(code).then(() => {
+      if (!element.isConnected) return
+      window.clearTimeout(reset)
+      const copyIcon = renderToStaticMarkup(createElement(Copy, { size: 15, 'aria-hidden': true }))
+      element.innerHTML = renderToStaticMarkup(createElement(Check, { size: 15, 'aria-hidden': true }))
+      element.ariaLabel = element.title = '已复制代码'
+      reset = window.setTimeout(() => { element.innerHTML = copyIcon; element.ariaLabel = element.title = '复制代码' }, 1100)
+    }).catch(() => { if (element.isConnected) element.title = '复制失败' })
+  })
+}
+
 export class CodePreview extends WidgetType {
   private cancel?: () => void
   destroy() { this.cancel?.() }
@@ -51,28 +77,8 @@ export class CodePreview extends WidgetType {
       view.dispatch({ changes: { ...languageRange, insert: replaceCodeLanguage(info, value) }, userEvent: 'input' })
     }, () => view.focus()))
     else toolbar.append(caption)
-    function button(label: string, icon: typeof Copy, onClick: (button: HTMLButtonElement) => void) {
-      const element = document.createElement('button')
-      element.type = 'button'
-      element.className = 'icon-button'
-      element.title = label
-      element.ariaLabel = label
-      element.innerHTML = renderToStaticMarkup(createElement(icon, { size: 15, 'aria-hidden': true }))
-      element.addEventListener('click', () => onClick(element))
-      return element
-    }
-    if (!this.readOnly) toolbar.append(button('编辑代码块', Code2, () => startEditing()))
-    let resetCopy: number | undefined
-    const copyIcon = renderToStaticMarkup(createElement(Copy, { size: 15, 'aria-hidden': true }))
-    toolbar.append(button('复制代码', Copy, element => {
-      void navigator.clipboard.writeText(code).then(() => {
-        if (!element.isConnected) return
-        window.clearTimeout(resetCopy)
-        element.innerHTML = renderToStaticMarkup(createElement(Check, { size: 15, 'aria-hidden': true }))
-        element.ariaLabel = element.title = '已复制代码'
-        resetCopy = window.setTimeout(() => { element.innerHTML = copyIcon; element.ariaLabel = element.title = '复制代码' }, 1100)
-      }).catch(() => { if (element.isConnected) element.title = '复制失败' })
-    }))
+    if (!this.readOnly) toolbar.append(codeButton('编辑代码块', Code2, () => startEditing()))
+    toolbar.append(copyCodeButton(() => code))
     const body = document.createElement('pre')
     body.className = 'md-code-body'
     body.tabIndex = 0

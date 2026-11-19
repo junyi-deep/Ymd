@@ -5,7 +5,7 @@ export function openMediaPreview(element: HTMLElement, request: MediaPreview) {
   element.dispatchEvent(new CustomEvent(mediaPreviewEvent, { bubbles: true, detail: request }))
 }
 
-export function diagramPreview(svg: SVGSVGElement): MediaPreview {
+export function diagramPreview(svg: SVGSVGElement, title: string): MediaPreview {
   const copy = svg.cloneNode(true) as SVGSVGElement
   const viewBox = svg.viewBox.baseVal
   const bounds = svg.getBoundingClientRect()
@@ -24,5 +24,5 @@ export function diagramPreview(svg: SVGSVGElement): MediaPreview {
   copy.setAttribute('width', String(width))
   copy.setAttribute('height', String(height))
   const source = new XMLSerializer().serializeToString(copy)
-  return { type: 'diagram', title: 'Mermaid 图', svg: source, src: 'data:image/svg+xml,' + encodeURIComponent(source) }
+  return { type: 'diagram', title, svg: source, src: 'data:image/svg+xml,' + encodeURIComponent(source) }
 }

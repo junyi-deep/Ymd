@@ -39,6 +39,7 @@ export const markdownShortcuts = {
   formula: { label: '公式块', key: 'Mod-Shift-m', mac: 'Alt-Mod-b' },
   rule: { label: '水平分割线' },
   mermaid: { label: 'Mermaid 图' },
+  plantuml: { label: 'PlantUML 图' },
   footnote: { label: '脚注' },
   metadata: { label: 'YAML 元数据' },
   'paragraph-before': { label: '在上方插入段落' },

@@ -71,6 +71,13 @@ export default defineConfig({
         return cp('node_modules/@excalidraw/excalidraw/dist/prod/fonts', 'dist/renderer/fonts', { recursive: true })
       },
     },
+    {
+      name: 'plantuml-license',
+      apply: 'build',
+      closeBundle() {
+        return cp('node_modules/@plantuml/core/LICENSE', 'dist/renderer/plantuml-LICENSE.txt')
+      },
+    },
   ],
   optimizeDeps: { rolldownOptions: { plugins: [localDrawingFontSources, mapRenderGeometry] } },
   server: {
@@ -78,5 +85,9 @@ export default defineConfig({
   },
   define: { 'process.env.IS_PREACT': 'false' },
   worker: { format: 'es' },
-  build: { outDir: 'dist/renderer', emptyOutDir: true },
+  build: {
+    outDir: 'dist/renderer',
+    emptyOutDir: true,
+    rolldownOptions: { input: { app: 'index.html', plantuml: 'plantuml.html' } },
+  },
 })

@@ -1,8 +1,8 @@
-import { renderMermaid } from './renderMermaid'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { Scan } from 'lucide-react'
-import { openMediaPreview } from './mediaPreview'
+import { renderDiagram, blockTitle, type PreviewBlockKind } from './renderDiagram'
+import { diagramPreview, openMediaPreview } from './mediaPreview'
 import { applyImageSizing, imageHasSizing, isEmbeddedMarkdownImage, isRemoteMarkdownImage,
   type ImageSizing } from './markdownImageSyntax'
 
@@ -60,8 +60,8 @@ export function createMarkdownImage(file: string, { label, source, title, sizing
 
 export const displayMath = /^\$\$[ \t]*\n([\s\S]+)\n\$\$[ \t]*$/
 
-async function renderBlockPreview(content: HTMLElement, code: string, kind: 'mermaid' | 'math') {
-  if (kind === 'mermaid') content.innerHTML = await renderMermaid(code)
+async function renderBlockPreview(content: HTMLElement, code: string, kind: PreviewBlockKind) {
+  if (kind !== 'math') content.innerHTML = await renderDiagram(kind, code)
   else {
     const [katex] = await Promise.all([import('katex'), import('katex/dist/katex.min.css')])
     katex.default.render(code, content, { displayMode: true, trust: false, maxExpand: 1000 })
@@ -70,7 +70,7 @@ async function renderBlockPreview(content: HTMLElement, code: string, kind: 'mer
 
 const observers = new WeakMap<Element, { observer: IntersectionObserver; jobs: Map<Element, () => void> }>()
 
-export function scheduleBlockPreview(content: HTMLElement, code: string, kind: 'mermaid' | 'math', root: Element | null,
+function scheduleBlockPreview(content: HTMLElement, code: string, kind: PreviewBlockKind, root: Element | null,
   ready?: () => void, failed?: (error: unknown) => void) {
   let current = true
   const run = () => {
@@ -109,4 +109,51 @@ export function scheduleBlockPreview(content: HTMLElement, code: string, kind: '
     group.jobs.delete(content)
     if (group.jobs.size === 0 && observers.get(root) === group) observers.delete(root)
   }
+}
+
+export function mountBlockPreview(figure: HTMLElement, code: string, kind: PreviewBlockKind, root: Element | null, options?: {
+  edit?: HTMLButtonElement
+  measure?: () => void
+  showSourceOnError?: boolean
+  viewer?: boolean
+}) {
+  const title = blockTitle(kind)
+  figure.className = 'mermaid-preview'
+  figure.setAttribute('aria-label', title)
+  const tools = document.createElement('div')
+  tools.className = 'mermaid-tools'
+  if (options?.edit) tools.append(options.edit)
+  const content = document.createElement('div')
+  content.className = 'mermaid-content'
+  content.setAttribute('aria-busy', 'true')
+  content.textContent = kind === 'math' ? '正在渲染公式…' : '正在绘制 ' + title + '…'
+  figure.replaceChildren(tools, content)
+  const cancel = scheduleBlockPreview(content, code, kind, root, () => {
+    content.removeAttribute('aria-busy')
+    const svg = options?.viewer !== false && kind !== 'math' && content.querySelector('svg')
+    if (svg) {
+      const button = document.createElement('button')
+      button.type = 'button'
+      button.className = 'icon-button'
+      button.title = button.ariaLabel = '查看 ' + title
+      button.innerHTML = renderToStaticMarkup(createElement(Scan, { size: 16, 'aria-hidden': true }))
+      button.addEventListener('click', event => {
+        event.stopPropagation()
+        openMediaPreview(figure, diagramPreview(svg, title))
+      })
+      tools.append(button)
+    }
+    options?.measure?.()
+  }, error => {
+    content.removeAttribute('aria-busy')
+    content.classList.add('mermaid-error')
+    content.textContent = title + '无法渲染。' + (error instanceof Error ? error.message : '')
+    if (options?.showSourceOnError) {
+      const raw = document.createElement('pre')
+      raw.textContent = code
+      figure.append(raw)
+    }
+    options?.measure?.()
+  })
+  return () => { cancel(); figure.replaceChildren() }
 }

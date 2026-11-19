@@ -135,7 +135,7 @@ export function MediaViewer({ request, close }: { request: MediaPreview; close: 
     })
   }
 
-  return <dialog ref={modal} className="media-dialog" data-expanded={expanded} aria-label={request.type === 'diagram' ? '查看 Mermaid 图' : '查看图片'}
+  return <dialog ref={modal} className="media-dialog" data-expanded={expanded} aria-label={request.type === 'diagram' ? '查看 ' + request.title : '查看图片'}
     onCancel={event => { event.preventDefault(); if (cropping) { setCropping(false); setArea(undefined) } else if (expanded) setExpanded(false); else close() }}>
     <header><h2>{request.title}</h2><button type="button" className="icon-button" aria-label="关闭查看器" onClick={close}><X size={19} /></button></header>
     <div className="media-toolbar" role="toolbar" aria-label="图片操作">

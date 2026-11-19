@@ -824,6 +824,7 @@ dialog footer .conflict-overwrite { background: #9b3438; color: #fff; }
 .recovery-row > span { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 
 .mermaid-tools { display: flex; align-items: center; gap: 5px; justify-self: end; }
+.mermaid-tools:empty { display: none; }
 .mermaid-tools .icon-button { min-width: 28px; min-height: 27px; }
 .md-image { position: relative; }
 .md-image .md-visual-open {
