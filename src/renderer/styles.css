@@ -760,10 +760,11 @@ dialog button.primary { background: var(--accent); color: var(--accent-ink); }
   min-width: 100%; min-height: 100%; width: max-content; grid-auto-rows: minmax(18px, 1fr); }
 .table-size-grid > button { min-width: 18px; min-height: 18px; border: 1px solid var(--line); border-radius: 3px; background: var(--soft); }
 .table-size-grid > button[data-selected="true"] { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 24%, var(--page)); }
-.markdown-table-widget :is(th, td) { min-width: 68px; min-height: 1.8em; height: 1.8em; padding: .23em .55em; border: 1px solid var(--line); overflow-wrap: anywhere; }
+.markdown-table-widget :is(th, td) { position: relative; min-width: 68px; min-height: 1.8em; height: 1.8em; padding: .23em .55em; border: 1px solid var(--line); overflow-wrap: anywhere; }
 .markdown-table-widget th { background: var(--soft); font-weight: 650; }
 .markdown-table-widget :is(td, th):focus-within { background: var(--soft); box-shadow: inset 0 0 0 1px var(--accent); outline: none; }
-.markdown-table-widget input { width: 100%; min-width: 55px; outline: none; padding: 0; border: 0; background: transparent; font: inherit; }
+.markdown-table-widget .markdown-table-cell-input { position: absolute; inset: 0; width: 100%; height: 100%; outline: none; padding: inherit; border: 0; background: transparent; font: inherit; text-align: inherit; }
+.markdown-table-widget :has(> .markdown-table-cell-input) > .markdown-table-cell-preview { visibility: hidden; }
 .markdown-table-widget code { padding: 0 .18em; background: var(--soft); }
 @media print { .markdown-table-widget[data-editable] { padding-top: 0; } .markdown-table-widget button { display: none; } }
 

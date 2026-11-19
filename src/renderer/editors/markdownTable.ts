@@ -1,7 +1,7 @@
 import { isolateHistory } from '@codemirror/commands'
 import { syntaxTree } from '@codemirror/language'
 import { EditorState, StateField, type Range } from '@codemirror/state'
-import { Decoration, EditorView, WidgetType, type DecorationSet } from '@codemirror/view'
+import { Decoration, EditorView, ViewPlugin, WidgetType, type DecorationSet } from '@codemirror/view'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { Code2, MoreHorizontal, Plus, type LucideIcon } from 'lucide-react'
@@ -150,17 +150,17 @@ class EditableTable extends WidgetType {
       if (editor && cell.contains(editor.input)) { editor.input.focus(); return }
       const input = document.createElement('input')
       input.type = 'text'
+      input.className = 'markdown-table-cell-input'
       input.value = value.replace(/<br\s*\/?>/gi, ' ')
       const initial = input.value
       input.setAttribute('aria-label', '第 ' + (coord.row + 1) + ' 行第 ' + (coord.column + 1) + ' 列')
-      const before = cell.innerHTML
       editor = { input, coord, initial }
-      cell.replaceChildren(input)
+      cell.append(input)
       const finish = (save: boolean, navigation?: Navigation) => {
         if (editor?.input !== input) return
         editor = undefined
         const result = input.value
-        cell.innerHTML = before
+        input.remove()
         if (save && (result !== initial || navigation?.change)) update(copy => {
           if (result !== initial) copy.rows[coord.row][coord.column] = cellText(result)
           navigation?.change?.(copy)
@@ -295,7 +295,10 @@ class EditableTable extends WidgetType {
         const cell = document.createElement(rowIndex === 0 ? 'th' : 'td')
         if (rowIndex === 0) cell.scope = 'col'
         cell.style.textAlign = data.alignment[column] || 'left'
-        cell.innerHTML = markdownInlineHtml(text)
+        const preview = document.createElement('span')
+        preview.className = 'markdown-table-cell-preview'
+        preview.innerHTML = markdownInlineHtml(text)
+        cell.append(preview)
         row.append(cell)
         if (this.readOnly) continue
         cell.dataset.row = String(rowIndex)
@@ -374,7 +377,7 @@ function decorations(state: EditorState, tables: TableRange[]): DecorationSet {
   }))
 }
 
-export const markdownTable = StateField.define({
+const tableState = StateField.define({
   create(state) {
     const tables = tableRanges(state)
     return { tables, ranges: decorations(state, tables) }
@@ -388,6 +391,29 @@ export const markdownTable = StateField.define({
   },
   provide: field => EditorView.decorations.from(field, value => value.ranges),
 })
+
+const tableCellPointer = ViewPlugin.define(view => {
+  function finishAtRightMargin(event: MouseEvent) {
+    if (event.defaultPrevented || event.button !== 0) return
+    const input = view.root.activeElement
+    if (!(input instanceof HTMLInputElement) || !input.classList.contains('markdown-table-cell-input') ||
+        !view.contentDOM.contains(input)) return
+    const scroll = input.closest('.markdown-table-scroll')
+    const table = input.closest('table')
+    const widget = input.closest('.markdown-table-widget')
+    if (!scroll || !table || !widget) return
+    const { top, bottom } = widget.getBoundingClientRect()
+    const right = Math.min(scroll.getBoundingClientRect().right, table.getBoundingClientRect().right)
+    if (event.clientX <= right || event.clientY < top || event.clientY >= bottom) return
+    // The editor maps clicks beside a replaced block to its source position.
+    event.preventDefault()
+    input.blur()
+  }
+  view.dom.addEventListener('mousedown', finishAtRightMargin, true)
+  return { destroy: () => view.dom.removeEventListener('mousedown', finishAtRightMargin, true) }
+})
+
+export const markdownTable = [tableState, tableCellPointer]
 
 export function insertTable(view: EditorView, rowCount: number, columnCount: number) {
   if (view.state.readOnly) return

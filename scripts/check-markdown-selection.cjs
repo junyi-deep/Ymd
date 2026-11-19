@@ -21,6 +21,9 @@ const chart = '```mermaid\nflowchart LR\nA --> B\n```'
 writeFileSync(path.join(documents, 'After diagrams.md'), [
   '# 记录', chart, chart, '**表变更说明：**' + label, '> 这是下方的引用，内容应与正文选区区分。', table,
 ].join('\n\n'))
+writeFileSync(path.join(documents, 'Editable table.md'), [
+  'Before the table.', '', '| Field | Value |', '| --- | --- |', '| **A deliberately wide table cell** | Short |', '', 'After the table.',
+].join('\n'))
 
 async function waitFor(read) {
   for (let i = 0; i < 120; i++) {
@@ -76,8 +79,56 @@ async function check(window) {
       assert.equal(copied, target)
     }
   }
+  await checkEditableTable(evaluate, mouse)
   webContents.debugger.detach()
-  console.log('Verified drag selection and copying above a Markdown table on ' + process.platform)
+  console.log('Verified Markdown drag selection, copying, and table editing on ' + process.platform)
+}
+
+async function checkEditableTable(evaluate, mouse) {
+  const figure = '.markdown-table-widget'
+  const cell = figure + ' td[data-column="0"]'
+  const button = `document.querySelector('button.tree-row[title="Editable table.md"]')`
+  await waitFor(() => evaluate('Boolean(' + button + ')'))
+  await evaluate(button + '.click()')
+  await waitFor(() => evaluate(`document.querySelector('.document-name')?.textContent === 'Editable table.md' && Boolean(document.querySelector('${cell}'))`))
+  await evaluate('new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))')
+
+  const point = selector => evaluate(`(() => {
+    const bounds = document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect()
+    return { x: (bounds.left + bounds.right) / 2, y: (bounds.top + bounds.bottom) / 2 }
+  })()`)
+  const click = async ({ x, y }) => {
+    await mouse('mouseMoved', x, y)
+    await mouse('mousePressed', x, y, { button: 'left', buttons: 1, clickCount: 1 })
+    await mouse('mouseReleased', x, y, { button: 'left', clickCount: 1 })
+  }
+  const widths = () => evaluate(`[...document.querySelectorAll('${figure} th')].map(cell => cell.getBoundingClientRect().width)`)
+  for (const inside of [false, true]) {
+    const before = await widths()
+    await click(await point(cell))
+    assert.equal(await evaluate(`Boolean(document.querySelector('${cell} input:focus'))`), true, 'Click opens the cell editor')
+    const editing = await widths()
+    const gap = await evaluate(`(() => {
+      const widget = document.querySelector('${figure}')
+      const { right } = widget.getBoundingClientRect()
+      const grid = widget.querySelector('table').getBoundingClientRect()
+      const content = widget.closest('.cm-content').getBoundingClientRect()
+      const x = ${inside} ? (grid.right + right) / 2 : (right + content.right) / 2
+      if (x <= grid.right) throw new Error('The test table needs a right margin')
+      return { x, y: (grid.top + grid.bottom) / 2 }
+    })()`)
+    const replacement = inside ? 'Saved inside the table block' : 'Saved from the page margin'
+    await evaluate(`document.querySelector('${cell} input').value = ${JSON.stringify(replacement)}`)
+    await click(gap)
+    assert.deepEqual({
+      stableColumns: editing.every((size, index) => Math.abs(size - before[index]) < 1),
+      rendered: await evaluate(`Boolean(document.querySelector('${figure}'))`),
+      committed: await evaluate(`document.querySelector('.cm-content').cmTile.root.view.state.doc.toString().includes(${JSON.stringify(replacement)})`),
+    }, { stableColumns: true, rendered: true, committed: true }, `Column widths ${before} → ${editing}`)
+  }
+
+  await click(await point(figure + ' button[aria-label="编辑表格源码"]'))
+  assert.equal(await evaluate(`Boolean(document.querySelector('${figure}'))`), false, 'The explicit source button still opens source')
 }
 
 const timeout = setTimeout(() => { console.error('Markdown selection check timed out.'); app.exit(1) }, 45000)
