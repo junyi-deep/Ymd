@@ -1,6 +1,6 @@
-import { useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
+import { lazy, Suspense, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { createPortal } from 'react-dom'
-import { BetweenHorizontalStart, Check, ChevronRight, Code2, Copy, Eye, FileDown, FileText, FolderInput, Info, Keyboard, ListTree, LocateFixed, MoreHorizontal, Pin, Printer, Search, Star, Layers, Trash2 } from 'lucide-react'
+import { BetweenHorizontalStart, Check, ChevronRight, Code2, Copy, Eye, FileDown, FileText, FolderInput, GitBranch, Info, Keyboard, ListTree, LocateFixed, MoreHorizontal, Pin, Printer, Search, Star, Layers, Trash2 } from 'lucide-react'
 import { MarkdownMenu, type MenuItem } from './MarkdownMenu'
 import { contextItems, insertMermaid, insertPlantUml, tabInList, typographyKeys } from './markdownCommands'
 import { markdownDestination, safeMarkdownHref } from './markdownLinks'
@@ -14,14 +14,14 @@ import { codeDisplayOverrides, markdownCodeInput } from './markdownCodeEditing'
 import { TableSizeGrid } from './TableSizeGrid'
 import { insertTable, markdownTable } from './markdownTable'
 import { expandMetadata, FootnoteReference, footnotes, insertFootnote, insertMetadata, markdownNotes, markdownWithMetadata, referenceNote } from './markdownNotes'
-import { defaultKeymap, history, historyKeymap } from '@codemirror/commands'
+import { defaultKeymap, history, historyKeymap, isolateHistory } from '@codemirror/commands'
 import { markdownKeymap } from '@codemirror/lang-markdown'
 import { ensureSyntaxTree, indentUnit, syntaxHighlighting, syntaxTree } from '@codemirror/language'
-import { openSearchPanel, search, searchKeymap } from '@codemirror/search'
+import { closeSearchPanel, openSearchPanel, search, searchKeymap } from '@codemirror/search'
 import { ChangeSet, Compartment, EditorState, Prec, StateEffect, type EditorSelection, type Range } from '@codemirror/state'
 import { Decoration, EditorView, highlightSpecialChars, keymap, panels, ViewPlugin, WidgetType, type DecorationSet, type ViewUpdate } from '@codemirror/view'
 import { classHighlighter } from '@lezer/highlight'
-import { markdownPageWidths, type CodeBlockPreferences, type ContextMenuItem, type MarkdownOutlinePreferences, type MarkdownPageWidth, type SearchEngine } from '../../shared/contracts'
+import { markdownPageWidths, type CodeBlockPreferences, type ContextMenuItem, type GitBranchInfo, type MarkdownOutlinePreferences, type MarkdownPageWidth, type SearchEngine } from '../../shared/contracts'
 import type { DocumentViewPosition } from './viewPosition'
 import { colorOpening, highlightOpening, numberOpening } from './outlineTextStyle'
 import type { ShortcutOverrides } from '../../shared/shortcuts'
@@ -31,6 +31,9 @@ import { mountMarkdownScrollbar } from './markdownScrollbar'
 import { markdownFindPanel } from './documentFind'
 import { inlineHtmlEnd, MarkdownHtmlPreview } from './markdownHtmlPreview'
 import { markdownBlockFrame } from './markdownBlockFrame'
+import type { ApplyGitChunk } from './GitMergeEditor'
+
+const GitDiff = lazy(() => import('./GitDiff').then(module => ({ default: module.GitDiff })))
 
 class DocumentTitle extends WidgetType {
   constructor(readonly element: HTMLElement) { super() }
@@ -281,6 +284,7 @@ interface Props {
   registerFlush: (flush?: () => void) => void
   onChange: (text: string) => void
   find: number
+  conflict?: boolean
   findHost: React.RefObject<HTMLDivElement | null>
   jump?: { line: number; id: number }
   reveal: () => void
@@ -299,7 +303,7 @@ interface Props {
   report: (error: unknown) => void
 }
 
-export function MarkdownEditor({ text, name, path, modified, platform, remoteImages, searchEngine, keyOverrides, outline, filenameTitle, saveStatus, updateOutline, width, codeBlocks, setWidth, registerFlush, onChange, find, findHost, jump, reveal, saveCopy, duplicate, move, trash, shortcuts, exportPdf, printDocument, pinned, starred, togglePin, toggleStar, followLink, report, position, fontSize, reload }: Props) {
+export function MarkdownEditor({ text, name, path, modified, platform, remoteImages, searchEngine, keyOverrides, outline, filenameTitle, saveStatus, updateOutline, width, codeBlocks, setWidth, registerFlush, onChange, find, findHost, jump, reveal, saveCopy, duplicate, move, trash, shortcuts, exportPdf, printDocument, pinned, starred, togglePin, toggleStar, followLink, report, position, fontSize, reload, conflict }: Props) {
   const host = useRef<HTMLDivElement>(null)
   const [titleHost] = useState(() => markdownBlockFrame())
   const titleMode = useRef(new Compartment())
@@ -324,6 +328,9 @@ export function MarkdownEditor({ text, name, path, modified, platform, remoteIma
   const sourceMode = useRef(source)
   sourceMode.current = source
   const [menu, setMenu] = useState<OpenMenu>()
+  const [gitInfo, setGitInfo] = useState<GitBranchInfo | null>(null)
+  const [showGitDiff, setShowGitDiff] = useState(false)
+  const gitBranch = gitInfo?.branch ?? (gitInfo?.head ? 'HEAD ' + gitInfo.head.slice(0, 7) : 'HEAD')
   const [outlineDepth, changeOutlineDepth] = useState(() => getOutlineDepth(path))
   const [expandedHeadings, setExpandedHeadings] = useState(new Map<string, boolean>())
   const [activeHeading, setActiveHeading] = useState(-1)
@@ -349,6 +356,44 @@ export function MarkdownEditor({ text, name, path, modified, platform, remoteIma
   const keyMode = useRef(new Compartment())
   const livePreview = useMemo(() => live(path, remoteImages), [path, remoteImages])
   change.current = onChange
+  useEffect(() => {
+    let request = 0
+    const refresh = () => {
+      const attempt = ++request
+      void window.desktop.gitBranch(path).then(info => {
+        if (attempt === request) setGitInfo(info)
+      }, () => { if (attempt === request) setGitInfo(null) })
+    }
+    refresh()
+    window.addEventListener('focus', refresh)
+    return () => { request++; window.removeEventListener('focus', refresh) }
+  }, [path, reload])
+
+  function closeGitDiff() {
+    setShowGitDiff(false)
+    requestAnimationFrame(() => { view.current?.requestMeasure(); view.current?.focus() })
+  }
+
+  function toggleGitDiff() {
+    if (showGitDiff) { closeGitDiff(); return }
+    const editor = view.current
+    if (!editor) return
+    editor.dom.querySelector<HTMLInputElement>('.markdown-table-widget input:focus')?.blur()
+    closeSearchPanel(editor)
+    setMenu(undefined)
+    setShowGitDiff(true)
+  }
+
+  const applyGitChunk: ApplyGitChunk = (expected, changes) => {
+    const editor = view.current
+    if (!editor || editor.state.readOnly || conflict) return false
+    if (!editor.state.doc.eq(expected)) {
+      report('当前文件内容已更新，请核对刷新后的差异。')
+      return false
+    }
+    editor.dispatch({ changes, annotations: isolateHistory.of('full'), userEvent: 'input.gitDiff' })
+    return true
+  }
   const showTable = () => {
     setTableHover(undefined)
     tableDialog.current?.showModal()
@@ -469,12 +514,14 @@ export function MarkdownEditor({ text, name, path, modified, platform, remoteIma
   useEffect(() => {
     const editor = view.current
     if (!editor || !jump) return
+    setShowGitDiff(false)
     const line = editor.state.doc.line(Math.min(jump.line, editor.state.doc.lines))
     editor.dispatch({ selection: { anchor: line.from }, effects: EditorView.scrollIntoView(line.from, { y: 'center' }) })
     editor.focus()
   }, [jump])
   useEffect(() => {
     if (find !== previousFind.current && view.current) {
+      setShowGitDiff(false)
       openSearchPanel(view.current)
       previousFind.current = find
     }
@@ -666,7 +713,7 @@ export function MarkdownEditor({ text, name, path, modified, platform, remoteIma
   }
 
   return <div className="markdown-editor" data-source={source} data-width={width}>
-    <div className="document-editing" data-outline={outline.visible ? outline.position : undefined}
+    <div className="document-editing" hidden={showGitDiff} data-outline={outline.visible ? outline.position : undefined}
       style={{ '--outline-user-width': outline.width === undefined ? undefined : outline.width + 'px' } as CSSProperties}>
       {outline.visible && <aside id="markdown-outline" className="document-outline" aria-label="Markdown 标题目录">
         <header><strong>目录</strong><div className="outline-header-actions">
@@ -754,7 +801,15 @@ export function MarkdownEditor({ text, name, path, modified, platform, remoteIma
         }} />
       </div>
     </div>
+    {showGitDiff && <Suspense fallback={<div className="startup">正在加载 Git 差异…</div>}>
+      <GitDiff path={path} text={text} branch={gitBranch}
+        apply={reading || conflict ? undefined : applyGitChunk} close={closeGitDiff} />
+    </Suspense>}
     <footer className="document-status">
+      {gitInfo && <button type="button" className="tool-button git-branch-button" aria-label={'查看 Git 差异 ' + gitBranch}
+        aria-pressed={showGitDiff} title={gitBranch} onClick={toggleGitDiff}>
+        <GitBranch size={14} /><span>{gitBranch}</span>
+      </button>}
       <div className="menu-anchor">
         <button className="tool-button" aria-haspopup="menu" aria-expanded={menu === 'status'} title="切换文档统计" onClick={() => toggleMenu('status')}>{statusText}</button>
         {menu === 'status' && <MarkdownMenu items={statusItems} close={close} upward />}

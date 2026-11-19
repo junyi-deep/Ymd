@@ -11,6 +11,7 @@ import { initializeStorage, migrateStickers } from './storage'
 import { installMacShadow } from './macShadow'
 import { installWindowFrame } from './windowCorners'
 import { Files, containsPath, fileKind } from './files'
+import { readGitBranch, readGitHistory, readGitVersion } from './gitDocuments'
 import { LocalMapLocations } from './localMapLocations'
 import { searchRoots } from './search'
 import { printView } from './printing'
@@ -898,6 +899,14 @@ void app.whenReady().then(async () => {
       return result
     })
   })
+  async function gitDocument(file: string) {
+    const canonical = await files.authorizedFile(file)
+    if (fileKind(canonical) !== 'markdown') throw new Error('Git 比较仅适用于 Markdown 文件。')
+    return canonical
+  }
+  handle('gitBranch', async (file: string) => readGitBranch(await gitDocument(file)))
+  handle('gitHistory', async (file: string) => readGitHistory(await gitDocument(file)))
+  handle('gitVersion', async (file: string, commit: string) => readGitVersion(await gitDocument(file), commit))
   handle('create', (directory: string, kind: FileKind) => files.create(directory, kind))
   handle('createFolder', (directory: string) => files.createFolder(directory))
   async function mutateTree(window: BrowserWindow, mutation: TreeMutation): Promise<TreeChange[] | null> {

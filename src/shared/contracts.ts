@@ -218,6 +218,29 @@ export function markdownImageExtension(name: string, type = '') {
     .find(extension => markdownImageExtensions[extension] === type)
 }
 
+export interface GitBranchInfo {
+  branch: string | null
+  head: string | null
+}
+
+export interface GitCommit {
+  hash: string
+  short: string
+  subject: string
+  body: string
+  committedAt: string
+}
+
+export interface GitFileHistory extends GitBranchInfo {
+  commits: GitCommit[]
+  previous: string | null
+}
+
+export interface GitFileVersion {
+  exists: boolean
+  text: string
+}
+
 export interface Desktop {
   windowAction(action: 'minimize' | 'maximize' | 'close'): Promise<void>
   onWindowMaximized(callback: (maximized: boolean) => void): () => void
@@ -249,6 +272,9 @@ export interface Desktop {
   chooseXmind(): Promise<{ name: string; data: ArrayBuffer } | null>
   createImportedMarkdown(directory: string, name: string, text: string): Promise<DocumentFile>
   read(path: string): Promise<DocumentFile>
+  gitBranch(path: string): Promise<GitBranchInfo | null>
+  gitHistory(path: string): Promise<GitFileHistory | null>
+  gitVersion(path: string, commit: string): Promise<GitFileVersion>
   readDocumentState(path: string): Promise<DocumentFile | null>
   watchDocuments(paths: string[]): Promise<void>
   newWindow(path?: string): Promise<void>

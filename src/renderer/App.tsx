@@ -943,7 +943,7 @@ export function App() {
           reveal={() => run(() => window.desktop.reveal(active.path))} />
         : active.mode === 'markdown'
           ? <MarkdownEditor key={active.path} reload={active.reload} text={active.text} name={active.name} path={active.path} modified={active.modified} platform={platform} remoteImages={preferences.remoteImages} keyOverrides={preferences.shortcuts} position={position!}
-            fontSize={preferences.documentFontSize}
+            fontSize={preferences.documentFontSize} conflict={active.conflict}
             outline={preferences.markdownOutline} filenameTitle={filenameTitle} saveStatus={saveStatus}
             width={preferences.markdownPageWidth} codeBlocks={preferences.codeBlocks} setWidth={markdownPageWidth => updatePreferences({ markdownPageWidth })}
             updateOutline={patch => updatePreferences({ markdownOutline: { ...lastPreferences.current.markdownOutline, ...patch } })}
