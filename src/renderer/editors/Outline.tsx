@@ -5,16 +5,16 @@ import type { DocumentViewPosition } from './viewPosition'
 import { renderedSelection } from './outlineTextStyle'
 import { OutlineSelectionMenu, type OutlineStyle } from './OutlineSelectionMenu'
 import type { Links } from 'marked'
-import { markdownPageWidths, type MarkdownPageWidth } from '../../shared/contracts'
+import { markdownPageWidths, type CodeBlockPreferences, type MarkdownPageWidth } from '../../shared/contracts'
 import { atVisualBoundary } from './outlineCaret'
 import { MediaViewer } from './MediaViewer'
-import { mediaPreviewEvent, type MediaPreview } from './mediaPreview'
+import { mediaPreviewEvent, outlineDiagramEditEvent, type MediaPreview } from './mediaPreview'
 import { DocumentRemainder } from './DocumentRemainder'
 import { MarkdownMenu } from './MarkdownMenu'
 import { OutlineCodeCard } from './OutlineCodeCard'
-import { completeCodeFence, outlineCode } from './outlineCode'
+import { completeCodeFence, outlineCode, pairOutlineFence } from './outlineCode'
 import { OutlineMarkdown, outlineReferences } from './OutlineMarkdown'
-import { locateBlock, newBlock, projectionRemainder, writeList, type Block, type Projection } from './listProjection'
+import { diagramBodyLines, locateBlock, newBlock, projectionRemainder, writeList, type Block, type Projection } from './listProjection'
 import { OutlineFindSource, useOutlineFind } from './outlineFind'
 import { blockPath, editBlockText, flattenBlocks, moveBranches, openOutline, readBranches, removeBranches, selectedBranches, writeBranches,
   type OutlineCaret, type OutlineDrop, type OutlineFrame, type OutlineSession } from './outlineEditing'
@@ -24,11 +24,12 @@ const typingTypes = new Set(['insertText', 'deleteContentBackward', 'deleteConte
 const blockTitle = (node: Block) => node.text.split('\n')[0].trim() || '空块'
 const cursor = (id: string, start: number, end = start): OutlineCaret => ({ id, start, end })
 
-export function OutlineEditor({ text, name, path, platform, remoteImages, sessions, width, setWidth, remainderVisible, setRemainderVisible, followLink, onChange, position, filenameTitle, find, findHost, codeLineNumbers, embedded = false }: {
+export function OutlineEditor({ text, name, path, platform, remoteImages, sessions, width, setWidth, remainderVisible, setRemainderVisible, followLink, onChange, position, filenameTitle, find, findHost, codeOptions, editRemainderLine, embedded = false }: {
   position: DocumentViewPosition
   find: number
   findHost: React.RefObject<HTMLDivElement | null>
-  codeLineNumbers: boolean
+  codeOptions: CodeBlockPreferences
+  editRemainderLine: (line: number) => void
   embedded?: boolean
   filenameTitle?: React.ReactNode
   text: string; name: string; path: string; platform: string; remoteImages: boolean; sessions: Map<string, OutlineSession>
@@ -37,6 +38,7 @@ export function OutlineEditor({ text, name, path, platform, remoteImages, sessio
 }) {
   const [session] = useState(() => openOutline(sessions.get(path), text))
   const [blocks, setBlocks] = useState(() => session.blocks)
+  const [codeDisplay, setCodeDisplay] = useState(() => new Map<string, Partial<CodeBlockPreferences>>())
   const [media, setMedia] = useState<MediaPreview>()
   const [editing, setEditing] = useState<string>()
   const [selected, setSelected] = useState<string[]>([])
@@ -60,6 +62,8 @@ export function OutlineEditor({ text, name, path, platform, remoteImages, sessio
   const inputBefore = useRef<OutlineCaret | undefined>(undefined)
   const historyAction = useRef(restore)
   historyAction.current = restore
+  const diagramAction = useRef(editDiagram)
+  diagramAction.current = editDiagram
   const typing = useRef<{ id: string; type: string; time: number; end: number } | undefined>(undefined)
   const composition = useRef<{ id: string; before: OutlineCaret; recorded: boolean } | undefined>(undefined)
 
@@ -84,11 +88,14 @@ export function OutlineEditor({ text, name, path, platform, remoteImages, sessio
     }
     if (position.outline !== undefined) view.scrollTop = position.outline
     const showMedia = (event: Event) => setMedia((event as CustomEvent<MediaPreview>).detail)
+    const openDiagram = (event: Event) => diagramAction.current(event as CustomEvent<number>)
     view.addEventListener(mediaPreviewEvent, showMedia)
+    view.addEventListener(outlineDiagramEditEvent, openDiagram)
     view.addEventListener('beforeinput', before)
     return () => {
       position.outline = view.scrollTop
       view.removeEventListener(mediaPreviewEvent, showMedia)
+      view.removeEventListener(outlineDiagramEditEvent, openDiagram)
       view.removeEventListener('beforeinput', before)
     }
   }, [])
@@ -142,6 +149,28 @@ export function OutlineEditor({ text, name, path, platform, remoteImages, sessio
     if (input && editing === next.id) {
       input.focus()
       input.setSelectionRange(next.start, next.end)
+    }
+  }
+
+  function editDiagram(event: CustomEvent<number>) {
+    if (!(event.target instanceof Element)) return
+    const id = event.target.closest<HTMLElement>('[data-outline-block]')?.dataset.outlineBlock
+    if (id) {
+      const found = locateBlock(session.blocks, id)
+      if (!found) return
+      const block = found.siblings[found.index]
+      const line = diagramBodyLines(block.text)[event.detail]
+      if (line !== undefined) cursorTo(cursor(id, block.text.split('\n').slice(0, line - 1).join('\n').length + 1))
+      return
+    }
+    if (!event.target.closest('.outline-surrounding')) return
+    const { before, after } = session.projection
+    const preceding = diagramBodyLines(before)
+    const line = preceding[event.detail]
+    if (line !== undefined) editRemainderLine(line)
+    else {
+      const tail = diagramBodyLines(after)[event.detail - preceding.length]
+      if (tail !== undefined) editRemainderLine(tail + session.text.slice(0, session.text.length - after.length).split(/\r\n?|\n/).length - 1)
     }
   }
 
@@ -263,6 +292,16 @@ export function OutlineEditor({ text, name, path, platform, remoteImages, sessio
       rangeEnd.current = next?.id
     }
     root.current?.focus({ preventScroll: true })
+  }
+
+  function insertAboveCode(block: Block, text: string) {
+    const insert = newBlock(text, block.marker)
+    if (change(nodes => {
+      const found = locateBlock(nodes, block.id)
+      if (!found) return false
+      found.siblings.splice(found.index, 0, insert)
+      return true
+    }, { after: cursor(insert.id, text.length) }) && scope === block.id) setBranch(undefined, false)
   }
 
   function structure(event: KeyboardEvent<HTMLTextAreaElement>, block: Block) {
@@ -421,14 +460,17 @@ export function OutlineEditor({ text, name, path, platform, remoteImages, sessio
     const groupable = typingTypes.has(native.inputType) && before.start === before.end
     const coalesce = composing?.recorded || groupable && group?.id === block.id && group.type === native.inputType &&
       group.end === before.start && now - group.time < 750
-    const next = editBlockText(session!.blocks, block.id, value)
-    const changed = next && change(next, { before: composing?.before ?? before, coalesce: !!coalesce, keepGroup: true })
+    const paired = !native.isComposing && native.inputType === 'insertText' && input.selectionStart === value.length
+      ? pairOutlineFence(value) : undefined
+    const next = editBlockText(session!.blocks, block.id, paired ?? value)
+    const changed = next && change(next, { before: composing?.before ?? before, coalesce: !!coalesce,
+      keepGroup: !paired, after: paired ? cursor(block.id, value.length) : undefined })
     if (changed && composing) composing.recorded = true
-    typing.current = groupable ? { id: block.id, type: native.inputType, time: now, end: input.selectionStart } : undefined
+    typing.current = groupable && !paired ? { id: block.id, type: native.inputType, time: now, end: input.selectionStart } : undefined
   }
 
   function preview(event: MouseEvent, node: Block) {
-    if (event.target instanceof Element && event.target.closest('.md-image button')) return
+    if (event.target instanceof Element && event.target.closest('.md-image button, .mermaid-preview')) return
     if (event.shiftKey || event.metaKey || event.ctrlKey) {
       event.preventDefault()
       select(node.id, event.shiftKey, !event.shiftKey)
@@ -563,6 +605,8 @@ export function OutlineEditor({ text, name, path, platform, remoteImages, sessio
     return <ul>{nodes.map(node => {
       const closed = collapsed.has(node.id)
       const code = outlineCode(node.text)
+      const override = code ? codeDisplay.get(node.id) : undefined
+      const display = override ? { ...codeOptions, ...override } : codeOptions
       const match = fileSearch.match?.key === node.id ? fileSearch.match : undefined
       return <li key={node.id} data-outline-block={node.id}>
         <div className="outline-row" data-selected={selectedSet.has(node.id)}
@@ -606,7 +650,8 @@ export function OutlineEditor({ text, name, path, platform, remoteImages, sessio
                 event.dataTransfer.effectAllowed = 'move'
               }} onDragEnd={() => { drag.current = undefined; setDrop(undefined) }}><span /></button>
           </span>
-          {code && !match ? <OutlineCodeCard fence={code} raw={node.text} editing={editing === node.id} showNumbers={codeLineNumbers}
+          {code && !match ? <OutlineCodeCard fence={code} raw={node.text} editing={editing === node.id} options={display}
+            toggleDisplay={option => setCodeDisplay(current => new Map(current).set(node.id, { ...current.get(node.id), [option]: !display[option] }))}
             request={focus.current?.id === node.id ? focus.current : undefined}
             clearRequest={() => { if (focus.current?.id === node.id) focus.current = undefined }}
             start={offset => cursorTo(cursor(node.id, offset))}
@@ -615,6 +660,16 @@ export function OutlineEditor({ text, name, path, platform, remoteImages, sessio
               setEditing(current => current === node.id ? undefined : current)
             }}
             rememberCaret={(from, to) => { codeCaret.current = cursor(node.id, from, to) }}
+            changeOpening={(value, at) => {
+              const next = editBlockText(session.blocks, node.id, value)
+              if (next) change(next, { after: cursor(node.id, at) })
+            }}
+            insertAbove={value => insertAboveCode(node, value)}
+            remove={() => {
+              if (!node.children.length) { remove([node.id]); return }
+              const next = editBlockText(session.blocks, node.id, '')
+              if (next) change(next, { after: cursor(node.id, 0) })
+            }}
             change={(value, previous, previousEnd, next, continuous) => {
               const replaced = editBlockText(session.blocks, node.id, value)
               if (!replaced) return

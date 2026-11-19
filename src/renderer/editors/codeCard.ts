@@ -1,6 +1,7 @@
 import { LanguageDescription } from '@codemirror/language'
 import { classHighlighter, highlightTree } from '@lezer/highlight'
-import { codeLanguages, codeLanguageToken } from './codeLanguages'
+import { codeLanguages } from './codeLanguages'
+import { codeLanguageToken } from './diagramSyntax'
 
 function fillCode(content: HTMLElement, code: string, colors: { from: number; to: number; classes: string }[]) {
   let end = 0

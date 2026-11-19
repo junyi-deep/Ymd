@@ -3,7 +3,10 @@ import { syntaxTree } from '@codemirror/language'
 import { Decoration, EditorView, WidgetType, type DecorationSet } from '@codemirror/view'
 import type { SyntaxNode } from '@lezer/common'
 import type { CodeBlockPreferences } from '../../shared/contracts'
-import { CodePreview, copyCodeButton } from './markdownCodePreview'
+import { Pencil, Trash2 } from 'lucide-react'
+import { CodePreview } from './markdownCodePreview'
+import { codeButton, codeDisplayButtons, copyCodeButton } from './codeToolbar'
+import { closedCodeFence, codeDisplayOverrides, codeNodeAt, deleteCodeBlock, toggleCodeDisplay } from './markdownCodeEditing'
 import { createCodeLanguagePicker, replaceCodeLanguage } from './codeCard'
 import { MarkdownHtmlPreview } from './markdownHtmlPreview'
 import { markdownBlockFrame } from './markdownBlockFrame'
@@ -19,26 +22,24 @@ class RenderedBlock extends WidgetType {
 
   toDOM(view: EditorView) {
     const figure = document.createElement('figure')
-    let edit
-    if (!this.readOnly) {
-      edit = document.createElement('button')
-      edit.type = 'button'
-      edit.className = 'tool-button mermaid-edit'
-      edit.textContent = this.kind === 'math' ? '编辑公式' : '编辑图表'
-      edit.addEventListener('click', () => {
-        const line = view.state.doc.lineAt(view.posAtDOM(figure))
-        const next = view.state.doc.line(Math.min(line.number + 1, view.state.doc.lines))
-        view.dispatch({ selection: { anchor: next.from }, scrollIntoView: true })
-        view.focus()
-      })
+    const edit = () => {
+      const line = view.state.doc.lineAt(view.posAtDOM(figure))
+      const next = view.state.doc.line(Math.min(line.number + 1, view.state.doc.lines))
+      view.dispatch({ selection: { anchor: next.from }, scrollIntoView: true })
+      view.focus()
     }
-    this.cancel = mountBlockPreview(figure, this.code, this.kind, view.scrollDOM, { edit, measure: () => view.requestMeasure() })
+    const actions: HTMLElement[] = []
+    if (!this.readOnly) {
+      const pencil = codeButton(this.kind === 'math' ? '编辑公式' : '编辑图表', Pencil, edit)
+      pencil.classList.add('mermaid-edit')
+      actions.push(pencil)
+      if (this.kind !== 'math') actions.push(codeButton('删除代码块', Trash2, () => deleteCodeBlock(view, view.posAtDOM(figure))))
+    }
+    this.cancel = mountBlockPreview(figure, this.code, this.kind, view.scrollDOM, {
+      actions, editDiagram: this.readOnly ? undefined : edit, measure: () => view.requestMeasure(),
+    })
     return markdownBlockFrame(figure)
   }
-}
-
-function closedFence(node: SyntaxNode) {
-  return node.name === 'FencedCode' && node.lastChild?.name === 'CodeMark' && node.lastChild.from > node.from
 }
 
 function codeText(state: EditorState, node: SyntaxNode, closed: boolean) {
@@ -60,20 +61,22 @@ function codeLanguageRange(node: SyntaxNode) {
 }
 
 class CodeEditToolbar extends WidgetType {
-  constructor(readonly opening: number, readonly info: string, readonly fenced: boolean) { super() }
+  constructor(readonly opening: number, readonly info: string, readonly fenced: boolean, readonly deletable: boolean,
+    readonly options: CodeBlockPreferences) { super() }
 
   eq(other: CodeEditToolbar) {
-    return this.opening === other.opening && this.info === other.info && this.fenced === other.fenced
+    return this.opening === other.opening && this.info === other.info && this.fenced === other.fenced && this.deletable === other.deletable &&
+      this.options.lineNumbers === other.options.lineNumbers && this.options.wrap === other.options.wrap
   }
 
   toDOM(view: EditorView) {
     const bar = document.createElement('div')
     bar.className = 'md-code-header md-code-edit-header'
+    bar.dataset.codeOpening = String(this.opening)
     bar.setAttribute('role', 'toolbar')
     bar.ariaLabel = '代码块编辑工具栏'
     const readNode = () => {
-      let node: SyntaxNode | null = syntaxTree(view.state).resolve(this.opening, 1)
-      while (node && node.name !== 'FencedCode' && node.name !== 'CodeBlock') node = node.parent
+      const node = codeNodeAt(view.state, this.opening, 1)
       return node?.from === this.opening ? node : undefined
     }
     if (this.fenced) bar.append(createCodeLanguagePicker(this.info, value => {
@@ -88,10 +91,12 @@ class CodeEditToolbar extends WidgetType {
       caption.textContent = '纯文本'
       bar.append(caption)
     }
+    bar.append(...codeDisplayButtons(this.options, option => toggleCodeDisplay(view, this.opening, option, !this.options[option])))
     bar.append(copyCodeButton(() => {
       const node = readNode()
-      if (node) return codeText(view.state, node, closedFence(node))
+      if (node) return codeText(view.state, node, closedCodeFence(node))
     }))
+    if (this.deletable) bar.append(codeButton('删除代码块', Trash2, () => deleteCodeBlock(view, this.opening)))
     return bar
   }
 }
@@ -100,8 +105,10 @@ export const codeBlockPreferences = Facet.define<CodeBlockPreferences, CodeBlock
   combine: values => values[0] ?? { lineNumbers: false, wrap: false },
 })
 
-function previews(state: EditorState): DecorationSet {
+function previews(state: EditorState, atOpening: boolean): DecorationSet {
   const ranges: Range<Decoration>[] = []
+  const defaults = state.facet(codeBlockPreferences)
+  const overrides = state.field(codeDisplayOverrides)
   syntaxTree(state).iterate({ enter(node) {
     if (node.name === 'HTMLBlock') {
       const start = state.doc.lineAt(node.from).from
@@ -124,18 +131,28 @@ function previews(state: EditorState): DecorationSet {
     if (node.name !== 'FencedCode' && node.name !== 'CodeBlock') return
     const fenced = node.name === 'FencedCode'
     const info = node.node.getChild('CodeInfo')
-    const closed = closedFence(node.node)
+    const closed = closedCodeFence(node.node)
     const last = state.doc.lineAt(node.to)
     const to = closed && !state.sliceDoc(node.to, last.to).trim() ? last.to : node.to
     const from = state.doc.lineAt(node.from)
+    const firstCaret = fenced && atOpening ? node.from : node.from + 1
+    const lastCaret = closed ? to - 1 : to
     const inside = !state.readOnly && state.selection.ranges.some(range =>
-      range.empty ? range.from > node.from && range.from < to : range.from < to && range.to > node.from)
+      range.empty ? range.from >= firstCaret && range.from <= lastCaret
+        : range.from < to && range.to > node.from)
     const language = info ? state.sliceDoc(info.from, info.to).trim() : ''
+    const options = { ...defaults, ...overrides.get(node.from) }
     if (inside) {
       const active = state.selection.main
       if (active.from >= node.from && active.to <= to) {
         ranges.push(Decoration.widget({ block: true, side: -1,
-          widget: new CodeEditToolbar(node.from, language, fenced) }).range(from.from))
+          widget: new CodeEditToolbar(node.from, language, fenced, !fenced || closed, options) }).range(from.from))
+        const firstLine = from.number + Number(fenced)
+        for (let number = firstLine; number <= last.number - Number(closed); number++) {
+          const attributes: Record<string, string> = { class: 'md-code-block' + (options.wrap ? ' md-code-wrap' : ' md-code-nowrap') }
+          if (options.lineNumbers) attributes['data-code-line'] = String(number - firstLine + 1)
+          ranges.push(Decoration.line({ attributes }).range(state.doc.line(number).from))
+        }
       }
       return false
     }
@@ -148,27 +165,32 @@ function previews(state: EditorState): DecorationSet {
     } else {
       const prefix = state.sliceDoc(from.from, node.from)
       const start = /^[ \t>]*$/.test(prefix) ? from.from : node.from
-      const codeStart = blocks[0]?.from ?? state.doc.line(Math.min(from.number + 1, state.doc.lines)).from
+    const codeStart = blocks[0]?.from ?? (closed && last.number === from.number + 1 ? from.to :
+      state.doc.line(Math.min(from.number + 1, state.doc.lines)).from)
       const editAt = Math.min(Math.max(node.from + 1, codeStart), to - 1)
       const languageRange = codeLanguageRange(node.node)
       const lineOffsets = code.split('\n').map((text, index) => {
         const source = state.doc.line(from.number + Number(fenced) + index)
         return (text && source.text.endsWith(text) ? source.to - text.length : source.from) - start
       })
-      const widget = new CodePreview({ from: start, editAt, code, language, languageRange, lineOffsets, quoteDepth: (prefix.match(/>/g) ?? []).length }, state.facet(codeBlockPreferences), state.readOnly)
+      const widget = new CodePreview({ from: start, opening: node.from, editAt, code, language, languageRange, lineOffsets,
+        quoteDepth: (prefix.match(/>/g) ?? []).length }, options, state.readOnly)
       ranges.push(Decoration.replace({ block: true, widget }).range(start, to))
     }
     return false
   } })
-  return Decoration.set(ranges)
+  return Decoration.set(ranges, true)
 }
 
 export const renderedBlocks = StateField.define({
-  create: previews,
+  create: state => ({ atOpening: false, ranges: previews(state, false) }),
   update(value, transaction) {
-    return transaction.startState.readOnly !== transaction.state.readOnly || transaction.docChanged || transaction.selection ||
-      transaction.startState.facet(codeBlockPreferences) !== transaction.state.facet(codeBlockPreferences) || syntaxTree(transaction.startState) !== syntaxTree(transaction.state)
-      ? previews(transaction.state) : value
+    const { startState, state } = transaction
+    const atOpening = value.atOpening || !!transaction.selection
+    return startState.readOnly !== state.readOnly || transaction.docChanged || transaction.selection ||
+      startState.facet(codeBlockPreferences) !== state.facet(codeBlockPreferences) ||
+      startState.field(codeDisplayOverrides) !== state.field(codeDisplayOverrides) || syntaxTree(startState) !== syntaxTree(state)
+      ? { atOpening, ranges: previews(state, atOpening) } : value
   },
-  provide: field => EditorView.decorations.from(field),
+  provide: field => EditorView.decorations.from(field, value => value.ranges),
 })

@@ -854,7 +854,7 @@ dialog footer .conflict-overwrite { background: #9b3438; color: #fff; }
 .media-thumb-frame[data-side="left"] { left: 13px; right: auto; }
 .media-thumb-frame::before { content: ''; position: absolute; inset: -18px -28px -5px; }
 .media-thumb { position: relative; cursor: crosshair; }
-.media-thumb-switch { position: absolute; top: -10px; left: -25px; width: 24px; height: 24px; border: 1px solid var(--line); background: var(--page); }
+.media-thumb-switch { position: absolute; bottom: 0; left: -25px; width: 24px; height: 24px; border: 1px solid var(--line); background: var(--page); }
 .media-thumb-frame[data-side="left"] .media-thumb-switch { left: auto; right: -25px; }
 .media-thumb-switch, .media-thumb-resize { opacity: 0; pointer-events: none; }
 .media-thumb-frame:is(:hover, :focus-within) :is(.media-thumb-switch, .media-thumb-resize) { opacity: 1; pointer-events: auto; }
@@ -929,6 +929,13 @@ dialog footer .conflict-overwrite { background: #9b3438; color: #fff; }
 
 .outline-code-card { flex: 1; min-width: 0; }
 .outline-code-card .outline-code-edit { padding: 0; }
+.outline-code-fence { display: block; width: 100%; min-width: 0; padding: 3px 11px; font: inherit; color: var(--muted); border-bottom: 1px solid var(--line); }
+.outline-code-fence:focus-visible { outline-offset: -2px; }
+.markdown-surface .cm-line.md-code-nowrap { white-space: pre; overflow-wrap: normal; word-break: normal; }
+.markdown-surface .cm-line.md-code-wrap { white-space: pre-wrap; overflow-wrap: anywhere; }
+.markdown-surface .cm-line[data-code-line] { position: relative; padding-inline-start: 4ch; }
+.cm-line[data-code-line]::before { position: absolute; inset-inline-start: 0; width: 3ch; text-align: end; content: attr(data-code-line); color: var(--muted); user-select: none; pointer-events: none; }
+.md-code-header [data-code-option][aria-pressed="true"] { background: var(--selected); color: var(--link); }
 .outline-code-edit .cm-editor { min-height: 40px; max-height: min(60vh, 580px); }
 .outline-code-edit .cm-scroller { font: inherit; }
 .outline-code-edit .cm-content { padding: 8px 0 10px; caret-color: var(--text); }

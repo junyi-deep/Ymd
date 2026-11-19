@@ -1,15 +1,8 @@
 import DOMPurify from 'dompurify'
 import { renderMermaid } from './renderMermaid'
-import { codeLanguageToken, plantUmlAliases } from './codeLanguages'
-
-export type DiagramKind = 'mermaid' | 'plantuml'
+import type { DiagramKind } from './diagramSyntax'
+export { diagramKind } from './diagramSyntax'
 export type PreviewBlockKind = DiagramKind | 'math'
-
-export function diagramKind(info = ''): DiagramKind | undefined {
-  const language = codeLanguageToken.exec(info.trimStart())?.[0].toLowerCase()
-  if (language === 'mermaid') return 'mermaid'
-  if (language && (language === 'plantuml' || plantUmlAliases.includes(language))) return 'plantuml'
-}
 
 export const diagramTitle = (kind: DiagramKind) => (kind === 'mermaid' ? 'Mermaid' : 'PlantUML') + ' 图'
 export const blockTitle = (kind: PreviewBlockKind) => kind === 'math' ? '公式块' : diagramTitle(kind)

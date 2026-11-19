@@ -1,5 +1,6 @@
 export type MediaPreview = { type: 'image' | 'diagram'; src: string; title: string; svg?: string }
 export const mediaPreviewEvent = 'ymd:media-preview'
+export const outlineDiagramEditEvent = 'ymd:outline-edit-diagram'
 
 export function openMediaPreview(element: HTMLElement, request: MediaPreview) {
   element.dispatchEvent(new CustomEvent(mediaPreviewEvent, { bubbles: true, detail: request }))

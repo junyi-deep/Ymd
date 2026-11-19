@@ -1,44 +1,19 @@
 import { WidgetType, type EditorView } from '@codemirror/view'
-import { createElement } from 'react'
-import { renderToStaticMarkup } from 'react-dom/server'
-import { Check, Code2, Copy } from 'lucide-react'
+import { Pencil, Trash2 } from 'lucide-react'
 import { createCodeLanguagePicker, paintCode, replaceCodeLanguage } from './codeCard'
+import { codeButton, codeDisplayButtons, copyCodeButton } from './codeToolbar'
+import { deleteCodeBlock, toggleCodeDisplay } from './markdownCodeEditing'
 import type { CodeBlockPreferences } from '../../shared/contracts'
 
 interface CodeBlock {
   from: number
+  opening: number
   editAt: number
   code: string
   language: string
   languageRange?: { from: number; to: number }
   lineOffsets: number[]
   quoteDepth: number
-}
-
-function codeButton(label: string, icon: typeof Copy, onClick: (button: HTMLButtonElement) => void) {
-  const element = document.createElement('button')
-  element.type = 'button'
-  element.className = 'icon-button'
-  element.title = element.ariaLabel = label
-  element.innerHTML = renderToStaticMarkup(createElement(icon, { size: 15, 'aria-hidden': true }))
-  element.addEventListener('click', () => onClick(element))
-  return element
-}
-
-export function copyCodeButton(read: () => string | undefined) {
-  let reset: number | undefined
-  return codeButton('复制代码', Copy, element => {
-    const code = read()
-    if (code === undefined) return
-    void navigator.clipboard.writeText(code).then(() => {
-      if (!element.isConnected) return
-      window.clearTimeout(reset)
-      const copyIcon = renderToStaticMarkup(createElement(Copy, { size: 15, 'aria-hidden': true }))
-      element.innerHTML = renderToStaticMarkup(createElement(Check, { size: 15, 'aria-hidden': true }))
-      element.ariaLabel = element.title = '已复制代码'
-      reset = window.setTimeout(() => { element.innerHTML = copyIcon; element.ariaLabel = element.title = '复制代码' }, 1100)
-    }).catch(() => { if (element.isConnected) element.title = '复制失败' })
-  })
 }
 
 export class CodePreview extends WidgetType {
@@ -49,7 +24,7 @@ export class CodePreview extends WidgetType {
   get estimatedHeight() { return Math.min(620, (this.block.code.match(/\n/g)?.length ?? 0) * 21 + 57) }
 
   eq(other: CodePreview) {
-    return this.block.from === other.block.from && this.block.editAt === other.block.editAt &&
+    return this.block.from === other.block.from && this.block.opening === other.block.opening && this.block.editAt === other.block.editAt &&
       this.block.languageRange?.from === other.block.languageRange?.from && this.block.languageRange?.to === other.block.languageRange?.to &&
       this.block.lineOffsets.every((offset, index) => offset === other.block.lineOffsets[index]) &&
       this.block.code === other.block.code && this.block.language === other.block.language && this.block.quoteDepth === other.block.quoteDepth &&
@@ -57,13 +32,14 @@ export class CodePreview extends WidgetType {
   }
 
   toDOM(view: EditorView) {
-    const { from, editAt, code, language, languageRange, lineOffsets, quoteDepth } = this.block
+    const { from, opening, editAt, code, language, languageRange, lineOffsets, quoteDepth } = this.block
     const figure = document.createElement('figure')
     figure.className = 'md-code-preview'
     figure.dataset.wrap = String(this.options.wrap)
     if (quoteDepth) figure.style.paddingInlineStart = Math.min(44, 11 * quoteDepth) + 'px'
     const toolbar = document.createElement('div')
     toolbar.className = 'md-code-header'
+    toolbar.dataset.codeOpening = String(opening)
     const caption = document.createElement('span')
     caption.textContent = language || '纯文本'
     const position = () => view.posAtDOM(figure)
@@ -77,8 +53,10 @@ export class CodePreview extends WidgetType {
       view.dispatch({ changes: { ...languageRange, insert: replaceCodeLanguage(info, value) }, userEvent: 'input' })
     }, () => view.focus()))
     else toolbar.append(caption)
-    if (!this.readOnly) toolbar.append(codeButton('编辑代码块', Code2, () => startEditing()))
+    toolbar.append(...codeDisplayButtons(this.options, option => toggleCodeDisplay(view, opening, option, !this.options[option])))
+    if (!this.readOnly) toolbar.append(codeButton('编辑代码块', Pencil, () => startEditing()))
     toolbar.append(copyCodeButton(() => code))
+    if (!this.readOnly) toolbar.append(codeButton('删除代码块', Trash2, () => deleteCodeBlock(view, opening)))
     const body = document.createElement('pre')
     body.className = 'md-code-body'
     body.tabIndex = 0

@@ -10,6 +10,7 @@ import { MediaViewer } from './MediaViewer'
 import { mediaPreviewEvent, type MediaPreview } from './mediaPreview'
 import { MarkdownImageSize } from './MarkdownImageSize'
 import { codeBlockPreferences, renderedBlocks } from './renderedBlocks'
+import { codeDisplayOverrides, markdownCodeInput } from './markdownCodeEditing'
 import { TableSizeGrid } from './TableSizeGrid'
 import { insertTable, markdownTable } from './markdownTable'
 import { expandMetadata, FootnoteReference, footnotes, insertFootnote, insertMetadata, markdownNotes, markdownWithMetadata, referenceNote } from './markdownNotes'
@@ -379,8 +380,8 @@ export function MarkdownEditor({ text, name, path, modified, platform, remoteIma
           { key: 'Tab', run: tabInList(), shift: tabInList(true) },
           ...markdownKeymap, ...searchKeymap.filter(binding => binding.key !== 'Mod-f')])),
         EditorView.contentAttributes.of({ 'aria-label': 'Markdown 编辑器', spellcheck: 'false' }),
-        markdownImageIntake(path, report),
-        renderMode.current.of(sourceMode.current ? [] : [livePreview, codeBlockPreferences.of(codeBlocks), renderedBlocks, markdownTable, markdownNotes]),
+        markdownImageIntake(path, report), codeDisplayOverrides,
+        renderMode.current.of(sourceMode.current ? [] : [livePreview, codeBlockPreferences.of(codeBlocks), markdownCodeInput, renderedBlocks, markdownTable, markdownNotes]),
         readMode.current.of([EditorState.readOnly.of(reading), EditorView.editable.of(!reading)]), titleMode.current.of(titleExtension),
         EditorView.updateListener.of(update => {
           const { bom, newline } = serialization.current
@@ -454,7 +455,7 @@ export function MarkdownEditor({ text, name, path, modified, platform, remoteIma
   }, [registerFlush])
 
   useEffect(() => {
-    view.current?.dispatch({ effects: renderMode.current.reconfigure(source ? [] : [livePreview, codeBlockPreferences.of(codeBlocks), renderedBlocks, markdownTable, markdownNotes]) })
+    view.current?.dispatch({ effects: renderMode.current.reconfigure(source ? [] : [livePreview, codeBlockPreferences.of(codeBlocks), markdownCodeInput, renderedBlocks, markdownTable, markdownNotes]) })
   }, [source, livePreview, codeBlocks])
   useEffect(() => {
     view.current?.dispatch({ effects: readMode.current.reconfigure([

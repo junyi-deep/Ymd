@@ -1,8 +1,6 @@
 import { LanguageDescription, LanguageSupport, StreamLanguage } from '@codemirror/language'
 import { languages } from '@codemirror/language-data'
-
-export const codeLanguageToken = /^[^\s`{},]+/
-export const plantUmlAliases = ['puml', 'pu', 'uml']
+import { plantUmlAliases } from './diagramSyntax'
 
 const mermaid = StreamLanguage.define({
   token(stream) {

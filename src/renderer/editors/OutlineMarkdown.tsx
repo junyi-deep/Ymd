@@ -5,6 +5,7 @@ import { sanitizeMarkdownHtml } from './markdownHtml'
 import { decodeImageAttribute, markdownImageLine, readHtmlImage } from './markdownImageSyntax'
 import { createMarkdownImage, displayMath, mountBlockPreview, type PreviewImage } from './markdownPreviewMedia'
 import { diagramKind, type PreviewBlockKind } from './renderDiagram'
+import { outlineDiagramEditEvent } from './mediaPreview'
 
 const previews = new WeakMap<HTMLElement, { observer: IntersectionObserver; pending: Map<Element, () => void> }>()
 
@@ -54,8 +55,9 @@ export const OutlineMarkdown = memo(function OutlineMarkdown({ text, path, remot
       const markdown = text.replace(/^\uFEFF/, '')
       const source = block && /^\[[ xX]\]\s/.test(markdown) ? '- ' + markdown : markdown
       const images = new Map<string, PreviewImage>()
-      const diagrams = new Map<string, { code: string; kind: PreviewBlockKind }>()
+      const diagrams = new Map<string, { code: string; kind: PreviewBlockKind; index: number }>()
       const prefix = crypto.randomUUID() + '-'
+      let diagramCount = 0
       const imagePlaceholder = (image: PreviewImage) => {
         const id = prefix + images.size
         images.set(id, image)
@@ -63,7 +65,7 @@ export const OutlineMarkdown = memo(function OutlineMarkdown({ text, path, remot
       }
       const blockPlaceholder = (code: string, kind: PreviewBlockKind) => {
         const id = prefix + diagrams.size
-        diagrams.set(id, { code, kind })
+        diagrams.set(id, { code, kind, index: kind === 'math' ? -1 : diagramCount++ })
         return `<figure data-preview-block="${id}"></figure>`
       }
       const parser = new Marked({ gfm: true, breaks: true }, {
@@ -116,7 +118,12 @@ export const OutlineMarkdown = memo(function OutlineMarkdown({ text, path, remot
         if (!preview) continue
         delete figure.dataset.previewBlock
         cancelDiagrams.push(mountBlockPreview(figure, preview.code, preview.kind,
-          outline ?? view.closest('.map-remainder .document-remainder-body'), { showSourceOnError: true, viewer: !!outline }))
+          outline ?? view.closest('.map-remainder .document-remainder-body'), {
+            showSourceOnError: true, viewer: !!outline,
+            editDiagram: outline ? () => figure.dispatchEvent(new CustomEvent(outlineDiagramEditEvent, {
+              bubbles: true, detail: preview.index,
+            })) : undefined,
+          }))
       }
       view.replaceChildren(output)
     }

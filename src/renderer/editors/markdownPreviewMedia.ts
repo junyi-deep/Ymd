@@ -112,7 +112,8 @@ function scheduleBlockPreview(content: HTMLElement, code: string, kind: PreviewB
 }
 
 export function mountBlockPreview(figure: HTMLElement, code: string, kind: PreviewBlockKind, root: Element | null, options?: {
-  edit?: HTMLButtonElement
+  actions?: HTMLElement[]
+  editDiagram?: () => void
   measure?: () => void
   showSourceOnError?: boolean
   viewer?: boolean
@@ -122,11 +123,17 @@ export function mountBlockPreview(figure: HTMLElement, code: string, kind: Previ
   figure.setAttribute('aria-label', title)
   const tools = document.createElement('div')
   tools.className = 'mermaid-tools'
-  if (options?.edit) tools.append(options.edit)
+  if (options?.actions) tools.append(...options.actions)
   const content = document.createElement('div')
   content.className = 'mermaid-content'
   content.setAttribute('aria-busy', 'true')
   content.textContent = kind === 'math' ? '正在渲染公式…' : '正在绘制 ' + title + '…'
+  if (kind !== 'math' && options?.editDiagram) content.addEventListener('dblclick', event => {
+    if (!(event.target instanceof Element) || !event.target.closest('svg')) return
+    event.preventDefault()
+    event.stopPropagation()
+    options.editDiagram?.()
+  })
   figure.replaceChildren(tools, content)
   const cancel = scheduleBlockPreview(content, code, kind, root, () => {
     content.removeAttribute('aria-busy')

@@ -2,6 +2,7 @@ import { GFM, parser } from '@lezer/markdown'
 import type { SyntaxNode } from '@lezer/common'
 import { markdownBody, typoraMarkdown } from './markdownExtras'
 import { markdownImageTags } from './markdownImageSyntax'
+import { diagramKind } from './diagramSyntax'
 
 export interface Block {
   id: string
@@ -122,6 +123,23 @@ export function projectList(text: string): Projection {
 
 export function projectionRemainder(projection: Projection) {
   return [projection.before, projection.after].map(part => part.replace(/^\uFEFF/, '').replace(/^(?:[ \t]*\r?\n)+|[\r\n]+$/g, '')).filter(part => part.trim()).join('\n\n')
+}
+
+export function diagramBodyLines(text: string) {
+  const source = text.replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n')
+  const body = markdownBody(source)
+  const offset = source.length - body.length
+  const lines: number[] = []
+  markdown.parse(body).iterate({ enter({ name, node, from }) {
+    if (name !== 'FencedCode') return
+    const info = node.getChild('CodeInfo')
+    if (info && diagramKind(body.slice(info.from, info.to)) &&
+        node.getChildren('CodeText').some(part => body.slice(part.from, part.to).trim())) {
+      lines.push(source.slice(0, offset + from).split('\n').length + 1)
+    }
+    return false
+  } })
+  return lines
 }
 
 export function writeList(projection: Projection, blocks: Block[]) {

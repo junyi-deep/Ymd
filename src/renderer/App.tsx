@@ -978,7 +978,13 @@ export function App() {
             ? <OutlineEditor key={active.path + ':' + active.reload} text={active.text} name={active.name} path={active.path} position={position!}
               find={find} findHost={findHost}
               filenameTitle={filenameTitle} platform={platform} followLink={href => followDocumentLink(active.path, href)} remoteImages={preferences.remoteImages} sessions={outlineSessions.current} onChange={edit}
-              width={preferences.outlinePageWidth} embedded={viewingJournal} codeLineNumbers={preferences.outlineCodeLineNumbers} setWidth={outlinePageWidth => updatePreferences({ outlinePageWidth })}
+              width={preferences.outlinePageWidth} embedded={viewingJournal}
+              codeOptions={{ lineNumbers: preferences.outlineCodeLineNumbers, wrap: preferences.codeBlocks.wrap }}
+              editRemainderLine={line => {
+                setJump({ path: active.path, line, id: Date.now() })
+                sessions.setMode(active.path, 'markdown')
+              }}
+              setWidth={outlinePageWidth => updatePreferences({ outlinePageWidth })}
               remainderVisible={preferences.outlineRemainderVisible} setRemainderVisible={outlineRemainderVisible => updatePreferences({ outlineRemainderVisible })} />
             : <MindMapEditor key={active.path + ':' + active.reload} text={active.text} name={active.name} path={active.path} dark={dark} onChange={edit} find={find} position={position!}
               overviewPreferences={preferences.mapOverview} panelWidth={preferences.mapPanelWidth}
