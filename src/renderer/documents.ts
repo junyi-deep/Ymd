@@ -134,11 +134,11 @@ export function useDocuments() {
     } : document))
   }
 
-  function close(path: string) {
+  function close(path: string, returnHome = false) {
     refreshes.current.delete(path)
     void journal(path, null).catch(() => {})
     update(sessions => sessions.filter(session => session.path !== path))
-    setActive(current => current === path ? latest.current.at(-1)?.path : current)
+    setActive(current => current === path ? (returnHome ? undefined : latest.current.at(-1)?.path) : current)
   }
 
   function relocate(path: string, target: string, name: string, scope: Scope) {

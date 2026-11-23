@@ -7,6 +7,11 @@ files:
   - dist/**/*
   - package.json
 mac:
+  fileAssociations:
+    - ext: md
+      name: Markdown Document
+      role: Editor
+      rank: Alternate
   asarUnpack:
     - dist/main/window-shadow.dylib
     - "**/node_modules/@koromix/koffi-darwin-arm64/**"
@@ -24,6 +29,8 @@ mac:
       arch: [arm64]
 toolsets:
   nsis: "1.2.1"
+nsis:
+  include: build/installer.nsh
 win:
   asarUnpack:
     - "**/node_modules/@koromix/koffi-win32-x64/**"

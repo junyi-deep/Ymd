@@ -34,7 +34,7 @@ function Choices<T extends string>({ value, choices, onChange }: {
     <button key={key} aria-pressed={value === key} onClick={() => onChange(key)}>{label}</button>)}</div>
 }
 
-export function Settings({ preferences, platform, library, windowsAcrylic, macReducesTransparency, initialPage, version, release, checking, updateProxy, onSaveUpdateProxy, onCheckUpdates, onDownloadUpdate, onInstallUpdate, onOpenRelease, onOpenDirectory, onChange, onReturn, onLibraryChange, defaultStickerDirectory, onStorageChange, onOpenStorage }: {
+export function Settings({ preferences, platform, library, windowsAcrylic, macReducesTransparency, initialPage, version, release, checking, updateProxy, onSaveUpdateProxy, onCheckUpdates, onDownloadUpdate, onInstallUpdate, onOpenRelease, onOpenDirectory, onChange, onReturn, onLibraryChange, defaultStickerDirectory, onStorageChange, onOpenStorage, onOpenMarkdownDefaults }: {
   preferences: Preferences
   platform: string
   library: Entry
@@ -51,6 +51,7 @@ export function Settings({ preferences, platform, library, windowsAcrylic, macRe
   onInstallUpdate: () => void
   onOpenRelease: (url: string) => void
   onOpenDirectory: () => void
+  onOpenMarkdownDefaults: () => void
   onLibraryChange: (reset?: boolean) => void
   defaultStickerDirectory: string
   onStorageChange: (kind: StorageDirectory, reset?: boolean) => void
@@ -215,6 +216,9 @@ export function Settings({ preferences, platform, library, windowsAcrylic, macRe
           </div>
         </> : <div className="settings-group">
           {page === '通用' && <>
+            {platform === 'win32' && <Row label="Markdown 默认打开应用" detail="在 Windows 默认应用设置中，为 .md 文件选择 Ymd。">
+              <button type="button" className="tool-button" onClick={onOpenMarkdownDefaults}>打开系统设置</button>
+            </Row>}
             <Row label="自动清理空小记" detail="仅清理保留期以外的空小记，并移到系统回收站。">
               <select aria-label="自动清理空小记" value={preferences.journalCleanup} onChange={event => {
                 const choice = journalCleanupChoices.find(([key]) => key === event.target.value)

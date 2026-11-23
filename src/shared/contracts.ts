@@ -242,6 +242,10 @@ export interface GitFileVersion {
 }
 
 export interface Desktop {
+  workspacePainted(): Promise<void>
+  openMarkdownDefaults(): Promise<void>
+  openDroppedFiles(files: File[]): Promise<DocumentFile[]>
+  onExternalOpen(callback: (files: DocumentFile[]) => void): () => void
   windowAction(action: 'minimize' | 'maximize' | 'close'): Promise<void>
   onWindowMaximized(callback: (maximized: boolean) => void): () => void
   initialize(): Promise<{ library: Entry; journalRoot: Entry; recent: Entry[]; preferences: Preferences; platform: string; windowsAcrylic: boolean; macReducesTransparency: boolean; version: string; updateProxy: UpdateProxy; release: VersionStatus;
@@ -253,10 +257,8 @@ export interface Desktop {
   listRecent(): Promise<Entry[]>
   touchRecent(path: string): Promise<Entry[]>
   removeRecentEntries(paths: string[]): Promise<Entry[]>
-  removeRecent(path: string): Promise<Entry[]>
   reorderRecent(path: string, target: string, after: boolean): Promise<Entry[]>
   setFolderExpanded(path: string, expanded: boolean): Promise<void>
-  hideLocalEntry(path: string): Promise<void>
   recordDocumentOpen(path: string): Promise<void>
   openHistoryDocument(path: string): Promise<DocumentFile | null>
   onDocumentHistory(callback: (entries: Entry[]) => void): () => void

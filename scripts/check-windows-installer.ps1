@@ -7,6 +7,15 @@ if (-not $process.WaitForExit(90000) -or $process.ExitCode -ne 0) { throw 'NSIS 
 
 $installed = Join-Path $env:LOCALAPPDATA 'Programs/Ymd/Ymd.exe'
 if (-not (Test-Path $installed)) { throw 'Ymd was not installed.' }
+$capabilities = 'Software\Ymd\Capabilities'
+$registered = Get-Item 'HKCU:\Software\RegisteredApplications'
+$associations = Get-Item "HKCU:\$capabilities\FileAssociations"
+$openWith = Get-Item 'HKCU:\Software\Classes\.md\OpenWithProgids'
+$command = Get-Item 'HKCU:\Software\Classes\Ymd.Markdown\shell\open\command'
+if ($registered.GetValue('Ymd') -ne $capabilities -or $associations.GetValue('.md') -ne 'Ymd.Markdown' -or
+    $openWith.GetValueNames() -notcontains 'Ymd.Markdown' -or $command.GetValue('') -ne ('"{0}" "%1"' -f $installed)) {
+  throw 'The installer did not register Ymd as a Markdown handler.'
+}
 function Get-InstalledYmd {
   Get-Process -Name Ymd -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $installed }
 }

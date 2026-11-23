@@ -1,8 +1,16 @@
-import { contextBridge, ipcRenderer } from 'electron'
-import type { Command, Desktop, Entry, JournalList, Preferences, RecoveryEntry, VersionStatus } from '../shared/contracts'
+import { contextBridge, ipcRenderer, webUtils } from 'electron'
+import type { Command, Desktop, DocumentFile, Entry, JournalList, Preferences, RecoveryEntry, VersionStatus } from '../shared/contracts'
 import type { PitchDesktop } from '../shared/pitch'
 
 const desktop: Desktop = {
+  workspacePainted: () => ipcRenderer.invoke('ymd:workspacePainted'),
+  openMarkdownDefaults: () => ipcRenderer.invoke('ymd:openMarkdownDefaults'),
+  openDroppedFiles: files => ipcRenderer.invoke('ymd:openDroppedFiles', files.map(file => webUtils.getPathForFile(file)).filter(Boolean)),
+  onExternalOpen: callback => {
+    const listener = (_: unknown, files: DocumentFile[]) => callback(files)
+    ipcRenderer.on('ymd:externalOpen', listener)
+    return () => ipcRenderer.removeListener('ymd:externalOpen', listener)
+  },
   windowAction: action => ipcRenderer.invoke('ymd:windowAction', action),
   onWindowMaximized: callback => {
     const listener = (_: unknown, maximized: boolean) => callback(maximized)
@@ -17,10 +25,8 @@ const desktop: Desktop = {
   listRecent: () => ipcRenderer.invoke('ymd:listRecent'),
   touchRecent: path => ipcRenderer.invoke('ymd:touchRecent', path),
   removeRecentEntries: paths => ipcRenderer.invoke('ymd:removeRecentEntries', paths),
-  removeRecent: path => ipcRenderer.invoke('ymd:removeRecent', path),
   reorderRecent: (path, target, after) => ipcRenderer.invoke('ymd:reorderRecent', path, target, after),
   setFolderExpanded: (path, expanded) => ipcRenderer.invoke('ymd:setFolderExpanded', path, expanded),
-  hideLocalEntry: path => ipcRenderer.invoke('ymd:hideLocalEntry', path),
   recordDocumentOpen: path => ipcRenderer.invoke('ymd:recordDocumentOpen', path),
   openHistoryDocument: path => ipcRenderer.invoke('ymd:openHistoryDocument', path),
   onDocumentHistory: callback => {

@@ -28,8 +28,26 @@ const dev = !app.isPackaged && process.argv.includes('--dev')
 const rendererRoot = path.join(__dirname, '../renderer')
 const rendererUrl = dev ? 'http://127.0.0.1:5173/' : 'ymd://app/'
 protocol.registerSchemesAsPrivileged([{ scheme: 'ymd', privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true } }])
+function launchFiles(args: string[], cwd: string) {
+  return args.filter(argument => !argument.startsWith('-') && fileKind(argument)).map(argument => path.resolve(cwd, argument))
+}
+const initialPaths = launchFiles(process.argv.slice(process.defaultApp ? 2 : 1), process.cwd())
+const primary = app.requestSingleInstanceLock({ files: initialPaths })
+let openFromSystem: ((paths: string[]) => void) | undefined
+function receiveLaunch(paths: string[]) {
+  if (openFromSystem) openFromSystem(paths)
+  else initialPaths.push(...paths)
+}
+if (primary) {
+  app.on('open-file', (event, file) => { event.preventDefault(); receiveLaunch(launchFiles([file], process.cwd())) })
+  app.on('second-instance', (_event, _args, _cwd, data) => {
+    const paths = (data as { files?: unknown } | undefined)?.files
+    receiveLaunch(Array.isArray(paths) ? paths.filter((file): file is string => typeof file === 'string' && path.isAbsolute(file) && !!fileKind(file)) : [])
+  })
+} else app.quit()
 type EditorWindow = {
-  window: BrowserWindow; initialFile?: DocumentFile; closing: boolean; search?: AbortController
+  window: BrowserWindow; initialFile?: Promise<DocumentFile | undefined>; closing: boolean; search?: AbortController
+  presented: boolean; pendingOpen: DocumentFile[]
   recording: boolean; keys: ShortcutSequence; documents: Set<string>; watchRevision: number
   draftRevisions: Map<string, symbol>
   frame?: ReturnType<typeof installWindowFrame>
@@ -218,7 +236,7 @@ function installMenu() {
   ]))
 }
 
-function createWindow(initialFile?: DocumentFile) {
+function createWindow(initialFile?: Promise<DocumentFile | undefined>) {
   nativeTheme.themeSource = preferences.theme
   const material = windowMaterial()
   const workArea = screen.getPrimaryDisplay().workAreaSize
@@ -230,6 +248,7 @@ function createWindow(initialFile?: DocumentFile) {
     minWidth: 660,
     minHeight: 510,
     title: 'Ymd',
+    show: false,
     // A clear background requires an alpha-capable macOS window even when launched in solid mode.
     transparent: process.platform === 'darwin' || windowsAcrylic,
     backgroundColor: material === 'solid' ? windowColor() : '#00000000',
@@ -239,8 +258,8 @@ function createWindow(initialFile?: DocumentFile) {
     visualEffectState: process.platform === 'darwin' ? 'active' : undefined,
     webPreferences: { preload: path.join(__dirname, '../preload/index.js'), contextIsolation: true, sandbox: true, nodeIntegration: false },
   })
-  const editor: EditorWindow = { window, initialFile, closing: false, recording: false,
-    keys: new ShortcutSequence(), documents: new Set(initialFile ? [initialFile.path] : []), watchRevision: 0, draftRevisions: new Map() }
+  const editor: EditorWindow = { window, initialFile, closing: false, recording: false, presented: false, pendingOpen: [],
+    keys: new ShortcutSequence(), documents: new Set(), watchRevision: 0, draftRevisions: new Map() }
   editors.set(window.id, editor)
   lastEditor = editor
   if (process.platform === 'darwin') {
@@ -295,7 +314,10 @@ function createWindow(initialFile?: DocumentFile) {
     flushWindowSize()
     void recovery.wait()
   })
-  void window.loadURL(rendererUrl)
+  const fallback = setTimeout(() => { if (!window.isDestroyed() && !editor.presented) window.show() }, 2000)
+  window.once('closed', () => clearTimeout(fallback))
+  void window.loadURL(rendererUrl).catch(() => { if (!window.isDestroyed()) window.show() })
+  return editor
 }
 
 function handleEditor<A extends unknown[], R>(name: keyof Desktop, run: (editor: EditorWindow, ...args: A) => R) {
@@ -310,7 +332,7 @@ function handle<A extends unknown[], R>(name: keyof Desktop, run: (...args: A) =
   handleEditor(name, (_editor, ...args: A) => run(...args))
 }
 
-void app.whenReady().then(async () => {
+if (primary) void app.whenReady().then(async () => {
   registerPitchWindow(rendererUrl, contents => editorFor(contents)?.window ?? null)
   session.defaultSession.setPermissionCheckHandler((contents, permission, _origin, details) => {
     if (permission === 'media') {
@@ -387,19 +409,22 @@ void app.whenReady().then(async () => {
   let treeWrite: Promise<TreeChange[] | null> = Promise.resolve(null)
   const temporaryRoots = new Set<Entry>()
   const roots = () => [library, journalRoot, ...recent.filter(entry => entry.kind === 'directory' && entry.path !== library.path && entry.path !== journalRoot.path), ...temporaryRoots]
+  let workspaceReady: Promise<void> = Promise.resolve()
+  async function saveRecent(next: Entry[], publish = true) {
+    await writeFile(recentFile + '.tmp', JSON.stringify(next), { flush: true })
+    await rename(recentFile + '.tmp', recentFile)
+    recent = next
+    if (publish) {
+      files.retainRoots(roots())
+      broadcast('ymd:workspaceChanged', { library, recent })
+    }
+    return recent
+  }
   const writeRecent = (change: (items: Entry[]) => Entry[], publish = true) => {
     const task = recentWrite.catch(() => {}).then(async () => {
+      await workspaceReady
       const changed = change(recent)
-      if (changed === recent) return recent
-      const next = changed.slice(0, recentFilesLimit)
-      await writeFile(recentFile + '.tmp', JSON.stringify(next), { flush: true })
-      await rename(recentFile + '.tmp', recentFile)
-      recent = next
-      if (publish) {
-        files.retainRoots(roots())
-        broadcast('ymd:workspaceChanged', { library, recent })
-      }
-      return recent
+      return changed === recent ? recent : saveRecent(changed.slice(0, recentFilesLimit), publish)
     })
     recentWrite = task
     return task
@@ -410,73 +435,75 @@ void app.whenReady().then(async () => {
       ? items.map(item => item.path === entry.path ? opened : item)
       : [opened, ...items]
   })
-  const oldLibrary = path.join(previous, 'Documents')
-  const workspaceMarker = path.join(data, '.workspace-layout-v2')
-  const legacyRoot = await realpath(storage.root)
-  const reserved = ['documents', 'stickers', 'config', 'journals']
-  files.hiddenStorageDirectories = new Set(reserved.map(name => path.join(legacyRoot, name)))
-  const hasLegacyWorkspace = (await readdir(legacyRoot, { withFileTypes: true })).some(item =>
-    !item.name.startsWith('.') && !reserved.includes(item.name.toLowerCase()) && !item.isSymbolicLink() &&
-    (item.isDirectory() || fileKind(item.name)))
-  await migrateStickers(previous, defaultStickerDirectory, data).catch(error => { console.warn('无法迁移旧版贴纸。', error) })
-  await mkdir(data, { recursive: true })
-  if (storedRecent === undefined) {
-    const oldEntries = await readdir(oldLibrary).catch(() => [])
-    const paths = [
-      ...(oldEntries.some(name => !name.startsWith('.')) ? [oldLibrary] : []),
-      ...(typeof oldProject === 'string' && path.isAbsolute(oldProject) ? [oldProject] : []),
-    ]
-    for (const location of paths) {
-      const entry = await files.authorizeDirectory(location).catch(() => null)
-      if (entry && entry.path !== library.path && !recent.some(item => item.path === entry.path)) recent.push(entry)
-    }
-    await writeRecent(items => [...items])
-  } else {
-    let parsed: unknown
-    try { parsed = JSON.parse(storedRecent) } catch {}
-    if (Array.isArray(parsed)) {
-      const savedEntries = parsed.slice(0, recentFilesLimit)
-      const seen = new Set<string>()
-      // Bound simultaneous lookups so many local or network paths do not starve other work.
-      for (let index = 0; index < savedEntries.length; index += 32) {
-        const opened = await Promise.all(savedEntries.slice(index, index + 32).map(async saved => {
-          if (typeof saved?.path !== 'string' || !path.isAbsolute(saved.path)) return null
-          const entry = await (saved.kind === 'directory' ? files.authorizeDirectory(saved.path) : files.authorizeFileEntry(saved.path)).catch(() => null)
-          return entry && { ...entry, name: entry.path === legacyRoot && entry.kind === 'directory' ? '旧版文档' : entry.name, lastOpened: Number.isFinite(saved.lastOpened) ? saved.lastOpened as number : undefined }
-        }))
-        for (const entry of opened) {
-          if (!entry || seen.has(entry.path)) continue
-          recent.push(entry)
-          seen.add(entry.path)
+  let documentHistory: Entry[] = []
+  async function restoreWorkspace() {
+    const oldLibrary = path.join(previous, 'Documents')
+    const workspaceMarker = path.join(data, '.workspace-layout-v2')
+    const legacyRoot = await realpath(storage.root)
+    const reserved = ['documents', 'stickers', 'config', 'journals']
+    files.hiddenStorageDirectories = new Set(reserved.map(name => path.join(legacyRoot, name)))
+    if (storedRecent === undefined) {
+      const oldEntries = await readdir(oldLibrary).catch(() => [])
+      const paths = [
+        ...(oldEntries.some(name => !name.startsWith('.')) ? [oldLibrary] : []),
+        ...(typeof oldProject === 'string' && path.isAbsolute(oldProject) ? [oldProject] : []),
+      ]
+      for (const location of paths) {
+        const entry = await files.authorizeDirectory(location).catch(() => null)
+        if (entry && entry.path !== library.path && !recent.some(item => item.path === entry.path)) recent.push(entry)
+      }
+      await saveRecent(recent, false)
+    } else {
+      let parsed: unknown
+      try { parsed = JSON.parse(storedRecent) } catch {}
+      if (Array.isArray(parsed)) {
+        const savedEntries = parsed.slice(0, recentFilesLimit)
+        const seen = new Set<string>()
+        // Bound simultaneous lookups so many local or network paths do not starve other work.
+        for (let index = 0; index < savedEntries.length; index += 32) {
+          const opened = await Promise.all(savedEntries.slice(index, index + 32).map(async saved => {
+            if (typeof saved?.path !== 'string' || !path.isAbsolute(saved.path)) return null
+            const entry = await (saved.kind === 'directory' ? files.authorizeDirectory(saved.path) : files.authorizeFileEntry(saved.path)).catch(() => null)
+            return entry && { ...entry, name: entry.path === legacyRoot && entry.kind === 'directory' ? '旧版文档' : entry.name, lastOpened: Number.isFinite(saved.lastOpened) ? saved.lastOpened as number : undefined }
+          }))
+          for (const entry of opened) {
+            if (!entry || seen.has(entry.path)) continue
+            recent.push(entry)
+            seen.add(entry.path)
+          }
         }
       }
+      recent.sort((left, right) => (right.lastOpened ?? 0) - (left.lastOpened ?? 0))
+      files.retainRoots(roots())
     }
-    recent.sort((left, right) => (right.lastOpened ?? 0) - (left.lastOpened ?? 0))
-    files.retainRoots(roots())
-  }
 
-  if (!await lstat(workspaceMarker).catch(() => null)) {
-    if (hasLegacyWorkspace && library.path !== legacyRoot && !recent.some(entry => entry.path === legacyRoot)) {
-      const entry = await files.authorizeDirectory(legacyRoot)
-      await writeRecent(items => [...items.slice(0, recentFilesLimit - 1), { ...entry, name: '旧版文档' }])
+    if (!await lstat(workspaceMarker).catch(() => null)) {
+      const hasLegacyWorkspace = (await readdir(legacyRoot, { withFileTypes: true })).some(item =>
+        !item.name.startsWith('.') && !reserved.includes(item.name.toLowerCase()) && !item.isSymbolicLink() &&
+        (item.isDirectory() || fileKind(item.name)))
+      if (hasLegacyWorkspace && library.path !== legacyRoot && !recent.some(entry => entry.path === legacyRoot)) {
+        const entry = await files.authorizeDirectory(legacyRoot)
+        await saveRecent([...recent.slice(0, recentFilesLimit - 1), { ...entry, name: '旧版文档' }], false)
+      }
+      await writeFile(workspaceMarker, '')
     }
-    await writeFile(workspaceMarker, '')
-  }
 
-  let documentHistory = recent.filter(entry => entry.kind !== 'directory').slice(0, documentHistoryLimit)
-  if (storedHistory !== undefined) {
-    let parsed: unknown
-    try { parsed = JSON.parse(storedHistory) } catch {}
-    if (Array.isArray(parsed)) {
-      const entries = await Promise.all(parsed.slice(0, documentHistoryLimit).map(file =>
-        typeof file === 'string' && path.isAbsolute(file) ? files.authorizeFileEntry(file).catch(() => null) : null))
-      const available = entries.filter(entry => entry !== null)
-      documentHistory = [...new Map(available.map(entry => [entry.path, entry])).values()]
+    documentHistory = recent.filter(entry => entry.kind !== 'directory').slice(0, documentHistoryLimit)
+    if (storedHistory !== undefined) {
+      let parsed: unknown
+      try { parsed = JSON.parse(storedHistory) } catch {}
+      if (Array.isArray(parsed)) {
+        const entries = await Promise.all(parsed.slice(0, documentHistoryLimit).map(file =>
+          typeof file === 'string' && path.isAbsolute(file) ? files.authorizeFileEntry(file).catch(() => null) : null))
+        const available = entries.filter(entry => entry !== null)
+        documentHistory = [...new Map(available.map(entry => [entry.path, entry])).values()]
+      }
     }
   }
   let historyWrite = Promise.resolve()
   function updateDocumentHistory(change: (entries: Entry[]) => Entry[] | Promise<Entry[]>) {
     const task = historyWrite.catch(() => {}).then(async () => {
+      await workspaceReady
       const changed = await change(documentHistory)
       if (changed === documentHistory) return
       const next = [...new Map(changed.map(entry => [entry.path, entry])).values()].slice(0, documentHistoryLimit)
@@ -562,7 +589,6 @@ void app.whenReady().then(async () => {
     })
   }
   const pollJournal = () => { void rollJournalDay().catch(error => console.warn('无法更新每日日志。', error)) }
-  await rollJournalDay(true).catch(error => { console.warn('无法创建今日日志。', error) })
   const dailyJournal = setInterval(pollJournal, 30_000)
   dailyJournal.unref()
   app.on('browser-window-focus', pollJournal)
@@ -605,12 +631,28 @@ void app.whenReady().then(async () => {
     })
   })
 
-  handleEditor('initialize', editor => {
-    const initialFile = editor.initialFile
+  handleEditor('initialize', async editor => {
+    const initial = editor.initialFile
     editor.initialFile = undefined
+    const initialFile = await initial
+    if (initialFile && !editor.window.isDestroyed()) editor.documents.add(initialFile.path)
     return { library, journalRoot, recent, preferences, platform: process.platform, windowsAcrylic, initialFile,
       recoveries: recovery.list(), documentHistory, defaultStickerDirectory, macReducesTransparency: macReducesTransparency(), version: app.getVersion(),
       updateProxy: releases.network.publicProxy(), release: releases.status }
+  })
+  handleEditor('workspacePainted', editor => {
+    if (editor.presented) return
+    editor.presented = true
+    if (!editor.window.isVisible()) editor.window.show()
+    if (editor.pendingOpen.length) editor.window.webContents.send('ymd:externalOpen', editor.pendingOpen.splice(0))
+  })
+  handle('openMarkdownDefaults', async () => {
+    if (process.platform !== 'win32') return
+    const systemSettings = 'ms-settings:defaultapps'
+    const target = Number(process.getSystemVersion().split('.')[2]) >= 22000
+      ? systemSettings + '?registeredAppUser=Ymd' : systemSettings
+    try { await shell.openExternal(target) }
+    catch (error) { if (target === systemSettings) throw error; await shell.openExternal(systemSettings) }
   })
   handleEditor('windowAction', ({ window }, action: Parameters<Desktop['windowAction']>[0]) => {
     if (process.platform !== 'win32') return
@@ -624,7 +666,7 @@ void app.whenReady().then(async () => {
   handle('newWindow', async (file?: string) => {
     if (quitPending) return
     const initial = file === undefined ? undefined : await files.read(file, true)
-    createWindow(initial)
+    createWindow(Promise.resolve(initial))
   })
   handleEditor('watchDocuments', async (editor, paths: string[]) => {
     if (!Array.isArray(paths) || paths.length > 1000 || paths.some(file => typeof file !== 'string' || !path.isAbsolute(file))) return
@@ -770,7 +812,6 @@ void app.whenReady().then(async () => {
     const now = Date.now()
     return items.map(entry => matches.includes(entry) ? { ...entry, lastOpened: now } : entry)
   }, false))
-  handle('removeRecent', (file: string) => writeRecent(items => items.filter(item => item.path !== file)))
   handle('removeRecentEntries', async (paths: string[]) => {
     if (!Array.isArray(paths) || paths.length > 1000 ||
         paths.some(file => typeof file !== 'string' || !path.isAbsolute(file))) throw new Error('无效的本机文件选择。')
@@ -801,12 +842,6 @@ void app.whenReady().then(async () => {
       : current.expandedFolders.filter(item => item !== authorized) }))
     broadcast('ymd:preferences', preferences)
   })
-  handle('hideLocalEntry', async (file: string) => {
-    if (typeof file !== 'string' || !path.isAbsolute(file) ||
-        !recent.some(entry => entry.kind === 'directory' && entry.path !== file && containsPath(entry.path, file))) return
-    await storePreferences(current => ({ ...current, hiddenLocalEntries: [...new Set([...current.hiddenLocalEntries, file])].slice(-3000) }))
-    broadcast('ymd:preferences', preferences)
-  })
   handle('recordDocumentOpen', (file: string) => updateDocumentHistory(async entries => {
     if (entries[0]?.path === file) return entries
     const canonical = await files.authorizedFile(file)
@@ -815,6 +850,7 @@ void app.whenReady().then(async () => {
     return [{ path: canonical, name: path.basename(canonical), kind }, ...entries.filter(entry => entry.path !== canonical)]
   }))
   handle('openHistoryDocument', async (file: string) => {
+    await workspaceReady
     if (!documentHistory.some(entry => entry.path === file)) return null
     try { return await files.read(file, true) }
     catch (error) {
@@ -847,20 +883,8 @@ void app.whenReady().then(async () => {
       if (editor.search === controller) editor.search = undefined
     }
   })
-  handleEditor('chooseFile', async (editor, kind?: FileKind) => {
-    const { window } = editor
-    const filters = kind === 'markdown' ? [{ name: 'Markdown', extensions: ['md'] }]
-      : kind === 'drawing' ? [{ name: 'Excalidraw', extensions: ['excalidraw'] }]
-      : [{ name: 'Markdown 与 Excalidraw', extensions: ['md', 'excalidraw'] }]
-    const result = await dialog.showOpenDialog(window!, {
-      properties: ['openFile'],
-      filters,
-    })
-    if (result.canceled) return null
-    const file = result.filePaths[0]
-    if (kind && fileKind(file) !== kind) throw new Error('所选文件类型与请求不符。')
-    const document = await files.authorizeFile(file)
-    editor.documents.add(document.path)
+  async function rememberLocalDocument(document: DocumentFile) {
+    await workspaceReady
     const relative = path.relative(library.path, document.path)
     if (path.isAbsolute(relative) || relative.split(path.sep)[0] === '..') {
       let enclosing: Entry | undefined
@@ -879,7 +903,7 @@ void app.whenReady().then(async () => {
           folder = path.dirname(folder)
         }
       }
-      if (expand.length || preferences.localCollapsed) {
+      if (expand.length || preferences.localCollapsed || preferences.hiddenLocalEntries.includes(document.path)) {
         const revealed = new Set([...expand, document.path])
         await storePreferences(current => ({
           ...current, localCollapsed: false,
@@ -889,7 +913,37 @@ void app.whenReady().then(async () => {
         broadcast('ymd:preferences', preferences)
       }
     }
+  }
+
+  async function openLocalDocument(file: string, editor?: EditorWindow, waitForSidebar = false) {
+    const document = await files.authorizeFile(file)
+    editor?.documents.add(document.path)
+    const rememberOpen = rememberLocalDocument(document)
+    if (waitForSidebar) await rememberOpen
+    else void rememberOpen.catch(error => console.warn('无法更新本机文件列表。', error))
     return document
+  }
+
+  handleEditor('chooseFile', async (editor, kind?: FileKind) => {
+    const { window } = editor
+    const filters = kind === 'markdown' ? [{ name: 'Markdown', extensions: ['md'] }]
+      : kind === 'drawing' ? [{ name: 'Excalidraw', extensions: ['excalidraw'] }]
+      : [{ name: 'Markdown 与 Excalidraw', extensions: ['md', 'excalidraw'] }]
+    const result = await dialog.showOpenDialog(window!, {
+      properties: ['openFile'],
+      filters,
+    })
+    if (result.canceled) return null
+    const file = result.filePaths[0]
+    if (kind && fileKind(file) !== kind) throw new Error('所选文件类型与请求不符。')
+    return openLocalDocument(file, editor, true)
+  })
+  handleEditor('openDroppedFiles', async (editor, paths: string[]) => {
+    if (!Array.isArray(paths) || paths.length > 100 ||
+        paths.some(file => typeof file !== 'string' || !path.isAbsolute(file) || !fileKind(file))) throw new Error('无效的拖放文件。')
+    const opened: DocumentFile[] = []
+    for (const file of new Set(paths)) opened.push(await openLocalDocument(file, editor))
+    return opened
   })
   handleEditor('read', (editor, file: string) => {
     if (typeof file !== 'string' || !journals.date(file)) return files.read(file, true)
@@ -1308,7 +1362,38 @@ void app.whenReady().then(async () => {
     editor.window.close()
   })
   installMenu()
-  createWindow()
+  let pendingLaunch: Promise<unknown> = Promise.resolve()
+  openFromSystem = paths => {
+    pendingLaunch = pendingLaunch.catch(() => {}).then(async () => {
+      if (quitPending) return
+      let editor = editorFor(BrowserWindow.getFocusedWindow()?.webContents) ?? lastEditor
+      if (!editor) {
+        const first = paths.shift()
+        editor = createWindow(first ? openLocalDocument(first).catch(error => {
+          console.warn('无法打开系统传入的文件。', error)
+          return undefined
+        }) : undefined)
+      }
+      const opened: DocumentFile[] = []
+      for (const file of new Set(paths)) {
+        try { opened.push(await openLocalDocument(file, editor)) }
+        catch (error) { console.warn('无法打开系统传入的文件。', error) }
+      }
+      if (editor.window.isDestroyed()) return
+      if (editor.presented) {
+        if (opened.length) editor.window.webContents.send('ymd:externalOpen', opened)
+        if (editor.window.isMinimized()) editor.window.restore()
+        editor.window.show()
+      } else editor.pendingOpen.push(...opened)
+    })
+  }
+  openFromSystem(initialPaths.splice(0))
+  workspaceReady = restoreWorkspace().catch(error => { console.warn('无法恢复本机文件记录。', error) }).then(() => {
+    files.retainRoots(roots())
+    broadcast('ymd:workspaceChanged', { library, recent })
+    broadcast('ymd:documentHistory', documentHistory)
+  })
+  void migrateStickers(previous, defaultStickerDirectory, data).catch(error => { console.warn('无法迁移旧版贴纸。', error) })
   nativeTheme.on('updated', () => applyBackground())
   app.on('activate', () => { if (!editors.size && !quitPending) createWindow() })
 })

@@ -43,7 +43,7 @@ type Prompt =
   | { type: 'trash'; session: Session }
   | { type: 'tree-trash'; entries: Entry[] }
 
-export function App() {
+export function App({ bootstrap }: { bootstrap: ReturnType<typeof window.desktop.initialize> }) {
   const sessions = useDocuments()
   const marks = useFileMarks()
   const active = sessions.active
@@ -101,6 +101,7 @@ export function App() {
   const modal = useRef<HTMLDialogElement>(null)
   const commandRef = useRef<(command: Command) => void>(() => {})
   const openIntent = useRef(0)
+  const externalOpen = useRef<(files: DocumentFile[]) => void>(() => {})
   const dark = preferences.theme === 'dark' || (preferences.theme === 'system' && systemDark)
 
   const message = (error: unknown) => String(error instanceof Error ? error.message : error).replace(/^Error invoking remote method '[^']+': Error: /, '')
@@ -133,7 +134,7 @@ export function App() {
   useEffect(() => {
     run(async () => {
       discardInterruptedMapImports()
-      const result = await window.desktop.initialize()
+      const result = await bootstrap
       setLibrary(result.library)
       setJournalRoot(result.journalRoot)
       setRecent(result.recent)
@@ -151,9 +152,11 @@ export function App() {
       if (result.recoveries.length) setPrompt({ type: 'recovery' })
       if (result.initialFile) {
         const file = result.initialFile
-        showFile(file, isJournalPath(result.journalRoot, file.path, result.platform) ? 'journal' : file.path.startsWith(result.library.path + (result.platform === 'win32' ? '\\' : '/')) ? 'library' : 'local')
+        showFile(file, isJournalPath(result.journalRoot, file.path, result.platform) ? 'journal'
+          : within(result.library, file.path, result.platform) ? 'library' : 'local')
       }
     })
+    const unsubscribeExternalOpen = window.desktop.onExternalOpen(files => externalOpen.current(files))
     const query = matchMedia('(prefers-color-scheme: dark)')
     const onTheme = () => setSystemDark(query.matches)
     const onFocus = () => {
@@ -178,6 +181,7 @@ export function App() {
     })
     const unsubscribe = window.desktop.onCommand(command => commandRef.current(command))
     return () => {
+      unsubscribeExternalOpen()
       unsubscribe()
       unsubscribeTransparency()
       unsubscribeUpdate()
@@ -191,6 +195,12 @@ export function App() {
       window.removeEventListener('focus', onFocus)
     }
   }, [])
+
+  useEffect(() => {
+    if (!library) return
+    const frame = requestAnimationFrame(() => { void window.desktop.workspacePainted().catch(() => {}) })
+    return () => cancelAnimationFrame(frame)
+  }, [!!library])
 
   useEffect(() => {
     if (!version || !preferences.autoCheckUpdates && !preferences.autoDownloadUpdates) return
@@ -325,12 +335,12 @@ export function App() {
     setPrompt(undefined)
   }
 
-  function within(entry: Entry, path: string) {
-    const normalize = (value: string) => platform === 'win32' ? value.toLowerCase() : value
+  function within(entry: Entry, path: string, system = platform) {
+    const normalize = (value: string) => system === 'win32' ? value.toLowerCase() : value
     const source = normalize(entry.path)
     const target = normalize(path)
     return source === target || entry.kind === 'directory' &&
-      target.startsWith(source.replace(/[\\/]$/, '') + (platform === 'win32' ? '\\' : '/'))
+      target.startsWith(source.replace(/[\\/]$/, '') + (system === 'win32' ? '\\' : '/'))
   }
 
   function isJournalPath(root: Entry, file: string, system = platform) {
@@ -354,6 +364,14 @@ export function App() {
     void window.desktop.recordDocumentOpen(file.path).catch(() => {})
     if (scope === 'local') void window.desktop.touchRecent(file.path).catch(() => {})
   }
+
+  function showExternalFiles(files: DocumentFile[]) {
+    for (const file of files) showFile(file)
+    const last = files.at(-1)
+    if (last && scopeOf(last.path) === 'local') setRevealLocalPath(last.path)
+  }
+
+  externalOpen.current = files => { ++openIntent.current; showExternalFiles(files) }
 
   function openJournal(date?: string) {
     const intent = ++openIntent.current
@@ -673,7 +691,7 @@ export function App() {
           sessions.relocate(old, next, name, scopeOf(next))
           if (outline) outlineSessions.current.set(next, outline)
           if (position) viewPositions.current.set(next, position)
-        } else sessions.close(old)
+        } else sessions.close(old, scopeOf(old) !== 'journal')
       }
     }
     if (remapped.size) marks.remap(remapped)
@@ -807,12 +825,17 @@ export function App() {
         void window.desktop.touchRecent(directory.path).catch(() => {})
       } : undefined} />
   }
-  function removeLocalEntry(entry: Entry) {
+  function removeLocalEntries(entries: Entry[], clearSelection = false) {
+    const affected = active?.scope === 'local' && entries.some(entry => within(entry, active.path))
+    if (affected) flushEditor.current?.()
+    const intent = openIntent.current
     run(async () => {
-      if (recent.some(item => item.path === entry.path)) setRecent(await window.desktop.removeRecent(entry.path))
-      else await window.desktop.hideLocalEntry(entry.path)
+      setRecent(await window.desktop.removeRecentEntries(entries.map(entry => entry.path)))
+      if (clearSelection) setBatch(new Map())
+      if (affected && intent === openIntent.current) home()
     })
   }
+  function removeLocalEntry(entry: Entry) { removeLocalEntries([entry]) }
 
   useEffect(() => {
     if (!revealLocalPath || !sidebar || settings) return
@@ -891,10 +914,7 @@ export function App() {
   const batchItems: MenuItem[] = [
     { label: '创建副本', icon: <Copy size={16} />, disabled: !chosen.length, run: () => mutateEntries('copy', chosen, undefined, true) },
     { label: '移动到…', icon: <FolderInput size={16} />, disabled: !chosen.length, run: () => mutateEntries('move', chosen, undefined, true) },
-    ...(batchScope === 'local' ? [{ label: '移除', icon: <Minus size={16} />, disabled: !chosen.length, run: () => run(async () => {
-      setRecent(await window.desktop.removeRecentEntries(chosen.map(entry => entry.path)))
-      setBatch(new Map())
-    }) }] : []),
+    ...(batchScope === 'local' ? [{ label: '移除', icon: <Minus size={16} />, disabled: !chosen.length, run: () => removeLocalEntries(chosen, true) }] : []),
     { label: '删除', icon: <Trash2 size={16} />, disabled: !chosen.length, run: () => setPrompt({ type: 'tree-trash', entries: chosen }) },
   ]
   const treeItems: MenuItem[] = treeMenu?.kind === 'batch' ? batchItems : treeMenu?.kind === 'open' ? [
@@ -1000,6 +1020,20 @@ export function App() {
     </Suspense>
 
   return <div className="window" data-platform={platform} data-sidebar={sidebar || settings}
+    onDragOverCapture={event => {
+      if (event.dataTransfer.types.includes('Files')) event.preventDefault()
+    }} onDropCapture={event => {
+      if (!event.dataTransfer.types.includes('Files')) return
+      event.preventDefault()
+      const files = Array.from(event.dataTransfer.files).filter(file => /\.(md|excalidraw)$/i.test(file.name)).slice(0, 100)
+      if (!files.length) return
+      event.stopPropagation()
+      const intent = ++openIntent.current
+      run(async () => {
+        const opened = await window.desktop.openDroppedFiles(files)
+        if (intent === openIntent.current) showExternalFiles(opened)
+      })
+    }}
     style={{ '--sidebar-user-width': preferences.sidebarWidth === undefined ? undefined : preferences.sidebarWidth + 'px' } as CSSProperties}>
     <header className="titlebar flex items-center">
       <div className="window-controls flex items-center gap-1">
@@ -1047,6 +1081,7 @@ export function App() {
         onInstallUpdate={() => requestClose(undefined, true)} updateProxy={updateProxy} onSaveUpdateProxy={saveUpdateProxy}
         onOpenRelease={url => run(() => window.desktop.openExternal(url))}
         onOpenDirectory={() => run(() => window.desktop.openLibraryDirectory())}
+        onOpenMarkdownDefaults={() => run(() => window.desktop.openMarkdownDefaults())}
         onChange={updatePreferences} /></Suspense> : <>
         {sidebar && <aside className="sidebar">
           <div className="sidebar-scroll">
@@ -1196,7 +1231,7 @@ export function App() {
               await window.desktop.trash(saved.path, saved.version)
               setRecent(await window.desktop.listRecent())
               marks.relocate(saved.path)
-              sessions.close(saved.path)
+              sessions.close(saved.path, true)
               setRevision(value => value + 1)
               setPrompt(undefined)
               removeMapDocument(saved.path)

@@ -7,5 +7,9 @@ const root = createRoot(document.getElementById('root')!)
 if (new URLSearchParams(location.search).has('pitch')) {
   void import('./editors/MindMapPitch').then(({ MindMapPitch }) => root.render(<MindMapPitch />))
 } else {
-  void import('./App').then(({ App }) => root.render(<App />))
+  const bootstrap = window.desktop.initialize()
+  void bootstrap.then(result => {
+    if (result.initialFile?.kind === 'markdown') void import('./editors/Markdown').catch(() => {})
+  }).catch(() => {})
+  void import('./App').then(({ App }) => root.render(<App bootstrap={bootstrap} />))
 }
