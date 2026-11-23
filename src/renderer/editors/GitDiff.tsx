@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
-import { GitCompareArrows, ListFilter, ListTree, X } from 'lucide-react'
+import { ArrowDown, ArrowRight, ArrowUp, GitCompareArrows, ListFilter, ListTree, TextCursorInput, X } from 'lucide-react'
 import { Text } from '@codemirror/state'
 import type { GitFileHistory, GitFileVersion } from '../../shared/contracts'
-import { GitMergeEditor, type ApplyGitChunk } from './GitMergeEditor'
+import { GitMergeEditor, type ApplyGitChunk, type GitDiffControls, type GitDiffNavigation } from './GitMergeEditor'
 import { currentFile, GitVersionPicker } from './GitVersionPicker'
+import { diffDetails, type DiffDetail } from './gitDiffChanges'
+import { MarkdownMenu } from './MarkdownMenu'
 
 const emptyVersion: GitFileVersion = { text: '', exists: false }
 const normalize = (text: string) => Text.of(text.replace(/^\uFEFF/, '').split(/\r\n?|\n/))
@@ -59,7 +61,7 @@ function SplitHandle({ value, set }: { value: number; set: (value: number) => vo
 }
 
 export function GitDiff({ path, text, branch, apply, close }: {
-  path: string; text: string; branch: string; apply?: ApplyGitChunk; close: () => void
+  path: string; text: string; branch: string; apply?: ApplyGitChunk; close: (position?: number) => void
 }) {
   const [repository, setRepository] = useState<{ history: GitFileHistory; headVersion?: GitFileVersion; baseline: string } | null>()
   const history = repository?.history
@@ -72,6 +74,11 @@ export function GitDiff({ path, text, branch, apply, close }: {
   const versions = loaded?.pair === pair ? loaded : undefined
   const [error, setError] = useState('')
   const [full, setFull] = useState(false)
+  const [detail, setDetail] = useState<DiffDetail>('word')
+  const [detailMenu, setDetailMenu] = useState(false)
+  const [navigation, setNavigation] = useState<(GitDiffNavigation & { pair: string })>()
+  const controls = useRef<GitDiffControls>(null)
+  const detailButton = useRef<HTMLButtonElement>(null)
   const [split, setSplit] = useState(50)
   const back = useRef<HTMLButtonElement>(null)
   const draft = useRef(text)
@@ -84,6 +91,16 @@ export function GitDiff({ path, text, branch, apply, close }: {
   const showingLastChange = !!repository?.headVersion && text === repository.headVersion.text &&
     rightRef === currentFile && leftRef === history?.previous
   const sameContent = left && right && left.eq(right)
+  const nav = !error && left && right && !sameContent && navigation?.pair === pair ? navigation : undefined
+  const canPrevious = !!nav && nav.index > 0
+  const canNext = !!nav && nav.index + 1 < nav.count
+  const move = (direction: number) => {
+    if (direction < 0 ? canPrevious : canNext) controls.current?.move(direction)
+  }
+  const jumpToSource = () => {
+    const position = controls.current?.workingPosition()
+    if (rightRef === currentFile && position !== undefined) close(position)
+  }
   const rightVersion = rightRef === currentFile ? { text, exists: true } : versions?.right
   const formatNotice = useMemo(() => {
     if (!sameContent || !versions || !rightVersion) return ''
@@ -125,16 +142,36 @@ export function GitDiff({ path, text, branch, apply, close }: {
   }, [repository, leftRef, pair, path, rightRef])
 
   return <section className="git-diff" aria-label="Git 差异" onKeyDown={event => {
+    if (event.defaultPrevented || event.nativeEvent.isComposing) return
+    if (event.key === 'F7') { event.preventDefault(); move(event.shiftKey ? -1 : 1) }
+    if (event.key === 'F4' && rightRef === currentFile && nav) { event.preventDefault(); jumpToSource() }
     if (event.key === 'Escape' && !event.defaultPrevented) { event.preventDefault(); close() }
   }}>
     <header className="git-diff-toolbar">
       <span className="git-diff-title"><GitCompareArrows size={16} />Git 差异 <span title={currentBranch}>{currentBranch}</span></span>
       {showingLastChange && <span className="git-diff-baseline" title="当前文件与 HEAD 一致，正在对比此文件的上一版本">上次变更</span>}
+      <div className="git-diff-navigation" role="group" aria-label="变更导航">
+        <button type="button" className="icon-button" aria-label="上一处变更" title="上一处变更 (Shift+F7)" disabled={!canPrevious} onClick={() => move(-1)}><ArrowUp size={16} /></button>
+        <span role="status" aria-live="polite" aria-label={nav ? `第 ${nav.index + 1} 处，共 ${nav.count} 处变更` : undefined}>
+          {nav ? `${nav.index + 1} / ${nav.count}` : '0'}</span>
+        <button type="button" className="icon-button" aria-label="下一处变更" title="下一处变更 (F7)" disabled={!canNext} onClick={() => move(1)}><ArrowDown size={16} /></button>
+      </div>
+      {canApply && <button type="button" className="icon-button git-diff-apply" title="将选中的左侧变更应用到当前文件"
+        aria-label="应用当前变更" disabled={!nav} onClick={() => controls.current?.apply()}><ArrowRight size={17} /></button>}
+      {rightRef === currentFile && <button type="button" className="icon-button" title="跳到编辑位置 (F4)"
+        aria-label="跳到编辑位置" disabled={!nav} onClick={jumpToSource}><TextCursorInput size={16} /></button>}
+      <div className="menu-anchor git-diff-detail">
+        <button ref={detailButton} type="button" className="tool-button" aria-label="差异高亮粒度" aria-haspopup="menu"
+          aria-expanded={detailMenu} title="差异高亮粒度" onClick={() => setDetailMenu(!detailMenu)}>{diffDetails[detail]}</button>
+        {detailMenu && <MarkdownMenu close={() => setDetailMenu(false)} items={Object.entries(diffDetails).map(([value, label]) => ({
+          label, selected: detail === value, run: () => { setDetail(value as DiffDetail); detailButton.current?.focus() },
+        }))} />}
+      </div>
       <button type="button" className="tool-button" aria-label="显示完整内容" aria-pressed={full}
         title={full ? '切换为仅显示变化' : '切换为完整内容'} onClick={() => setFull(value => !value)}>
-        {full ? <ListTree size={16} /> : <ListFilter size={16} />}{full ? '完整内容' : '仅显示变化'}
+        {full ? <ListTree size={16} /> : <ListFilter size={16} />}<span className="git-diff-display-label">{full ? '完整内容' : '仅显示变化'}</span>
       </button>
-      <button type="button" ref={back} className="icon-button" title="返回编辑" aria-label="返回编辑" onClick={close}><X size={17} /></button>
+      <button type="button" ref={back} className="icon-button" title="返回编辑" aria-label="返回编辑" onClick={() => close()}><X size={17} /></button>
     </header>
     <div className="git-diff-split" data-applicable={canApply} style={{ '--git-diff-ratio': split / 100 } as CSSProperties}>
       {history && <div className="git-diff-versions">
@@ -146,7 +183,8 @@ export function GitDiff({ path, text, branch, apply, close }: {
         : !left || !right ? <p className="git-diff-status" role="status">正在读取 Git 版本…</p>
         : !full && sameContent ? <p className="git-diff-status" role="status">{formatNotice || '没有内容差异'}</p>
         : <>{formatNotice && <p className="git-diff-format" role="status">{formatNotice}</p>}
-          <GitMergeEditor {...{ left, right, full, split }} apply={canApply ? apply : undefined} /></>}
+          <GitMergeEditor {...{ left, right, full, split, detail, controls }} apply={canApply ? apply : undefined}
+            report={value => setNavigation({ ...value, pair })} /></>}
       {history && <SplitHandle value={split} set={setSplit} />}
     </div>
   </section>

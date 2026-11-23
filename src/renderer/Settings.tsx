@@ -311,7 +311,7 @@ export function Settings({ preferences, platform, library, windowsAcrylic, macRe
               <span>{Math.floor(100 * updateProgress.received / updateProgress.total)}%</span>
             </div>}
             {updateProgress?.state === 'error' && <p className="update-progress" role="alert">{updateProgress.message}</p>}
-            <Row label="自动检查更新" detail="启动时和运行期间检查 GitHub 发布版本。">
+            <Row label="自动检查更新" detail="启动时检查 GitHub 发布版本，运行期间每小时检查一次。">
               <button className="switch" role="switch" aria-label="自动检查更新" aria-checked={preferences.autoCheckUpdates}
                 onClick={() => onChange({ autoCheckUpdates: !preferences.autoCheckUpdates, ...(preferences.autoCheckUpdates ? { autoDownloadUpdates: false } : {}) })} />
             </Row>

@@ -368,6 +368,18 @@ if (primary) void app.whenReady().then(async () => {
   const historyFile = path.join(data, 'document-history.json')
   recovery = new Recovery(path.join(data, 'recovery'))
   const releases = new Releases(data, status => broadcast('ymd:updateStatus', status))
+  let updateTimer: NodeJS.Timeout | undefined
+  function scheduleUpdateChecks() {
+    if (!preferences.autoCheckUpdates && !preferences.autoDownloadUpdates) {
+      clearInterval(updateTimer)
+      updateTimer = undefined
+      return
+    }
+    if (updateTimer) return
+    const check = () => { void releases.check().catch(() => {}) }
+    updateTimer = setInterval(check, 60 * 60_000).unref()
+    check()
+  }
   const [sizeText, settingsText, storedRecent, storedHistory] = await Promise.all([
     readFile(sizeFile, 'utf8').catch(() => ''),
     readFile(settings, 'utf8').catch(() => ''),
@@ -1348,6 +1360,7 @@ if (primary) void app.whenReady().then(async () => {
     if (changedShortcuts) installMenu()
     if (changedBackground) applyBackground()
     if (changedJournalCleanup) void rollJournalDay(true).catch(error => console.warn('无法清理空日志。', error))
+    scheduleUpdateChecks()
     broadcast('ymd:preferences', updated)
     return updated
   })
@@ -1394,6 +1407,7 @@ if (primary) void app.whenReady().then(async () => {
     broadcast('ymd:documentHistory', documentHistory)
   })
   void migrateStickers(previous, defaultStickerDirectory, data).catch(error => { console.warn('无法迁移旧版贴纸。', error) })
+  scheduleUpdateChecks()
   nativeTheme.on('updated', () => applyBackground())
   app.on('activate', () => { if (!editors.size && !quitPending) createWindow() })
 })

@@ -117,14 +117,14 @@ export function App({ bootstrap }: { bootstrap: ReturnType<typeof window.desktop
     run(async () => { await window.desktop.setPreferences(patch) })
   }
 
-  async function checkForUpdates(manual = true) {
+  async function checkForUpdates() {
     if (releaseCheckInFlight.current) return
     releaseCheckInFlight.current = true
     setChecking(true)
     try {
       setRelease(await window.desktop.checkForUpdates())
     } catch (error) {
-      if (manual) setNotice(message(error))
+      setNotice(message(error))
     } finally {
       releaseCheckInFlight.current = false
       setChecking(false)
@@ -201,13 +201,6 @@ export function App({ bootstrap }: { bootstrap: ReturnType<typeof window.desktop
     const frame = requestAnimationFrame(() => { void window.desktop.workspacePainted().catch(() => {}) })
     return () => cancelAnimationFrame(frame)
   }, [!!library])
-
-  useEffect(() => {
-    if (!version || !preferences.autoCheckUpdates && !preferences.autoDownloadUpdates) return
-    void checkForUpdates(false)
-    const interval = window.setInterval(() => void checkForUpdates(false), 6 * 60 * 60_000)
-    return () => window.clearInterval(interval)
-  }, [version, preferences.autoCheckUpdates, preferences.autoDownloadUpdates])
 
   useEffect(() => {
     if (preferences.autoDownloadUpdates && release?.update?.canDownload && !release.progress) {

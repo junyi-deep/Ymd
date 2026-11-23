@@ -23,7 +23,8 @@ git('config', 'user.email', 'ymd@example.invalid')
 git('config', 'commit.gpgsign', 'false')
 git('config', 'core.autocrlf', 'false')
 const contents = (first, last) => '\uFEFF' + [
-  '# History', first, ...Array.from({ length: 32 }, (_, index) => 'Context line ' + index), last, '',
+  '# History', first + (first === 'Working A' ? ' 词乙 release2027 ✅' : ' 词甲 release2026 ✅'),
+  ...Array.from({ length: 32 }, (_, index) => 'Context line ' + index), last, '',
 ].join('\r\n')
 writeFileSync(file, contents('First commit A', 'Baseline B'))
 git('add', '--', 'Diff sample.md')
@@ -115,6 +116,23 @@ async function check(window) {
   assert.match(await evaluate(left + '.title'), /Additional commit details/)
   assert.equal(await evaluate(query('.git-diff-version-label code') + '.textContent'), git('rev-parse', '--short', head))
   assert.ok(await evaluate("Array.from(document.querySelectorAll('.cm-merge-b .cm-changedLine')).some(line => line.textContent === 'Unsaved B')"))
+  const highlighted = () => evaluate("Array.from(document.querySelectorAll('.cm-merge-b .git-inline-change'), node => node.textContent)")
+  assert.ok((await highlighted()).includes('release2027'), 'Word detail highlights the whole changed word')
+  const chooseDetail = async label => {
+    await click('button[aria-label="差异高亮粒度"]')
+    await evaluate(`Array.from(document.querySelectorAll('.git-diff-detail [role="menuitem"]')).find(button => button.textContent.trim() === ${JSON.stringify(label)}).click()`)
+  }
+  await chooseDetail('按字符')
+  await wait(async () => (await highlighted()).includes('7'), 'Character detail finds the changed digit')
+  assert.ok((await highlighted()).includes('乙'), 'Character detail compares Chinese text')
+  assert.ok(!(await highlighted()).includes('release2027'))
+  await chooseDetail('按行')
+  await wait(async () => (await highlighted()).length === 0, 'Line mode removes inline marks')
+  assert.equal(await evaluate("document.querySelector('.cm-merge-b .git-current-line')?.textContent.includes('Working A')"), true)
+  await evaluate(`document.querySelector('.git-diff').dispatchEvent(new KeyboardEvent('keydown', { key: 'F7', bubbles: true, cancelable: true }))`)
+  await wait(() => evaluate("document.querySelector('.cm-merge-b .git-current-line')?.textContent === 'Unsaved B'"), 'F7 selects the second change')
+  await click('button[aria-label="上一处变更"]')
+  await wait(() => evaluate("document.querySelector('.cm-merge-b .git-current-line')?.textContent.includes('Working A')"), 'Previous selects the first change')
   await visible('.cm-collapsedLines')
   await click('button[aria-label="显示完整内容"]')
   await wait(() => evaluate("!document.querySelector('.cm-collapsedLines')"), 'Full comparison shows unchanged lines')
@@ -123,6 +141,7 @@ async function check(window) {
   await wait(() => evaluate("document.querySelector('.cm-merge-b .cm-content')?.textContent.includes('First commit A')"), 'Historical right version')
   assert.match(await evaluate(right + '.title'), /Initial version/)
   assert.equal(await evaluate('Boolean(' + query(buttons) + ')'), false)
+  assert.equal(await evaluate('Boolean(' + query('button[aria-label="应用当前变更"]') + ')'), false)
   await chooseVersion('比较版本', '当前文件')
   await visible(buttons)
 
@@ -139,11 +158,12 @@ async function check(window) {
   await mouse('mouseReleased', point.x + 70, { button: 'left', clickCount: 1 })
   await wait(async () => await paneWidth() > width + 45, 'The divider resizes the actual editor pane')
 
-  await click(buttons)
+  await click('button[aria-label="应用当前变更"]')
   await wait(() => evaluate(view + ".state.doc.toString().includes('Baseline A')"), 'Apply changes the real editor')
   assert.match(await evaluate(view + '.state.doc.toString()'), /Unsaved B/)
   assert.equal(readFileSync(file, 'utf8'), contents('Working A', 'Working B'), 'Applying changes the draft before saving')
-  await click('button[aria-label="返回编辑"]')
+  await click('button[aria-label="跳到编辑位置"]')
+  await wait(() => evaluate(`!document.querySelector('.git-diff') && ${view}.state.doc.lineAt(${view}.state.selection.main.head).text === 'Unsaved B'`), 'Jump to source selects the remaining change')
   web.send('ymd:command', 'save')
   await wait(() => readFileSync(file, 'utf8') === contents('Baseline A', 'Unsaved B'), 'Save preserves BOM and CRLF')
   await evaluate(`${view}.focus()
@@ -158,7 +178,7 @@ async function check(window) {
   await wait(() => evaluate(query('.git-diff-status') + '?.textContent.includes("右侧 有 BOM · CRLF")'), 'Git-visible format changes are shown')
   assert.equal(await evaluate('Boolean(' + query(buttons) + ')'), false)
   web.debugger.detach()
-  console.log('Verified Git history search, content and format diffs, split resizing, hunk apply, save and undo on ' + process.platform)
+  console.log('Verified Git history, line/word/character diffs, navigation, split resizing, hunk apply, jump to source, save and undo on ' + process.platform)
 }
 
 const timeout = setTimeout(() => { console.error('Git diff check timed out.'); app.exit(1) }, 45000)

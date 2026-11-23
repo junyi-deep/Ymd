@@ -369,9 +369,18 @@ export function MarkdownEditor({ text, name, path, modified, platform, remoteIma
     return () => { request++; window.removeEventListener('focus', refresh) }
   }, [path, reload])
 
-  function closeGitDiff() {
+  function closeGitDiff(position?: number) {
     setShowGitDiff(false)
-    requestAnimationFrame(() => { view.current?.requestMeasure(); view.current?.focus() })
+    requestAnimationFrame(() => {
+      const editor = view.current
+      if (!editor) return
+      editor.requestMeasure()
+      if (position !== undefined) {
+        const anchor = Math.min(position, editor.state.doc.length)
+        editor.dispatch({ selection: { anchor }, effects: EditorView.scrollIntoView(anchor, { y: 'center' }) })
+      }
+      editor.focus()
+    })
   }
 
   function toggleGitDiff() {

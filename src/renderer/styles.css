@@ -423,13 +423,23 @@ dialog button.primary { background: var(--accent); color: var(--accent-ink); }
 .git-branch-button[aria-pressed="true"] { background: var(--selected); color: var(--link); }
 .document-editing[hidden] { display: none; }
 
-.git-diff { display: flex; flex: 1; flex-direction: column; min-height: 0; min-width: 0; background: var(--editor-page, var(--page)); }
+.git-diff { display: flex; flex: 1; flex-direction: column; min-height: 0; min-width: 0; container-type: inline-size; background: var(--editor-page, var(--page)); }
 .git-diff-toolbar { display: flex; align-items: center; gap: 6px; padding: 4px 12px; min-height: 38px; border-bottom: 1px solid var(--line); }
 .git-diff-title { display: flex; flex: 1; min-width: 0; align-items: center; gap: 8px; font-weight: 650; white-space: nowrap; }
 .git-diff-title svg { flex: none; }
 .git-diff-title > span { overflow: hidden; text-overflow: ellipsis; color: var(--muted); font-weight: 400; }
 .git-diff-baseline { flex: none; padding-inline: 4px; color: var(--muted); font-size: .88rem; }
 .git-diff-toolbar .tool-button { font-size: .9rem; }
+.git-diff-navigation { display: flex; flex: none; align-items: center; gap: 2px; border: 1px solid var(--line); border-radius: 7px; }
+.git-diff-navigation > span { min-width: 42px; color: var(--muted); text-align: center; font-size: .86rem; font-variant-numeric: tabular-nums; }
+.git-diff-toolbar .icon-button { flex: none; }
+.git-diff-toolbar .icon-button:disabled { opacity: .38; }
+.git-diff-toolbar .git-diff-apply:not(:disabled) { color: var(--link); background: var(--selected); }
+.git-diff-detail .document-menu { min-width: 108px; }
+@container (max-width: 540px) {
+  .git-diff-toolbar { gap: 3px; padding-inline: 7px; }
+  .git-diff-display-label, .git-diff-baseline { display: none; }
+}
 .git-diff-split {
   --git-diff-gutter: 12px;
   --git-diff-left: calc((100% - var(--git-diff-gutter) - var(--git-diff-scrollbar, 0px)) * var(--git-diff-ratio));
@@ -477,16 +487,20 @@ dialog button.primary { background: var(--accent); color: var(--accent-ink); }
 .git-merge-editor .cm-mergeViewEditor + .cm-mergeViewEditor { margin-inline-start: var(--git-diff-gutter); }
 .git-merge-editor .cm-editor { font-size: calc(var(--document-font-size, 16px) * .85); }
 .git-merge-editor .cm-gutters { background: var(--soft); color: var(--muted); border-right-color: var(--line); }
-.git-merge-editor .cm-merge-a .cm-changedLine { background: light-dark(#ffebe9, #472629); }
-.git-merge-editor .cm-merge-b .cm-changedLine { background: light-dark(#e6f5ec, #243a32); }
-.git-merge-editor .cm-merge-a .cm-changedText { background: light-dark(#ffd3ce, #704047); }
-.git-merge-editor .cm-merge-b .cm-changedText { background: light-dark(#b9ebcc, #325f4c); }
+.git-merge-editor .cm-editor .cm-line { background: var(--git-line-bg, transparent); }
+.git-merge-editor .git-added-line { --git-line-bg: light-dark(#e5f4eb, #243a32); }
+.git-merge-editor .git-removed-line { --git-line-bg: light-dark(#ffebe9, #462e31); }
+.git-merge-editor .git-modified-line { --git-line-bg: light-dark(#eaf1fc, #273748); }
+.git-merge-editor .git-current-line { box-shadow: inset 2px 0 var(--link); }
+.git-merge-editor .cm-merge-a .git-inline-change { background: light-dark(#ffcaca, #75434c); }
+.git-merge-editor .cm-merge-b .git-inline-change { background: light-dark(#b1e6c9, #34614e); }
 .git-merge-editor .cm-collapsedLines { color: var(--muted); background: var(--soft); }
 .git-merge-editor .cm-merge-revert { width: var(--git-diff-gutter); }
 .git-merge-editor .cm-merge-revert button {
-  inset-inline-start: 6px; width: calc(100% - 9px); min-height: 22px; border-radius: 4px; color: var(--link);
+  inset-inline-start: 6px; width: calc(100% - 9px); min-height: 23px; border: 1px solid var(--line);
+  border-radius: 5px; color: var(--link); background: var(--page);
 }
-.git-merge-editor .cm-merge-revert button:hover { background: var(--selected); }
+.git-merge-editor .cm-merge-revert button:hover, .git-merge-editor .cm-merge-revert button:focus-visible { background: var(--selected); }
 .git-diff-divider {
   position: absolute; z-index: 3; inset-block: 0; inset-inline-start: calc(var(--git-diff-left) - 4px);
   width: 8px; touch-action: none; cursor: col-resize;
